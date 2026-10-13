@@ -5,6 +5,7 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,6 +14,10 @@ TESTS = os.path.join(ROOT, "tests")
 # Backend sin ventana antes de que nadie importe matplotlib
 os.environ.setdefault("MPLBACKEND", "Agg")
 sys.path.insert(0, ROOT)
+
+# Red de seguridad: ningún test escribe en el config.json real
+_CONFIG_TMP = tempfile.TemporaryDirectory(prefix="ocv_cfg_")
+os.environ["OCV_CONFIG_DIR"] = _CONFIG_TMP.name
 
 
 def _flatten(suite):
