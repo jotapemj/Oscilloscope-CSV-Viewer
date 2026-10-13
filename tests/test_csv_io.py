@@ -145,5 +145,17 @@ class Brand(unittest.TestCase):
         self.check(["Source,CH1", "Vertical Units,V"], None)
 
 
+class Metadata(unittest.TestCase):
+
+    def test_offset_is_not_fs(self):
+        """'Vertical Offset' no es sample rate."""
+        meta = csv_io._extract_metadata(["Vertical Offset,0.5"], ",")
+        self.assertNotIn("sample_rate", meta)
+
+    def test_fs_exact(self):
+        meta = csv_io._extract_metadata(["Fs,1e9", "Sample Rate,2e9"], ",")
+        self.assertEqual(meta.get("sample_rate"), 1e9)
+
+
 if __name__ == "__main__":
     unittest.main()

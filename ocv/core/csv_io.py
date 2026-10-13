@@ -101,6 +101,9 @@ def _find_data_start(lines, sep):
     return -1  # no se encontró nada
 
 
+_EXACT_ALIASES = {"fs"}
+
+
 def _extract_metadata(header_lines, sep):
     """Extrae pares clave→valor conocidos de la cabecera.
     Soporta los formatos 'Key,value', 'Key:,value', 'Key:value'."""
@@ -141,7 +144,9 @@ def _extract_metadata(header_lines, sep):
 
         # Mapear a clave limpia
         for clean, aliases in interesting_keys.items():
-            if any(a == key_raw or a in key_raw for a in aliases):
+            # Alias cortos solo por igualdad: "fs" casaba con "offset"
+            if any(a == key_raw or (a not in _EXACT_ALIASES and a in key_raw)
+                   for a in aliases):
                 if clean not in meta:   # primera ocurrencia gana
                     meta[clean] = val
                 break
