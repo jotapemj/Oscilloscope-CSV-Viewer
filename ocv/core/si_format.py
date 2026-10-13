@@ -100,7 +100,7 @@ def parse_si(text, unit=""):
     # Recorremos desde el final quitando caracteres hasta quedarnos con un número válido.
     # Más simple: buscar el split entre dígitos/e/E/.,+/- y el resto.
     import re
-    m = re.match(r"^\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*([a-zA-ZµT]?)\s*$", s)
+    m = re.match(r"^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*([a-zA-ZµT]?)\s*$", s)
     if not m:
         return None
 

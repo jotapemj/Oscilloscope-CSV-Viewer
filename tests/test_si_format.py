@@ -54,6 +54,8 @@ class ParseSI(unittest.TestCase):
             ("1e-3", "", 1e-3),
             ("100 mV", "V", 0.1),
             ("5 v", "V", 5.0),
+            ("1.", "", 1.0),
+            ("2.k", "", 2e3),
         ]
         for text, unit, expected in cases:
             with self.subTest(text=text):
