@@ -139,6 +139,95 @@ def can_frame_bits(can_id, data, extended=False, corrupt_crc=False):
     return stuffed + [1, 0, 1] + [1] * 7     # delim, ACK, delim, EOF
 
 
+FD_DLC = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8,
+          9: 12, 10: 16, 11: 20, 12: 24, 13: 32, 14: 48, 15: 64}
+_GRAY3 = [0b000, 0b001, 0b011, 0b010, 0b110, 0b111, 0b101, 0b100]
+
+
+def crc_msb(bits, poly, width, init):
+    """CRC genérico MSB primero. `poly` sin el término x^width."""
+    top, mask = 1 << (width - 1), (1 << width) - 1
+    crc = init
+    for b in bits:
+        fb = b ^ (1 if crc & top else 0)
+        crc = (crc << 1) & mask
+        if fb:
+            crc ^= poly
+    return crc
+
+
+def can_fd_frame_bits(can_id, data, extended=False, brs=True, esi=False,
+                      corrupt_crc=False, corrupt_sbc=False):
+    """Trama CAN FD ISO 11898-1:2015 → lista de (bit, fase).
+
+    fase: "n" = bitrate nominal, "d" = bitrate de datos (solo con BRS).
+    """
+    dlc = next(k for k, n in FD_DLC.items() if n == len(data))
+    if extended:
+        arb = ([0] + _bits(can_id >> 18, 11) + [1, 1] +
+               _bits(can_id & 0x3FFFF, 18) + [0])
+    else:
+        arb = [0] + _bits(can_id, 11) + [0, 0]
+    ctrl_n = arb + [1, 0, int(brs)]                    # FDF, res, BRS
+    ctrl_d = [int(esi)] + _bits(dlc, 4)
+    for byte in data:
+        ctrl_d += _bits(byte, 8)
+    d = "d" if brs else "n"
+    raw = [(b, "n") for b in ctrl_n] + [(b, d) for b in ctrl_d]
+
+    # Stuffing dinámico SOF..datos. El stuff bit va ENTRE bits, con la
+    # fase del bit siguiente. Al final de los datos no se inserta: ahí va
+    # el bit fijo, que tiene el mismo valor.
+    stuffed, run, prev, n_dyn = [], 0, None, 0
+    for k, (b, ph) in enumerate(raw):
+        stuffed.append((b, ph))
+        run = run + 1 if b == prev else 1
+        prev = b
+        if run == 5 and k + 1 < len(raw):
+            stuffed.append((1 - b, raw[k + 1][1]))
+            prev, run, n_dyn = 1 - b, 1, n_dyn + 1
+
+    gray = _GRAY3[n_dyn % 8] ^ (1 if corrupt_sbc else 0)
+    g = _bits(gray, 3)
+    sbc = g + [g[0] ^ g[1] ^ g[2]]                       # paridad par
+
+    width, poly = (17, 0x1685B) if len(data) <= 16 else (21, 0x102899)
+    crc = crc_msb([b for b, _ in stuffed] + sbc, poly, width,
+                  1 << (width - 1))
+    crc ^= 1 if corrupt_crc else 0
+
+    # Bits fijos: antes del SBC y tras cada 4 bits de SBC+CRC
+    tail = sbc + _bits(crc, width)
+    fixed, last = [], stuffed[-1][0]
+    for k, b in enumerate(tail):
+        if k % 4 == 0:
+            fixed.append(1 - last)
+            last = 1 - last
+        fixed.append(b)
+        last = b
+    out = stuffed + [(b, d) for b in fixed]
+    out += [(b, "n") for b in [1, 0, 1] + [1] * 7]     # delim, ACK, EOF
+    return out
+
+
+def can_fd(frames, nominal=500e3, data_rate=2e6, samples_per_data_bit=16,
+           idle_bits=12, classic=None):
+    """Tramas CAN FD (y opcionalmente CAN clásicas) en lógica TTL.
+
+    `classic`: lista de dicts para can_frame_bits, puestos antes de las FD.
+    """
+    fs = data_rate * samples_per_data_bit
+    n_nom = int(round(fs / nominal))
+    seq = [(1, "n")] * idle_bits
+    for fr in classic or []:
+        seq += [(b, "n") for b in can_frame_bits(**fr)] + [(1, "n")] * idle_bits
+    for fr in frames:
+        seq += can_fd_frame_bits(**fr) + [(1, "n")] * idle_bits
+    v = np.concatenate([np.full(n_nom if ph == "n" else samples_per_data_bit,
+                                b * HI) for b, ph in seq])
+    return np.arange(len(v)) / fs, v
+
+
 def can(frames, bitrate=500e3, oversample=16, idle_bits=12):
     """Varias tramas CAN en lógica TTL (recesivo = alto)."""
     bits = [1] * idle_bits

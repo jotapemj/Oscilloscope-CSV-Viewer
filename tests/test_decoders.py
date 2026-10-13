@@ -175,5 +175,120 @@ class CAN(unittest.TestCase):
         self.assertEqual(sig.crc15_can(bits), _can_crc15(bits))
 
 
+class CANFD(unittest.TestCase):
+    """CAN FD ISO 11898-1:2015 contra el generador de tests/signals.py."""
+
+    def decode(self, frames, nominal=500e3, data_rate=2e6, classic=None):
+        t, v = sig.can_fd(frames, nominal=nominal, data_rate=data_rate,
+                          classic=classic)
+        p = params(dec.CanFdDecoder, nominal_bitrate=int(nominal),
+                   data_bitrate=int(data_rate))
+        return dec.CanFdDecoder.decode(t, {"CAN": v}, p)
+
+    def check(self, fr, can_id, data):
+        self.assertEqual(values(fr, "id"), [can_id])
+        self.assertEqual(values(fr, "data"), list(data))
+        self.assertEqual(errors(fr), [], [f["label"] for f in errors(fr)])
+
+    def test_generator_self_check(self):
+        """Generador: CRC(mensaje + CRC) = 0 para CRC17 y CRC21."""
+        msg = sig._bits(0x1234567, 27)
+        for width, poly in ((17, 0x1685B), (21, 0x102899)):
+            init = 1 << (width - 1)
+            crc = sig.crc_msb(msg, poly, width, init)
+            self.assertEqual(
+                sig.crc_msb(msg + sig._bits(crc, width), poly, width, init), 0)
+
+    def test_standard_brs(self):
+        """ID 11 bits, 8 bytes, BRS 500k/2M, CRC17."""
+        data = [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
+        fr = self.decode([{"can_id": 0x456, "data": data}])
+        self.check(fr, 0x456, data)
+        self.assertEqual(values(fr, "ctrl"), [8])
+
+    def test_extended_crc21(self):
+        """ID 29 bits, 20 bytes (DLC 11) → CRC21."""
+        data = list(range(20))
+        fr = self.decode([{"can_id": 0x1ABCDEF0, "data": data,
+                           "extended": True}])
+        self.check(fr, 0x1ABCDEF0, data)
+        self.assertEqual(values(fr, "ctrl"), [11])
+
+    def test_lengths(self):
+        """Todos los tamaños de payload FD, de 0 a 64 bytes."""
+        for n in sig.FD_DLC.values():
+            with self.subTest(n=n):
+                data = [(k * 37 + n) & 0xFF for k in range(n)]
+                self.check(self.decode([{"can_id": 0x0F0, "data": data}]),
+                           0x0F0, data)
+
+    def test_no_brs(self):
+        """BRS=0: todo a bitrate nominal."""
+        data = [0xAA, 0x55, 0x0F]
+        self.check(self.decode([{"can_id": 0x321, "data": data,
+                                 "brs": False}]), 0x321, data)
+
+    def test_heavy_stuffing(self):
+        """0x00/0xFF en ID y datos: stuffing dinámico denso."""
+        data = [0x00] * 6 + [0xFF] * 6 + [0x00] * 4
+        self.check(self.decode([{"can_id": 0x000, "data": data}]),
+                   0x000, data)
+        self.check(self.decode([{"can_id": 0x7FF, "data": [0xFF] * 12}]),
+                   0x7FF, [0xFF] * 12)
+
+    def test_fast_data_phase(self):
+        """1 Mbit/s nominal, 8 Mbit/s datos, 64 bytes."""
+        data = [k ^ 0x5A for k in range(64)]
+        self.check(self.decode([{"can_id": 0x123, "data": data}],
+                               nominal=1e6, data_rate=8e6), 0x123, data)
+
+    def test_clock_skew(self):
+        """Emisor ±2 % fuera del bitrate configurado: resync en flancos."""
+        data = list(range(64))
+        p = params(dec.CanFdDecoder)
+        for skew in (0.98, 1.02):
+            with self.subTest(skew=skew):
+                t, v = sig.can_fd([{"can_id": 0x123, "data": data}],
+                                  nominal=500e3 * skew, data_rate=2e6 * skew)
+                self.check(dec.CanFdDecoder.decode(t, {"CAN": v}, p),
+                           0x123, data)
+
+    def test_noise(self):
+        """Ruido gaussiano de 0.3 V sobre 3.3 V."""
+        data = list(range(64))
+        t, v = sig.can_fd([{"can_id": 0x123, "data": data}])
+        v = v + np.random.default_rng(0).normal(0, 0.3, len(v))
+        self.check(dec.CanFdDecoder.decode(t, {"CAN": v},
+                                           params(dec.CanFdDecoder)),
+                   0x123, data)
+
+    def test_back_to_back_and_classic(self):
+        """Clásica + dos FD seguidas: solo salen las FD."""
+        fr = self.decode([{"can_id": 0x101, "data": [1, 2, 3]},
+                          {"can_id": 0x102, "data": list(range(32))}],
+                         classic=[{"can_id": 0x100, "data": [9]}])
+        self.assertEqual(values(fr, "id"), [0x101, 0x102])
+        self.assertEqual(errors(fr), [])
+
+    def test_bad_crc(self):
+        """CRC corrupto → error en el campo CRC."""
+        fr = self.decode([{"can_id": 0x200, "data": [7] * 12,
+                           "corrupt_crc": True}])
+        self.assertEqual([f["type"] for f in errors(fr)], ["crc"])
+
+    def test_bad_stuff_count(self):
+        """Stuff count corrupto → error aunque el CRC cuadre."""
+        fr = self.decode([{"can_id": 0x200, "data": [7] * 12,
+                           "corrupt_sbc": True}])
+        self.assertTrue(errors(fr))
+
+    def test_esi(self):
+        """ESI=1 se refleja en la etiqueta de control."""
+        fr = self.decode([{"can_id": 0x300, "data": [1], "esi": True}])
+        ctrl = [f["label"] for f in fr if f["type"] == "ctrl"]
+        self.assertEqual(len(ctrl), 1)
+        self.assertIn("ESI", ctrl[0])
+
+
 if __name__ == "__main__":
     unittest.main()

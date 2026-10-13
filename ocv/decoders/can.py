@@ -462,6 +462,83 @@ class CanDecoder(ProtocolDecoder):
         return True
 
 
+class _FdEnd(Exception):
+    """La captura termina a mitad de trama."""
+
+
+class _FdBitReader:
+    """Lee bits CAN FD en tiempo real de la captura.
+
+    Lleva el tiempo de inicio del bit actual con el bitrate vigente, de
+    modo que los bits de stuffing ocupan su sitio en el tiempo. Se
+    resincroniza en cada flanco cercano al inicio esperado del bit
+    (como hace un controlador CAN), lo que tolera pequeñas diferencias
+    de reloj entre el emisor y el bitrate configurado.
+    """
+
+    def __init__(self, b, time_arr, edge_t, t0, bt):
+        self.b = b
+        self.t = time_arr
+        self.edge_t = edge_t
+        self.t_bit = t0
+        self.bt = bt
+        self.prev = None
+        self.run = 0
+        self.stuffed = []        # SOF..datos con stuff dinámico (para CRC)
+        self.n_dyn = 0
+        self.stuff_error = False
+        self.fixed_error = False
+
+    def raw(self):
+        """Un bit físico, sin quitar stuffing."""
+        lo = self.t_bit - 0.25 * self.bt
+        j = int(np.searchsorted(self.edge_t, lo))
+        if j < len(self.edge_t) and self.edge_t[j] <= self.t_bit + 0.25 * self.bt:
+            self.t_bit = float(self.edge_t[j])
+        t_s = self.t_bit + 0.5 * self.bt
+        if t_s >= self.t[-1]:
+            raise _FdEnd
+        self.t_bit += self.bt
+        return _sample_at(self.b, self.t, t_s)
+
+    def bit(self):
+        """Bit lógico en zona de stuffing dinámico (SOF..datos)."""
+        if self.run == 5:
+            s = self.raw()
+            if s == self.prev:
+                self.stuff_error = True
+            self.stuffed.append(s)
+            self.n_dyn += 1
+            self.prev, self.run = s, 1
+        x = self.raw()
+        self.stuffed.append(x)
+        self.run = self.run + 1 if x == self.prev else 1
+        self.prev = x
+        return x
+
+    def bits(self, n):
+        v = 0
+        for _ in range(n):
+            v = (v << 1) | self.bit()
+        return v
+
+    def fixed_bits(self, n):
+        """Stuff count + CRC: bit fijo antes y tras cada 4 bits.
+        Un stuff dinámico pendiente al final de los datos lo sustituye el
+        primer bit fijo (mismo valor), así que no se consume aparte."""
+        out, last = [], self.prev
+        for k in range(n):
+            if k % 4 == 0:
+                s = self.raw()
+                if s == last:
+                    self.fixed_error = True
+                last = s
+            x = self.raw()
+            out.append(x)
+            last = x
+        return out
+
+
 # -----------------------------
 # CAN FD
 # -----------------------------
@@ -504,6 +581,9 @@ class CanFdDecoder(ProtocolDecoder):
                                "default": 2000000, "kind": "int"},
         }
 
+    # Código Gray del stuff count (ISO 11898-1:2015), índice = count mod 8
+    _GRAY3 = (0b000, 0b001, 0b011, 0b010, 0b110, 0b111, 0b101, 0b100)
+
     @classmethod
     def decode(cls, time_arr, channel_voltages, params):
         mode = params["input_mode"]
@@ -515,181 +595,117 @@ class CanFdDecoder(ProtocolDecoder):
         b = _can_binarize_invert_if_differential(sig, mode, time_arr)
         bt_nom = 1.0 / max(1, nom_br)
         bt_data = 1.0 / max(1, data_br)
+        edge_t = time_arr[_find_edges(b, time_arr, "any")]
 
         frames = []
         falling = _find_edges(b, time_arr, "falling")
         i = 0
         while i < len(falling):
-            sof_idx = int(falling[i])
-            t_sof = time_arr[sof_idx]
-            # Idle previo
+            t_sof = time_arr[int(falling[i])]
+            # Idle previo: 7 bits recesivos
             ok = True
             for k in range(7):
                 if t_sof - (k + 1) * bt_nom < time_arr[0]:
                     break
                 if _sample_at(b, time_arr, t_sof - (k + 1) * bt_nom) == 0:
-                    ok = False; break
+                    ok = False
+                    break
             if not ok:
-                i += 1; continue
-
-            # Leer header en bit_time nominal
-            # SOF(1) | ID-A(11) | RRS o IDE (1) ...  — más complejo que clásico
-            # Aproximación: muestrear nominal hasta detectar FDF=1; luego cambiar a data_br.
-            # Lectura preliminar:
-            def sample_n(n, t0, bt):
-                bits = []
-                for k in range(n):
-                    t_s = t0 + bt * (0.5 + k)
-                    if t_s >= time_arr[-1]:
-                        return None
-                    bits.append(int(_sample_at(b, time_arr, t_s)))
-                return bits
-
-            head = sample_n(40, t_sof, bt_nom)   # suficiente para cubrir hasta DLC
-            if head is None:
-                i += 1; continue
-            # Unstuffing parcial (la zona nominal sí lleva stuffing).
-            unstuffed_head, _sp, _se_head = _can_unstuff_bits(
-                head, max_unstuffed=40)
-            if _se_head:
-                i += 1; continue
-
-            p = 0
-            # Cabecera FD mínima SOF..DLC: 22 bits (41 extendida)
-            if len(unstuffed_head) < 22 or unstuffed_head[p] != 0:
-                i += 1; continue
-            p += 1  # SOF
-            id_a = 0
-            for k in range(11):
-                id_a = (id_a << 1) | unstuffed_head[p]; p += 1
-            # En FD: RRS (1, reservado) o SRR si extended.
-            srr_or_rrs = unstuffed_head[p]; p += 1
-            ide = unstuffed_head[p]; p += 1
-            extended = (ide == 1)
-            if extended and len(unstuffed_head) < 41:
-                i += 1; continue
-            if extended:
-                id_b = 0
-                for k in range(18):
-                    id_b = (id_b << 1) | unstuffed_head[p]; p += 1
-                # En FD extended: RRS, FDF, res, BRS, ESI, DLC
-                rrs = unstuffed_head[p]; p += 1
-                fdf = unstuffed_head[p]; p += 1
-                full_id = (id_a << 18) | id_b
-            else:
-                fdf = unstuffed_head[p]; p += 1   # debe ser 1 en FD
-                full_id = id_a
-
-            if fdf != 1:
-                # No es CAN FD — saltar y dejar para CanDecoder
-                i += 1; continue
-
-            res = unstuffed_head[p]; p += 1
-            brs = unstuffed_head[p]; p += 1
-            esi = unstuffed_head[p]; p += 1
-            dlc = 0
-            for k in range(4):
-                dlc = (dlc << 1) | unstuffed_head[p]; p += 1
-            payload_len = cls._FD_DLC_LEN.get(dlc, 0)
-
-            # A partir de aquí, si BRS=1, los bits cambian a bt_data hasta el CRC delimiter.
-            # Continuamos leyendo el resto en el bit time apropiado.
-            bt_phase2 = bt_data if brs == 1 else bt_nom
-            # Calculamos tiempo donde acaba la lectura de cabecera (bit p en bt_nom)
-            t_after_head = t_sof + p * bt_nom
-            need_bits = payload_len * 8
-            data_raw = sample_n(need_bits + 30, t_after_head, bt_phase2)
-            if data_raw is None:
-                i += 1; continue
-            # En FD, dependiendo de la variante (ISO/non-ISO) el stuffing en la
-            # zona de datos puede ser distinto. Aplicamos unstuff "fixed" típico
-            # de FD (5 idénticos → stuff). max_unstuffed generoso.
-            data_unstuffed, _sp2, _se_data = _can_unstuff_bits(
-                data_raw, max_unstuffed=need_bits + 25)
-            if _se_data:
-                frames.append({
-                    "t_start": t_sof, "t_end": t_after_head,
-                    "type": "error", "value": 0,
-                    "label": "STUFF ERR (FD data)",
-                    "color": "#ff6b6b", "error": True,
-                })
-                i = CanDecoder._advance_past(falling, i, time_arr,
-                                              t_after_head + 20 * bt_phase2)
+                i += 1
                 continue
 
-            # Bytes de datos
-            data = []
-            q = 0
-            for byte_i in range(payload_len):
-                v = 0
-                for k in range(8):
-                    if q >= len(data_unstuffed):
-                        break
-                    v = (v << 1) | data_unstuffed[q]; q += 1
-                data.append(v)
-
-            # CRC: 17 si payload ≤ 16, 21 si > 16. ISO FD lo precede de un
-            # stuff count + parity (no implementamos verificación completa,
-            # sólo extraemos el CRC para visualización).
-            crc_bits = 17 if payload_len <= 16 else 21
-            # Saltamos el stuff count + parity (4 bits stuff_count + 1 bit parity)
-            # — usado en ISO CAN FD. Pre-ISO no los lleva. Ofrecemos lectura
-            # "best-effort".
-            crc_received = 0
-            for k in range(crc_bits):
-                if q >= len(data_unstuffed): break
-                crc_received = (crc_received << 1) | data_unstuffed[q]; q += 1
-
-            # Construir frames visuales
-            frames.append({
-                "t_start": t_sof, "t_end": t_sof + bt_nom,
-                "type": "sof", "value": 0, "label": "SOF",
-                "color": "#7fdb7f", "error": False,
-            })
-            id_bits_count = 29 if extended else 11
-            t_id_start = t_sof + bt_nom
-            t_id_end = t_id_start + id_bits_count * bt_nom
-            frames.append({
-                "t_start": t_id_start, "t_end": t_id_end,
-                "type": "id", "value": full_id,
-                "label": (f"ID 0x{full_id:08X} (29b)" if extended
-                          else f"ID 0x{full_id:03X}"),
-                "color": "#ffb84d", "error": False,
-            })
-            t_ctrl_start = t_id_end
-            ctrl_bits = 4 + 4  # FDF/BRS/ESI/res + DLC, aprox
-            t_ctrl_end = t_ctrl_start + ctrl_bits * bt_nom
-            frames.append({
-                "t_start": t_ctrl_start, "t_end": t_ctrl_end,
-                "type": "ctrl", "value": dlc,
-                "label": f"DLC={dlc} ({payload_len}B)"
-                         + (" BRS" if brs else "")
-                         + (" ESI" if esi else ""),
-                "color": "#cc99ff", "error": False,
-            })
-            t_data_start = t_ctrl_end
-            for byte_i, dv in enumerate(data):
-                t_d_start = t_data_start + byte_i * 8 * bt_phase2
-                t_d_end = t_d_start + 8 * bt_phase2
-                frames.append({
-                    "t_start": t_d_start, "t_end": t_d_end,
-                    "type": "data", "value": dv,
-                    "label": f"D{byte_i} 0x{dv:02X}",
-                    "color": "#5fa8ff", "error": False,
-                })
-            t_data_end = t_data_start + payload_len * 8 * bt_phase2
-            t_crc_end = t_data_end + crc_bits * bt_phase2
-            frames.append({
-                "t_start": t_data_end, "t_end": t_crc_end,
-                "type": "crc", "value": crc_received,
-                "label": f"CRC{crc_bits} 0x{crc_received:X}",
-                "color": "#cc99ff", "error": False,
-            })
-
+            rd = _FdBitReader(b, time_arr, edge_t, t_sof, bt_nom)
+            try:
+                fr = cls._parse_frame(rd, bt_data)
+            except _FdEnd:
+                fr = None
+            if fr is None:
+                # No es FD (FDF=0), truncada o falso SOF
+                i += 1
+                continue
+            frames.extend(fr)
             i = CanDecoder._advance_past(falling, i, time_arr,
-                                          t_crc_end + 10 * bt_nom)
-
+                                         rd.t_bit + 10 * bt_nom)
         return frames
+
+    @classmethod
+    def _parse_frame(cls, rd, bt_data):
+        """Lee una trama desde SOF. Devuelve lista de frames o None."""
+        t_sof = rd.t_bit
+        if rd.bit() != 0:
+            return None
+        t_id = rd.t_bit
+        id_a = rd.bits(11)
+        rd.bit()                          # RRS (base) o SRR (extendida)
+        extended = rd.bit() == 1          # IDE
+        if extended:
+            full_id = (id_a << 18) | rd.bits(18)
+            rd.bit()                      # RRS
+        else:
+            full_id = id_a
+        t_ctrl = rd.t_bit
+        if rd.bit() != 1:                 # FDF=0 → CAN clásico
+            return None
+        rd.bit()                          # res
+        brs = rd.bit()
+        if brs:
+            rd.bt = bt_data               # cambio de bitrate tras BRS
+        esi = rd.bit()
+        dlc = rd.bits(4)
+        n = cls._FD_DLC_LEN[dlc]
+        if rd.stuff_error:
+            return [{"t_start": t_sof, "t_end": rd.t_bit, "type": "error",
+                     "value": 0, "label": "STUFF ERR", "color": "#ff6b6b",
+                     "error": True}]
+
+        out = [
+            {"t_start": t_sof, "t_end": t_id, "type": "sof", "value": 0,
+             "label": "SOF", "color": "#7fdb7f", "error": False},
+            {"t_start": t_id, "t_end": t_ctrl, "type": "id",
+             "value": full_id,
+             "label": (f"ID 0x{full_id:08X} (29b)" if extended
+                       else f"ID 0x{full_id:03X}"),
+             "color": "#ffb84d", "error": False},
+            {"t_start": t_ctrl, "t_end": rd.t_bit, "type": "ctrl",
+             "value": dlc,
+             "label": f"DLC={dlc} ({n}B)" + (" BRS" if brs else "")
+                      + (" ESI" if esi else ""),
+             "color": "#cc99ff", "error": False},
+        ]
+        for k in range(n):
+            t0 = rd.t_bit
+            v = rd.bits(8)
+            out.append({"t_start": t0, "t_end": rd.t_bit, "type": "data",
+                        "value": v, "label": f"D{k} 0x{v:02X}",
+                        "color": "#5fa8ff", "error": False})
+        if rd.stuff_error:
+            out.append({"t_start": t_sof, "t_end": rd.t_bit, "type": "error",
+                        "value": 0, "label": "STUFF ERR", "color": "#ff6b6b",
+                        "error": True})
+            return out
+
+        # Stuff count (Gray 3 + paridad) y CRC, con bits de stuffing fijo
+        width = 17 if n <= 16 else 21
+        t_crc = rd.t_bit
+        tail = rd.fixed_bits(4 + width)
+        sbc, crc_bits = tail[:4], tail[4:]
+        sbc_ok = (sum(sbc) % 2 == 0 and
+                  (sbc[0] << 2 | sbc[1] << 1 | sbc[2])
+                  == cls._GRAY3[rd.n_dyn % 8] and not rd.fixed_error)
+        crc_rx = 0
+        for x in crc_bits:
+            crc_rx = (crc_rx << 1) | x
+        crc_fn = _can_crc17 if width == 17 else _can_crc21
+        crc_ok = crc_fn(rd.stuffed + sbc) == crc_rx
+        good = crc_ok and sbc_ok
+        label = f"CRC{width} 0x{crc_rx:X}" if crc_ok else f"CRC{width}! 0x{crc_rx:X}"
+        if not sbc_ok:
+            label += " SBC!"
+        out.append({"t_start": t_crc, "t_end": rd.t_bit, "type": "crc",
+                    "value": crc_rx, "label": label,
+                    "color": "#cc99ff" if good else "#ff6b6b",
+                    "error": not good})
+        return out
 
     @classmethod
     def draw_diagram(cls, canvas, x, y, w, h, theme):
