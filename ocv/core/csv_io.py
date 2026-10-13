@@ -436,10 +436,3 @@ def _detect_scope_brand(header_lines):
             if re.search(pattern, blob):
                 return brand
     return None
-    # Unir las primeras líneas para hacer una búsqueda plana
-    blob = " ".join(header_lines[:30]).lower()
-    for brand, patterns in _SCOPE_BRAND_PATTERNS:
-        for p in patterns:
-            if p in blob:
-                return brand
-    return None
