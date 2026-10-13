@@ -52,6 +52,15 @@ from ocv.core.config import (
     load_user_config,
     save_user_config,
 )
+from ocv.core.session import (
+    SESSION_VERSION,
+    SessionError,
+    embedded_csv,
+    is_newer,
+    read_session,
+    serialize_annotations,
+    write_session,
+)
 from ocv.decoders import (
     DECODER_CATEGORIES,
     DECODER_REGISTRY,
@@ -6150,11 +6159,8 @@ class OscilloscopeApp:
     # el CSV por separado). Coste: el .ocv pesa más que el CSV original
     # (overhead JSON: comillas, escapes, indentación).
     #
-    # Versión del formato:
-    #   1 = .oscsession con csv_path externo (v1.22 y anteriores, OBSOLETO).
-    #   2 = .ocv con csv_content embebido (v1.23+). Ruptura limpia: las
-    #       sesiones v1 NO se cargan en v1.23.
-    SESSION_VERSION = 2
+    # Formato y versión: ver ocv.core.session
+    SESSION_VERSION = SESSION_VERSION
 
     def save_session(self):
         """Guarda la sesión en su path actual. Si todavía es Untitled
@@ -6222,12 +6228,10 @@ class OscilloscopeApp:
         """Escribe el payload de sesión a `path`. Actualiza session_path,
         limpia dirty y refresca el título. Devuelve True/False.
         """
-        import json
         from tkinter import messagebox
         try:
             payload = self._build_session_dict()
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+            write_session(path, payload)
             self.session_path = path
             self._clear_dirty()  # también refresca el título con el nuevo nombre
             self._show_toast("Session saved")
@@ -6241,7 +6245,7 @@ class OscilloscopeApp:
 
     def load_session(self):
         """Abre diálogo y carga una sesión .ocv (JSON con CSV embebido)."""
-        import json, os, tempfile
+        import os, tempfile
         from tkinter import filedialog, messagebox
 
         # Si hay cambios sin guardar en la sesión actual, ofrece guardarlos
@@ -6259,42 +6263,13 @@ class OscilloscopeApp:
         if not path:
             return
 
-        # --- 1) Leer y parsear JSON ---
+        # --- 1) Leer y validar formato/versión ---
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except FileNotFoundError:
-            messagebox.showerror("Load session", "Session file not found.")
+            payload = read_session(path)
+        except SessionError as e:
+            messagebox.showerror("Load session", str(e))
             return
-        except json.JSONDecodeError as e:
-            messagebox.showerror(
-                "Load session",
-                f"The session file is corrupted or not valid JSON:\n\n{e}",
-            )
-            return
-        except Exception as e:
-            messagebox.showerror("Load session", f"Could not read file:\n\n{e}")
-            return
-
-        # --- 2) Validar versión/formato mínimo ---
-        if not isinstance(payload, dict) or "version" not in payload:
-            messagebox.showerror(
-                "Load session",
-                "This does not look like a valid .ocv session file.",
-            )
-            return
-        ver = payload.get("version", 0)
-        # Ruptura limpia: el formato v1 (.oscsession) ya no se carga.
-        if ver < self.SESSION_VERSION:
-            messagebox.showerror(
-                "Load session",
-                f"This session uses the legacy v{ver} format (.oscsession) "
-                f"which is no longer supported.\n\n"
-                f"Sessions must be re-created with the current version of "
-                f"the app.",
-            )
-            return
-        if ver > self.SESSION_VERSION:
+        if is_newer(payload):
             if not messagebox.askyesno(
                 "Load session",
                 "This session was saved with a newer version of the app.\n"
@@ -6302,14 +6277,11 @@ class OscilloscopeApp:
             ):
                 return
 
-        # --- 3) Recuperar el CSV embebido ---
-        csv_content = payload.get("csv_content")
-        csv_name    = payload.get("csv_name") or "embedded.csv"
-        if not isinstance(csv_content, str) or not csv_content:
-            messagebox.showerror(
-                "Load session",
-                "The session does not contain embedded CSV data.",
-            )
+        # --- 2) Recuperar el CSV embebido ---
+        try:
+            csv_content, csv_name = embedded_csv(payload)
+        except SessionError as e:
+            messagebox.showerror("Load session", str(e))
             return
 
         # Escribir el contenido a un fichero temporal para reusar el camino
@@ -6394,33 +6366,7 @@ class OscilloscopeApp:
             channels_out.append(entry)
 
         # Annotations: stroke listas de (t, v); text tiene pos + content
-        annotations_out = []
-        for a in self.annotations:
-            try:
-                if a.get("type") == "stroke":
-                    annotations_out.append({
-                        "type":   "stroke",
-                        "color":  a.get("color"),
-                        "width":  a.get("width"),
-                        "points": [list(p) for p in a.get("points", [])],
-                        # ch_idx: canal con el que se creó la anotación; el
-                        # voltaje en points[*][1] se referencia a la escala
-                        # de ESTE canal, no del canal activo en el momento
-                        # de cargar la sesión. Ver _annot_screen_from_v_real.
-                        "ch_idx": a.get("ch_idx"),
-                    })
-                elif a.get("type") == "text":
-                    annotations_out.append({
-                        "type":    "text",
-                        "color":   a.get("color"),
-                        "size":    a.get("size"),
-                        "pos":     list(a.get("pos", (0, 0))),
-                        "content": a.get("content", ""),
-                        "ch_idx":  a.get("ch_idx"),
-                    })
-            except Exception:
-                # annotación corrupta en memoria → la saltamos
-                continue
+        annotations_out = serialize_annotations(self.annotations)
 
         # Leer el CSV original como texto para embeberlo. Si no se puede
         # (CSV borrado entre carga y save), guardamos cadena vacía y al
