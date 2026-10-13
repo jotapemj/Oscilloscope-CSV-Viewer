@@ -4,6 +4,9 @@ CLAUDE.md
 # Estado de usuario
 config.json
 
+# Capturas reales de JP (datos privados)
+CSV files/
+
 # Python
 .venv/
 __pycache__/
