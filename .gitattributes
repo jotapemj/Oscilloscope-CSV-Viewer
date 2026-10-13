@@ -1,0 +1,5 @@
+# Finales de línea fijos en el repo
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ico binary
+*.png binary

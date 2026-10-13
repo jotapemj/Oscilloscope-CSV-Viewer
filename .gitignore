@@ -5,6 +5,7 @@ CLAUDE.md
 config.json
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 
