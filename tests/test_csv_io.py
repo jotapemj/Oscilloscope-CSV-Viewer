@@ -111,5 +111,39 @@ class CsvSmart(unittest.TestCase):
                     csv_io._read_csv_smart(self.write(text))
 
 
+class Brand(unittest.TestCase):
+    """Marca del scope a partir de la cabecera."""
+
+    def check(self, header, expected):
+        got = csv_io._detect_scope_brand(header)
+        self.assertEqual(got, expected, f"{header!r} -> {got!r}")
+
+    def test_brand_names(self):
+        """Nombre de marca explícito gana siempre."""
+        self.check(["Model,RIGOL MSO5074"], "Rigol")
+        self.check(["Agilent Technologies"], "Keysight")
+        self.check(["Rohde&Schwarz,RTB2004"], "Rohde & Schwarz")
+        self.check(["TEKTRONIX,MSO44"], "Tektronix")
+
+    def test_models(self):
+        """Modelos inequívocos sin nombre de marca."""
+        self.check(["Model,MSO46"], "Tektronix")
+        self.check(["Model,MSO58B"], "Tektronix")
+        self.check(["Model,DPO4054"], "Tektronix")
+        self.check(["Model,DS1054Z"], "Rigol")
+        self.check(["Model,RTB2004"], "Rohde & Schwarz")
+        self.check(["Model,SDS2104X Plus"], "Siglent")
+
+    def test_ambiguous(self):
+        """MSO + 4 dígitos existe en Tek y Rigol → sin marca."""
+        self.check(["Model,MSO5074"], None)
+
+    def test_no_false_positives(self):
+        """Subcadenas dentro de palabras no cuentan."""
+        self.check(["Data converted by tool"], None)
+        self.check(["Probe attenuation,10"], None)
+        self.check(["Source,CH1", "Vertical Units,V"], None)
+
+
 if __name__ == "__main__":
     unittest.main()

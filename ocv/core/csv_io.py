@@ -1,4 +1,6 @@
 """Smart CSV loading: separator, header, time column detection."""
+import re
+
 import numpy as np
 
 
@@ -390,18 +392,30 @@ def _read_csv_smart(filename):
     }
 
 
-# Marcas de osciloscopio y patrones para identificarlas en la cabecera.
-# Case-insensitive. El orden importa porque buscamos el primer match.
-_SCOPE_BRAND_PATTERNS = [
-    ("Tektronix",       ["tektronix", "tek ", "mso", "tds", "mdo", "dpo"]),
-    ("Keysight",        ["keysight", "agilent", "infiniivision", "infiniium"]),
-    ("Rohde & Schwarz", ["rohde", "schwarz", "r&s", "rtb", "rtm", "rto", "rte"]),
-    ("Rigol",           ["rigol", "ds1", "ds2", "ds4", "mso1", "mso2"]),
-    ("Siglent",         ["siglent", "sds", "sdg"]),
-    ("Hantek",          ["hantek"]),
-    ("LeCroy",          ["lecroy", "teledyne"]),
-    ("Pico",            ["picoscope", "pico "]),
-    ("OWON",            ["owon"]),
+# Marcas de osciloscopio y cómo reconocerlas en la cabecera.
+# Dos niveles: primero el nombre de marca (fiable), luego el modelo.
+# Todo con límites de palabra: subcadenas sueltas daban falsos
+# positivos ("rte" en "converted", "ds2" en "SDS2104").
+_SCOPE_BRAND_NAMES = [
+    ("Tektronix",       r"tektronix|\btek\b"),
+    ("Keysight",        r"keysight|agilent|infiniivision|infiniium"),
+    ("Rohde & Schwarz", r"rohde|schwarz|\br&s\b"),
+    ("Rigol",           r"rigol"),
+    ("Siglent",         r"siglent"),
+    ("Hantek",          r"hantek"),
+    ("LeCroy",          r"lecroy|teledyne"),
+    ("Pico",            r"picoscope|\bpico\b"),
+    ("OWON",            r"owon"),
+]
+
+# MSO + 4 dígitos (MSO4054...) existe en Tek y Rigol: ambiguo, no se
+# reconoce. MSO + 2 dígitos (MSO46, MSO58B) es Tek series 2/4/5/6.
+_SCOPE_MODEL_PATTERNS = [
+    ("Tektronix",       r"\b(?:tds|dpo|mdo)\s?\d|\bmso[2-6]\d[a-z]?\b"),
+    ("Keysight",        r"\b(?:dso|mso)-x\b"),
+    ("Rohde & Schwarz", r"\brt[bmoea]\s?\d"),
+    ("Rigol",           r"\bds[1-9]\d{3}|\bdho\d{3,4}"),
+    ("Siglent",         r"\bsds\s?\d"),
 ]
 
 
@@ -410,6 +424,13 @@ def _detect_scope_brand(header_lines):
     Devuelve el nombre comercial ("Tektronix", "Rohde & Schwarz"…) o None."""
     if not header_lines:
         return None
+    # Unir las primeras líneas para hacer una búsqueda plana
+    blob = " ".join(header_lines[:30]).lower()
+    for table in (_SCOPE_BRAND_NAMES, _SCOPE_MODEL_PATTERNS):
+        for brand, pattern in table:
+            if re.search(pattern, blob):
+                return brand
+    return None
     # Unir las primeras líneas para hacer una búsqueda plana
     blob = " ".join(header_lines[:30]).lower()
     for brand, patterns in _SCOPE_BRAND_PATTERNS:
