@@ -1,0 +1,19602 @@
+import tkinter as tk
+from tkinter import ttk
+from tkinter import filedialog
+import os
+import sys
+import json
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+
+# -----------------------------
+# Resolución de rutas de recursos (icono, etc.)
+# -----------------------------
+def _resource_path(rel_path):
+    """Resuelve rutas a recursos (icono, etc.) tanto en modo dev como
+    empaquetado con PyInstaller. En modo --onedir los assets viven junto
+    al .exe; en modo --onefile en sys._MEIPASS."""
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, rel_path)
+
+
+# =============================
+# Sistema de temas
+# =============================
+# La app soporta varios temas intercambiables en runtime. Cada tema define:
+#   - Colores de la chrome (fondos, texto, acento, bordes)
+#   - Colores recomendados del plot (bg, grid, text, time_label_bg)
+#
+# Diseño:
+# Las variables COLOR_* siguen siendo módulo-globales por compatibilidad con
+# las ~350 referencias existentes en el código. apply_theme(name) reescribe
+# esas globales y reaplica el style ttk. Para los widgets tk.* clásicos que
+# ya están construidos (no responden a ttk.Style), _retheme_widgets() recorre
+# el árbol y actualiza bg/fg.
+#
+# Para añadir un tema nuevo: añadir entrada a THEMES siguiendo el esquema.
+
+THEMES = {
+    "Dark": {
+        "BG":         "#1e1e1e",   # fondo principal
+        "BG_ALT":     "#2a2a2a",   # superficies (inputs, frames secundarios)
+        "BG_HOVER":   "#353535",   # hover de controles
+        "BG_ACTIVE":  "#404040",   # pressed / focus
+        "BORDER":     "#3f3f3f",   # bordes sutiles
+        "TEXT":       "#e0e0e0",   # texto principal
+        "TEXT_DIM":   "#9a9a9a",   # texto secundario / labels
+        "ACCENT":     "#4cc2ff",   # azul Sun Valley (cabeceras)
+        "ACCENT_2":   "#3a7fb5",   # azul más oscuro para pressed
+        "DANGER":     "#ff6b6b",
+        # Plot
+        "PLOT_BG":          "black",
+        "PLOT_GRID":        "#555555",
+        "PLOT_TEXT":        "white",
+        "PLOT_TIME_LBL_BG": "#222222",
+    },
+    "Light": {
+        # Tema claro tipo "blanco roto" — no blanco puro (cansa la vista),
+        # acento azul más saturado para que destaque sobre fondo claro.
+        "BG":         "#f5f5f5",
+        "BG_ALT":     "#ffffff",
+        "BG_HOVER":   "#e8e8e8",
+        "BG_ACTIVE":  "#d8d8d8",
+        "BORDER":     "#c8c8c8",
+        "TEXT":       "#1a1a1a",
+        "TEXT_DIM":   "#666666",
+        "ACCENT":     "#0078d4",
+        "ACCENT_2":   "#005a9e",
+        "DANGER":     "#d13438",
+        # Plot: fondo claro, grid gris, texto oscuro
+        "PLOT_BG":          "#fafafa",
+        "PLOT_GRID":        "#c0c0c0",
+        "PLOT_TEXT":        "#222222",
+        "PLOT_TIME_LBL_BG": "#e0e0e0",
+    },
+    "Blueprint": {
+        # Estilo cianotipo / papel técnico azul oscuro con líneas claras.
+        # Muy "ingeniería de los 80s", se ve fantástico con trazas amarillas.
+        "BG":         "#0d2847",
+        "BG_ALT":     "#143559",
+        "BG_HOVER":   "#1d4271",
+        "BG_ACTIVE":  "#265389",
+        "BORDER":     "#2a5a8a",
+        "TEXT":       "#cce4ff",
+        "TEXT_DIM":   "#7fa9d4",
+        "ACCENT":     "#ffb84d",   # ámbar para contraste con azul
+        "ACCENT_2":   "#cc8a2e",
+        "DANGER":     "#ff5e5e",
+        "PLOT_BG":          "#0a2240",
+        "PLOT_GRID":        "#2d5a8c",
+        "PLOT_TEXT":        "#d4e8ff",
+        "PLOT_TIME_LBL_BG": "#143559",
+    },
+    "High Contrast": {
+        # Accesibilidad: negro puro + amarillo + blanco. Sin grises medios.
+        # Bordes gruesos, acentos brillantes. Cumple WCAG AAA aprox.
+        "BG":         "#000000",
+        "BG_ALT":     "#0a0a0a",
+        "BG_HOVER":   "#1f1f1f",
+        "BG_ACTIVE":  "#2f2f2f",
+        "BORDER":     "#ffffff",
+        "TEXT":       "#ffffff",
+        "TEXT_DIM":   "#cccccc",
+        "ACCENT":     "#ffff00",   # amarillo puro
+        "ACCENT_2":   "#cccc00",
+        "DANGER":     "#ff4040",
+        "PLOT_BG":          "#000000",
+        "PLOT_GRID":        "#808080",
+        "PLOT_TEXT":        "#ffffff",
+        "PLOT_TIME_LBL_BG": "#202020",
+    },
+}
+
+# Tema activo. apply_theme() lo modifica.
+CURRENT_THEME_NAME = "Dark"
+
+# Estas globales se rellenan con apply_theme() y son las que usa el resto
+# del código. Inicializadas con valores de Dark para que importar el módulo
+# sin haber llamado a apply_theme() siga funcionando.
+COLOR_BG        = THEMES["Dark"]["BG"]
+COLOR_BG_ALT    = THEMES["Dark"]["BG_ALT"]
+COLOR_BG_HOVER  = THEMES["Dark"]["BG_HOVER"]
+COLOR_BG_ACTIVE = THEMES["Dark"]["BG_ACTIVE"]
+COLOR_BORDER    = THEMES["Dark"]["BORDER"]
+COLOR_TEXT      = THEMES["Dark"]["TEXT"]
+COLOR_TEXT_DIM  = THEMES["Dark"]["TEXT_DIM"]
+COLOR_ACCENT    = THEMES["Dark"]["ACCENT"]
+COLOR_ACCENT_2  = THEMES["Dark"]["ACCENT_2"]
+COLOR_DANGER    = THEMES["Dark"]["DANGER"]
+
+
+def _refresh_color_globals(theme_name):
+    """Reescribe las constantes COLOR_* del módulo con los valores del tema
+    indicado. Esto permite que el código existente (que usa COLOR_BG, etc.)
+    siga funcionando sin tocar las ~350 referencias dispersas."""
+    g = globals()
+    t = THEMES[theme_name]
+    g["COLOR_BG"]        = t["BG"]
+    g["COLOR_BG_ALT"]    = t["BG_ALT"]
+    g["COLOR_BG_HOVER"]  = t["BG_HOVER"]
+    g["COLOR_BG_ACTIVE"] = t["BG_ACTIVE"]
+    g["COLOR_BORDER"]    = t["BORDER"]
+    g["COLOR_TEXT"]      = t["TEXT"]
+    g["COLOR_TEXT_DIM"]  = t["TEXT_DIM"]
+    g["COLOR_ACCENT"]    = t["ACCENT"]
+    g["COLOR_ACCENT_2"]  = t["ACCENT_2"]
+    g["COLOR_DANGER"]    = t["DANGER"]
+    g["CURRENT_THEME_NAME"] = theme_name
+
+
+# =====================================================
+# Interpolación de colores (para transiciones de tema)
+# =====================================================
+# Usadas por apply_theme_runtime() cuando fade=True. La animación
+# interpola entre dos diccionarios THEME a lo largo de N frames con
+# ~30-40 ms entre cada uno.
+def _hex_to_rgb(c):
+    """Convierte color hex '#RRGGBB' o '#RGB' a tupla (r, g, b) en
+    enteros 0-255. Si no parsea, devuelve negro. Los colores en THEMES
+    son siempre #hex, así que en la práctica siempre parsea."""
+    if not isinstance(c, str) or not c.startswith("#"):
+        return (0, 0, 0)
+    s = c[1:]
+    try:
+        if len(s) == 3:
+            return tuple(int(ch * 2, 16) for ch in s)
+        if len(s) == 6:
+            return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        pass
+    return (0, 0, 0)
+
+
+def _rgb_to_hex(r, g, b):
+    """Devuelve '#rrggbb' con clamping a [0, 255]."""
+    r = max(0, min(255, int(round(r))))
+    g = max(0, min(255, int(round(g))))
+    b = max(0, min(255, int(round(b))))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def lerp_color(c1, c2, t):
+    """Interpola dos colores hex linealmente. t en [0, 1].
+    t=0 → c1; t=1 → c2."""
+    r1, g1, b1 = _hex_to_rgb(c1)
+    r2, g2, b2 = _hex_to_rgb(c2)
+    return _rgb_to_hex(
+        r1 + (r2 - r1) * t,
+        g1 + (g2 - g1) * t,
+        b1 + (b2 - b1) * t,
+    )
+
+
+def lerp_theme(t1, t2, t):
+    """Tema intermedio entre dos. Solo interpola valores hex; las claves
+    no-color se toman de t1. t en [0, 1]."""
+    out = {}
+    for k, v1 in t1.items():
+        v2 = t2.get(k, v1)
+        if isinstance(v1, str) and v1.startswith("#") \
+                and isinstance(v2, str) and v2.startswith("#"):
+            out[k] = lerp_color(v1, v2, t)
+        else:
+            # No-color o tipos mixtos: mantenemos v1 hasta que el fade acabe
+            out[k] = v1
+    return out
+
+
+# =============================
+# Canales — colores fijos por orden
+# =============================
+# CH1-CH8: paleta tipo Tek (yellow/green/orange/blue/magenta/cyan/red/white).
+# CH9-CH12 (v1.26): paleta extendida — violeta, lima brillante, rosa fuerte y
+# teal oscuro. Elegidos por contraste claro frente a los 8 originales y entre
+# sí, evitando colisión visual sobre fondo oscuro.
+CHANNEL_COLORS = [
+    "#ffeb3b",   # CH1   amarillo
+    "#4caf50",   # CH2   verde
+    "#ff9800",   # CH3   naranja
+    "#2196f3",   # CH4   azul
+    "#e91e63",   # CH5   magenta
+    "#00e5ff",   # CH6   cyan
+    "#f44336",   # CH7   rojo
+    "#ffffff",   # CH8   blanco
+    "#b388ff",   # CH9   violeta
+    "#76ff03",   # CH10  lima
+    "#ff4081",   # CH11  rosa
+    "#00bfa5",   # CH12  teal
+]
+
+
+def channel_color(idx):
+    """Devuelve el color asignado al canal número idx (0-based).
+    Si hay más canales que colores definidos, cicla."""
+    return CHANNEL_COLORS[idx % len(CHANNEL_COLORS)]
+
+
+# =============================
+# Unidades de canal (v1.29)
+# =============================
+# Lista de unidades seleccionables por canal. "V" es el default (igual que el
+# comportamiento histórico). El símbolo "—" representa "sin unidad" (adimensional).
+# Layout 5x5 en el picker dialog: 24 unidades + 1 hueco vacío.
+CHANNEL_UNITS = [
+    "V",  "A",   "W",  "VA",  "var",   # eléctricas
+    "J",  "Ω",   "Hz", "%",   "dB",    # otras eléctricas / generales
+    "N",  "kgf", "N·m","RPM", "T",     # mecánicas
+    "°C", "°F",  "K",  "Pa",  "PSI",   # térmicas / presión
+    "bar","lux", "lm", "—",            # presión / luz / adimensional
+]
+DEFAULT_UNIT = "V"
+
+# Unidades que NO aceptan prefijo SI (no tiene sentido "k°C", "MdB", etc.).
+# format_si las muestra con formato directo sin prefijo.
+_NO_SI_PREFIX_UNITS = {"°C", "°F", "dB", "%", "PSI", "RPM", "lux", "lm", "—"}
+
+
+def apply_theme(root, name="Dark"):
+    """Aplica el tema indicado.
+
+    Pasos:
+      1) Reescribe las constantes COLOR_* del módulo.
+      2) Configura ttk.Style con esos valores.
+      3) Actualiza option_add para widgets futuros y Combobox listbox interno.
+
+    Para re-tematizar widgets tk.* YA CREADOS (Frames, Labels, Buttons que
+    no son ttk), llamar a _retheme_tk_widgets(root) después. El método de
+    OscilloscopeApp .apply_theme_runtime() hace ambas cosas.
+    """
+    if name not in THEMES:
+        name = "Dark"
+    _refresh_color_globals(name)
+
+    style = ttk.Style(root)
+    # 'clam' es el único tema empotrado que permite personalización real
+    # de colores en Windows/Linux/Mac.
+    style.theme_use("clam")
+
+    # Raíz
+    root.configure(bg=COLOR_BG)
+
+    # --- Frame / Label / Separator ---
+    style.configure("TFrame", background=COLOR_BG)
+    style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT)
+    style.configure(
+        "TSeparator",
+        background=COLOR_BORDER,
+    )
+
+    # --- Button ---
+    style.configure(
+        "TButton",
+        background=COLOR_BG_ALT,
+        foreground=COLOR_TEXT,
+        bordercolor=COLOR_BORDER,
+        lightcolor=COLOR_BG_ALT,
+        darkcolor=COLOR_BG_ALT,
+        focuscolor=COLOR_BG_ALT,
+        padding=(10, 6),
+        relief="flat",
+        borderwidth=1,
+    )
+    style.map(
+        "TButton",
+        background=[("active", COLOR_BG_HOVER), ("pressed", COLOR_BG_ACTIVE)],
+        bordercolor=[("active", COLOR_ACCENT), ("pressed", COLOR_ACCENT)],
+    )
+
+    # Botón con énfasis (el típico azul)
+    style.configure(
+        "Accent.TButton",
+        background=COLOR_ACCENT,
+        foreground="#000000",
+        bordercolor=COLOR_ACCENT,
+        lightcolor=COLOR_ACCENT,
+        darkcolor=COLOR_ACCENT,
+        padding=(10, 6),
+        relief="flat",
+        borderwidth=0,
+    )
+    style.map(
+        "Accent.TButton",
+        background=[("active", "#6ccfff"), ("pressed", COLOR_ACCENT_2)],
+        foreground=[("active", "#000000"), ("pressed", "#ffffff")],
+    )
+
+    # --- Checkbutton ---
+    style.configure(
+        "TCheckbutton",
+        background=COLOR_BG,
+        foreground=COLOR_TEXT,
+        focuscolor=COLOR_BG,
+        indicatorcolor=COLOR_BG_ALT,
+        indicatorbackground=COLOR_BG_ALT,
+        indicatorforeground="#ffffff",   # ⬅️ tick blanco (la "X")
+    )
+    style.map(
+        "TCheckbutton",
+        background=[("active", COLOR_BG)],
+        foreground=[("active", COLOR_ACCENT)],
+        indicatorcolor=[
+            ("selected", COLOR_ACCENT),
+            ("!selected", COLOR_BG_ALT),
+        ],
+        indicatorforeground=[("selected", "#ffffff")],
+    )
+
+    # --- Radiobutton ---
+    style.configure(
+        "TRadiobutton",
+        background=COLOR_BG,
+        foreground=COLOR_TEXT,
+        focuscolor=COLOR_BG,
+        indicatorcolor=COLOR_BG_ALT,
+        indicatorbackground=COLOR_BG_ALT,
+        indicatorforeground=COLOR_TEXT,
+    )
+    style.map(
+        "TRadiobutton",
+        background=[("active", COLOR_BG)],
+        foreground=[("active", COLOR_ACCENT)],
+        indicatorcolor=[
+            ("selected", COLOR_ACCENT),
+            ("!selected", COLOR_BG_ALT),
+            ("active", COLOR_BG_HOVER),
+        ],
+    )
+
+    # --- Entry / Spinbox / Combobox ---
+    for name in ("TEntry", "TSpinbox", "TCombobox"):
+        style.configure(
+            name,
+            fieldbackground=COLOR_BG_ALT,
+            background=COLOR_BG_ALT,
+            foreground=COLOR_TEXT,
+            bordercolor=COLOR_BORDER,
+            lightcolor=COLOR_BORDER,
+            darkcolor=COLOR_BORDER,
+            insertcolor=COLOR_TEXT,
+            arrowcolor=COLOR_TEXT,
+            padding=4,
+        )
+        style.map(
+            name,
+            bordercolor=[("focus", COLOR_ACCENT), ("hover", COLOR_ACCENT)],
+            lightcolor=[("focus", COLOR_ACCENT)],
+            darkcolor=[("focus", COLOR_ACCENT)],
+            fieldbackground=[("readonly", COLOR_BG_ALT)],
+            foreground=[("readonly", COLOR_TEXT)],
+            arrowcolor=[("hover", "#000000"),
+                        ("active", "#000000"),
+                        ("pressed", "#000000"),
+                        ("!disabled", COLOR_TEXT)],
+        )
+
+    # Combobox tiene además un "dropdown" (Listbox interno) que no usa ttk.
+    # Se configura por option_add:
+    root.option_add("*TCombobox*Listbox.background", COLOR_BG_ALT)
+    root.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", COLOR_ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", "#000000")
+
+    # --- Scale (sliders) ---
+    style.configure(
+        "Horizontal.TScale",
+        background=COLOR_BG,
+        troughcolor=COLOR_BG_ALT,
+        bordercolor=COLOR_BORDER,
+        lightcolor=COLOR_BG_ALT,
+        darkcolor=COLOR_BG_ALT,
+    )
+    style.map(
+        "Horizontal.TScale",
+        background=[("active", COLOR_BG)],
+    )
+
+    # ---- Treeview (tablas, e.g. DecoderWindow) ----
+    # Por defecto ttk.Treeview ignora la mayoría de los colores configurados
+    # globalmente. Hay que dárselos explícitamente.
+    style.configure(
+        "Treeview",
+        background=COLOR_BG_ALT,
+        foreground=COLOR_TEXT,
+        fieldbackground=COLOR_BG_ALT,
+        bordercolor=COLOR_BORDER,
+        lightcolor=COLOR_BORDER,
+        darkcolor=COLOR_BORDER,
+        rowheight=22,
+    )
+    style.map(
+        "Treeview",
+        background=[("selected", COLOR_ACCENT)],
+        foreground=[("selected", "#000000")],
+    )
+    style.configure(
+        "Treeview.Heading",
+        background=COLOR_BG,
+        foreground=COLOR_ACCENT,
+        bordercolor=COLOR_BORDER,
+        relief="flat",
+        font=("Segoe UI", 9, "bold"),
+    )
+    style.map(
+        "Treeview.Heading",
+        background=[("active", COLOR_BG_HOVER)],
+    )
+
+    # ---- LabelFrame (e.g. "Channel mapping", "Parameters") ----
+    style.configure(
+        "TLabelframe",
+        background=COLOR_BG,
+        bordercolor=COLOR_BORDER,
+        relief="solid",
+        borderwidth=1,
+    )
+    style.configure(
+        "TLabelframe.Label",
+        background=COLOR_BG,
+        foreground=COLOR_ACCENT,
+        font=("Segoe UI", 9, "bold"),
+    )
+
+    # ---- Scrollbar ----
+    style.configure(
+        "Vertical.TScrollbar",
+        background=COLOR_BG_ALT,
+        troughcolor=COLOR_BG,
+        bordercolor=COLOR_BORDER,
+        arrowcolor=COLOR_TEXT,
+    )
+    style.map(
+        "Vertical.TScrollbar",
+        background=[("active", COLOR_BG_HOVER)],
+    )
+
+    # Tk clásicos que todavía puedan aparecer (Toplevel, etc.)
+    root.option_add("*Background", COLOR_BG)
+    root.option_add("*Foreground", COLOR_TEXT)
+    root.option_add("*selectBackground", COLOR_ACCENT)
+    root.option_add("*selectForeground", "#000000")
+    root.option_add("*Toplevel.background", COLOR_BG)
+    root.option_add("*Menu.background", COLOR_BG_ALT)
+    root.option_add("*Menu.foreground", COLOR_TEXT)
+    # Nota: estos option_add solo afectan a widgets creados DESPUÉS de esta llamada
+
+
+# Alias retrocompat: el código histórico llamaba a apply_dark_theme(root).
+def apply_dark_theme(root):
+    apply_theme(root, "Dark")
+
+
+def _retheme_tk_widgets(widget, _depth=0):
+    """Recorre el árbol de widgets a partir de `widget` y reescribe bg/fg de
+    los tk.* clásicos (Frame, Label, Button, Canvas) usando las constantes
+    COLOR_* actuales.
+
+    Solo toca atributos que el widget soporta — los Canvas no tienen fg, los
+    Frame no tienen fg, etc. Atrapa TclError silenciosamente porque algunos
+    widgets nativos (Spinbox de ttk wrappeado, etc.) rechazan ciertas opciones.
+
+    Las clases ttk.* NO se tocan aquí: ya se actualizan automáticamente al
+    haber reconfigurado ttk.Style en apply_theme().
+
+    Mapping de roles → colores:
+      - tk.Frame con bg actual ~ BG     → nuevo BG
+      - tk.Frame con bg actual ~ BG_ALT → nuevo BG_ALT (topbar, paneles)
+      - tk.Label hereda según el bg del padre
+      - tk.Canvas: igual que Frame, sin fg
+      - tk.Button: como BG_ALT por defecto
+
+    Widgets con atributo `_theme_protected = True` se respetan: no se
+    cambia su color y no se desciende a sus hijos. Sirve para "muestras"
+    de tema (botones del selector de tema en Appearance) que deben
+    mantener su apariencia original siempre.
+
+    Cuidado: como el cambio de tema modifica COLOR_*, comparamos contra los
+    valores del tema ANTERIOR (que pasamos como argumento, ver el método
+    apply_theme_runtime de la app).
+    """
+    # Skip widgets explícitamente marcados como protegidos contra retheme.
+    # Tampoco descendemos: si todo un subárbol debe quedar fijo (poco
+    # común, pero ocurre en swatches/previews), marca el contenedor raíz.
+    if getattr(widget, "_theme_protected", False):
+        return
+
+    try:
+        cls = widget.winfo_class()
+    except Exception:
+        return
+
+    # Detectamos tipo "raw tk" por la ausencia de un punto en el nombre
+    # de clase y por que ttk usa "TFrame", "TLabel", etc.
+    is_ttk = cls.startswith("T") and cls not in ("Toplevel",)
+
+    if not is_ttk:
+        # Recoger bg actual y mapear
+        try:
+            current_bg = widget.cget("bg") if "bg" in widget.keys() else None
+        except (tk.TclError, AttributeError):
+            current_bg = None
+
+        new_bg = _map_legacy_color(current_bg, "bg")
+        if new_bg is not None:
+            try:
+                widget.configure(bg=new_bg)
+            except tk.TclError:
+                pass
+
+        # Foreground si lo soporta
+        try:
+            if "fg" in widget.keys():
+                current_fg = widget.cget("fg")
+                new_fg = _map_legacy_color(current_fg, "fg")
+                if new_fg is not None:
+                    widget.configure(fg=new_fg)
+        except (tk.TclError, AttributeError):
+            pass
+
+        # Para Toplevels y Canvas también highlight* si lo tienen
+        for attr in ("highlightbackground",):
+            try:
+                if attr in widget.keys():
+                    cur = widget.cget(attr)
+                    mapped = _map_legacy_color(cur, "border")
+                    if mapped is not None:
+                        widget.configure(**{attr: mapped})
+            except (tk.TclError, AttributeError):
+                pass
+
+    # Recursión sobre hijos
+    try:
+        children = widget.winfo_children()
+    except Exception:
+        children = []
+    for child in children:
+        _retheme_tk_widgets(child, _depth + 1)
+
+
+# Mapa inverso: dado un color (de cualquier tema), devuelve la "etiqueta" que
+# tenía (BG, BG_ALT, etc.) — útil para re-mapear al nuevo tema.
+_LEGACY_COLOR_REVERSE = {}
+
+def _rebuild_legacy_reverse():
+    """Reconstruye la tabla inversa: hex_color → (theme_name, role).
+    Llamado al inicio. Para retheme runtime, el caller debe pasar el tema
+    ANTERIOR explícitamente."""
+    global _LEGACY_COLOR_REVERSE
+    _LEGACY_COLOR_REVERSE = {}
+    for tname, td in THEMES.items():
+        for role, hex_val in td.items():
+            _LEGACY_COLOR_REVERSE.setdefault(hex_val.lower(), []).append((tname, role))
+
+_rebuild_legacy_reverse()
+
+
+def _map_legacy_color(hex_value, kind):
+    """Dado un color hex que estaba en un widget, intentar identificar su
+    'rol' y devolver el equivalente en el tema ACTUAL.
+
+    `kind` es una hint ('bg', 'fg', 'border') para desempatar cuando el
+    mismo hex se usaba para más de un rol.
+    """
+    if hex_value is None:
+        return None
+    try:
+        h = str(hex_value).lower()
+    except Exception:
+        return None
+    if h not in _LEGACY_COLOR_REVERSE:
+        return None
+    # Tomar el primer mapping encontrado, preferentemente del tema previo si
+    # podemos identificarlo. Para simplicidad: si el rol contiene 'TEXT' y
+    # kind=='fg', preferir TEXT. Si kind=='border', preferir BORDER.
+    candidates = _LEGACY_COLOR_REVERSE[h]
+    preferred_role = None
+    if kind == "fg":
+        for _, role in candidates:
+            if "TEXT" in role:
+                preferred_role = role; break
+    elif kind == "border":
+        for _, role in candidates:
+            if role == "BORDER":
+                preferred_role = role; break
+    if preferred_role is None:
+        # Bg por defecto: priorizar BG, luego BG_ALT, luego cualquiera
+        for pref in ("BG", "BG_ALT", "BG_HOVER", "BG_ACTIVE"):
+            for _, role in candidates:
+                if role == pref:
+                    preferred_role = role; break
+            if preferred_role:
+                break
+    if preferred_role is None:
+        preferred_role = candidates[0][1]
+    return THEMES[CURRENT_THEME_NAME].get(preferred_role)
+
+
+# =============================
+# Measurement helpers
+# =============================
+
+def _top_base_level(v):
+    """Estima top/base levels usando histograma bimodal.
+
+    Es lo que hacen los osciloscopios reales: buscan los dos niveles más
+    probables (el "1" lógico y el "0" lógico) en vez de usar min/max, que
+    se ven afectados por overshoots y ruido.
+
+    Devuelve (top, base). Si la señal no es bimodal (p.ej. una sinusoide
+    pura), top/base acaban siendo ~max/~min, que también es razonable.
+    """
+    if len(v) < 2:
+        return None, None
+    vmin, vmax = float(np.min(v)), float(np.max(v))
+    if vmax == vmin:
+        return vmax, vmin
+
+    # Histograma con resolución decente
+    nbins = min(256, max(32, len(v) // 20))
+    hist, edges = np.histogram(v, bins=nbins)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    # Dividir en mitad superior e inferior y coger la moda de cada una
+    mid = (vmax + vmin) / 2.0
+    upper = centers >= mid
+    lower = ~upper
+
+    if np.any(upper) and np.sum(hist[upper]) > 0:
+        top = float(centers[upper][np.argmax(hist[upper])])
+    else:
+        top = vmax
+
+    if np.any(lower) and np.sum(hist[lower]) > 0:
+        base = float(centers[lower][np.argmax(hist[lower])])
+    else:
+        base = vmin
+
+    return top, base
+
+
+def _mid_level(v):
+    """Nivel medio (50%) entre top y base."""
+    top, base = _top_base_level(v)
+    if top is None or base is None:
+        return None
+    return (top + base) / 2.0
+
+
+def _interp_crossing(t, v, i, level):
+    """Interpolación lineal del instante de cruce entre la muestra i y i+1."""
+    v1, v2 = v[i], v[i + 1]
+    if v2 == v1:
+        return t[i]
+    frac = (level - v1) / (v2 - v1)
+    return t[i] + frac * (t[i + 1] - t[i])
+
+
+def _find_crossings(t, v, level, edge="rising"):
+    """Devuelve los instantes (interpolados) en los que la señal cruza `level`.
+
+    edge: "rising" (de menos a más), "falling" (de más a menos), o "both".
+    """
+    if len(v) < 2:
+        return np.array([])
+
+    above = v >= level
+    # Detectar transiciones
+    diff = np.diff(above.astype(np.int8))
+    if edge == "rising":
+        idxs = np.where(diff == 1)[0]
+    elif edge == "falling":
+        idxs = np.where(diff == -1)[0]
+    else:
+        idxs = np.where(diff != 0)[0]
+
+    return np.array([_interp_crossing(t, v, i, level) for i in idxs])
+
+
+# =============================
+# Basic / Horizontal measurements
+# =============================
+
+def meas_peak_to_peak(v):
+    if len(v) == 0:
+        return None
+    return float(np.max(v) - np.min(v))
+
+
+def meas_period(t, v):
+    """Periodo medio usando cruces ascendentes por el mid-level.
+
+    Referenciar al mid-level (y no al 0 V) es clave: funciona tanto con señales
+    AC como con señales con offset DC (p.ej. lógica 0-3.3V).
+    """
+    mid = _mid_level(v)
+    if mid is None:
+        return None
+    cr = _find_crossings(t, v, mid, edge="rising")
+    if len(cr) < 2:
+        return None
+    return float(np.mean(np.diff(cr)))
+
+
+def meas_frequency(t, v):
+    p = meas_period(t, v)
+    if p is None or p == 0:
+        return None
+    return 1.0 / p
+
+
+def _edge_time(t, v, edge):
+    """Tiempo promedio de transición 10%→90% (rising) o 90%→10% (falling)
+    referenciado a top/base reales (no min/max).
+
+    Detecta TODOS los flancos cualificados y promedia. Un flanco solo cuenta
+    si la señal realmente atraviesa tanto el umbral del 10% como el del 90%
+    dentro de la misma transición.
+    """
+    if len(v) < 2:
+        return None
+
+    top, base = _top_base_level(v)
+    if top is None or base is None or top == base:
+        return None
+
+    ampl = top - base
+    v10 = base + 0.1 * ampl
+    v90 = base + 0.9 * ampl
+
+    times = []
+
+    if edge == "rising":
+        # Buscar todos los cruces ascendentes por v10 y v90
+        cr10 = _find_crossings(t, v, v10, edge="rising")
+        cr90 = _find_crossings(t, v, v90, edge="rising")
+        for t10 in cr10:
+            # Emparejar con el siguiente cruce por v90 que ocurra después
+            later = cr90[cr90 > t10]
+            if len(later) == 0:
+                continue
+            t90 = later[0]
+            # Validar que entre t10 y t90 no haya más cruces ascendentes
+            # por v10 (si los hubiera, es que se ha ido hacia abajo y ha
+            # vuelto a subir: no es un flanco limpio).
+            if np.any((cr10 > t10) & (cr10 < t90)):
+                continue
+            times.append(t90 - t10)
+    else:  # falling
+        cr10 = _find_crossings(t, v, v10, edge="falling")
+        cr90 = _find_crossings(t, v, v90, edge="falling")
+        for t90 in cr90:
+            later = cr10[cr10 > t90]
+            if len(later) == 0:
+                continue
+            t10 = later[0]
+            if np.any((cr90 > t90) & (cr90 < t10)):
+                continue
+            times.append(t10 - t90)
+
+    if not times:
+        return None
+    return float(np.mean(times))
+
+
+def meas_rise_time(t, v):
+    return _edge_time(t, v, "rising")
+
+
+def meas_fall_time(t, v):
+    return _edge_time(t, v, "falling")
+
+
+# =============================
+# Vertical measurements
+# =============================
+
+def meas_amplitude(v):
+    """Amplitud = top_level - base_level (diferente de Peak-Peak cuando hay overshoot)."""
+    top, base = _top_base_level(v)
+    if top is None or base is None:
+        return None
+    return top - base
+
+
+def meas_top_level(v):
+    top, _ = _top_base_level(v)
+    return top
+
+
+def meas_base_level(v):
+    _, base = _top_base_level(v)
+    return base
+
+
+def meas_peak_positive(v):
+    """Valor máximo absoluto (Peak+)."""
+    if len(v) == 0:
+        return None
+    return float(np.max(v))
+
+
+def meas_peak_negative(v):
+    """Valor mínimo absoluto (Peak−)."""
+    if len(v) == 0:
+        return None
+    return float(np.min(v))
+
+
+def meas_positive_overshoot(v):
+    """Overshoot positivo en %:   (max - top) / amplitud · 100."""
+    top, base = _top_base_level(v)
+    if top is None or base is None or top == base:
+        return None
+    vmax = float(np.max(v))
+    return (vmax - top) / (top - base) * 100.0
+
+
+def meas_negative_overshoot(v):
+    """Overshoot negativo en %:   (base - min) / amplitud · 100."""
+    top, base = _top_base_level(v)
+    if top is None or base is None or top == base:
+        return None
+    vmin = float(np.min(v))
+    return (base - vmin) / (top - base) * 100.0
+
+
+def meas_rms(v):
+    if len(v) == 0:
+        return None
+    return float(np.sqrt(np.mean(v.astype(float) ** 2)))
+
+
+# =============================
+# Extended time measurements
+# =============================
+
+def _pulse_widths(t, v, polarity="positive"):
+    """Devuelve array con los anchos de pulso de la polaridad indicada.
+    Un pulso positivo: rising → falling por mid-level. Negativo al revés."""
+    mid = _mid_level(v)
+    if mid is None:
+        return np.array([])
+    rises = _find_crossings(t, v, mid, edge="rising")
+    falls = _find_crossings(t, v, mid, edge="falling")
+    if len(rises) == 0 or len(falls) == 0:
+        return np.array([])
+
+    widths = []
+    if polarity == "positive":
+        # Por cada rise, emparejar con la siguiente fall
+        for r in rises:
+            nxt = falls[falls > r]
+            if len(nxt):
+                widths.append(nxt[0] - r)
+    else:
+        for f in falls:
+            nxt = rises[rises > f]
+            if len(nxt):
+                widths.append(nxt[0] - f)
+    return np.array(widths)
+
+
+def meas_positive_width(t, v):
+    w = _pulse_widths(t, v, "positive")
+    return float(np.mean(w)) if len(w) else None
+
+
+def meas_negative_width(t, v):
+    w = _pulse_widths(t, v, "negative")
+    return float(np.mean(w)) if len(w) else None
+
+
+def _slew_rates(t, v, edge="rising"):
+    """Slew rate medio = (90% - 10%) / rise_time para cada flanco detectado.
+    Devuelve V/s (positivo para rising, negativo para falling)."""
+    top, base = _top_base_level(v)
+    if top is None or top == base:
+        return np.array([])
+    amp = top - base
+    lo = base + 0.1 * amp
+    hi = base + 0.9 * amp
+    cr_lo = _find_crossings(t, v, lo, edge=edge)
+    cr_hi = _find_crossings(t, v, hi, edge=edge)
+    rates = []
+    if edge == "rising":
+        for c_lo in cr_lo:
+            nxt = cr_hi[cr_hi > c_lo]
+            if len(nxt):
+                dt = nxt[0] - c_lo
+                if dt > 0:
+                    rates.append((hi - lo) / dt)
+    else:
+        for c_hi in cr_hi:
+            nxt = cr_lo[cr_lo > c_hi]
+            if len(nxt):
+                dt = nxt[0] - c_hi
+                if dt > 0:
+                    rates.append(-(hi - lo) / dt)
+    return np.array(rates)
+
+
+def meas_rising_slew_rate(t, v):
+    r = _slew_rates(t, v, "rising")
+    return float(np.mean(r)) if len(r) else None
+
+
+def meas_falling_slew_rate(t, v):
+    r = _slew_rates(t, v, "falling")
+    return float(np.mean(r)) if len(r) else None
+
+
+def meas_positive_duty(t, v):
+    """Duty cycle positivo = pos_width / period (en %)."""
+    pw = meas_positive_width(t, v)
+    per = meas_period(t, v)
+    if pw is None or per is None or per == 0:
+        return None
+    return float(pw / per * 100.0)
+
+
+def meas_negative_duty(t, v):
+    pw = meas_negative_width(t, v)
+    per = meas_period(t, v)
+    if pw is None or per is None or per == 0:
+        return None
+    return float(pw / per * 100.0)
+
+
+def meas_high_time(t, v):
+    """Tiempo total con señal > mid level, dentro de la ventana."""
+    if len(v) < 2:
+        return None
+    mid = _mid_level(v)
+    if mid is None:
+        return None
+    # Integración simple: fracción de muestras > mid × duración total
+    above = v >= mid
+    dt = np.diff(t)
+    # Masa de 'above' en intervalos (promedio entre muestras vecinas)
+    mass = (above[:-1].astype(float) + above[1:].astype(float)) * 0.5
+    return float(np.sum(mass * dt))
+
+
+def meas_low_time(t, v):
+    if len(v) < 2:
+        return None
+    mid = _mid_level(v)
+    if mid is None:
+        return None
+    below = v < mid
+    dt = np.diff(t)
+    mass = (below[:-1].astype(float) + below[1:].astype(float)) * 0.5
+    return float(np.sum(mass * dt))
+
+
+def meas_time_outside_level(t, v):
+    """Tiempo total fuera de la banda [base, top] (overshoots + undershoots).
+    Útil para detectar ringing / violaciones de niveles lógicos."""
+    if len(v) < 2:
+        return None
+    top, base = _top_base_level(v)
+    if top is None:
+        return None
+    outside = (v > top) | (v < base)
+    dt = np.diff(t)
+    mass = (outside[:-1].astype(float) + outside[1:].astype(float)) * 0.5
+    return float(np.sum(mass * dt))
+
+
+# =============================
+# Phase (dual-channel) — via Hilbert
+# =============================
+
+def meas_phase_hilbert(t, v1, v2):
+    """Diferencia de fase entre v1 y v2 en grados.
+    Usa la fase instantánea de la Hilbert transform; devuelve la mediana
+    para robustez. Rango: (-180, 180]."""
+    if len(v1) < 4 or len(v2) < 4:
+        return None
+    try:
+        from scipy.signal import hilbert
+    except ImportError:
+        # Fallback a cruces por cero si scipy no está
+        return _meas_phase_crossings(t, v1, v2)
+    # Quitar DC
+    s1 = v1 - np.mean(v1)
+    s2 = v2 - np.mean(v2)
+    a1 = hilbert(s1)
+    a2 = hilbert(s2)
+    phase_diff = np.angle(a1 * np.conj(a2))  # fase de v1 - fase de v2
+    # Desenvolver no aporta para la mediana; usar mediana del argumento
+    med = float(np.median(phase_diff))
+    deg = np.degrees(med)
+    # Normalizar a (-180, 180]
+    while deg > 180:  deg -= 360
+    while deg <= -180: deg += 360
+    return deg
+
+
+def _meas_phase_crossings(t, v1, v2):
+    """Fallback: por cruces por cero de señales centradas."""
+    m1 = _mid_level(v1)
+    m2 = _mid_level(v2)
+    if m1 is None or m2 is None:
+        return None
+    cr1 = _find_crossings(t, v1, m1, edge="rising")
+    cr2 = _find_crossings(t, v2, m2, edge="rising")
+    if len(cr1) < 2 or len(cr2) < 1:
+        return None
+    period = float(np.mean(np.diff(cr1)))
+    if period == 0:
+        return None
+    # Para cada rise de v1, encontrar el rise de v2 más próximo
+    diffs = []
+    for r in cr1:
+        if len(cr2) == 0:
+            break
+        idx = int(np.argmin(np.abs(cr2 - r)))
+        diffs.append(cr2[idx] - r)
+    if not diffs:
+        return None
+    delay = float(np.median(diffs))
+    deg = delay / period * 360.0
+    while deg > 180:   deg -= 360
+    while deg <= -180: deg += 360
+    return deg
+
+
+AMPLITUDE_MEASUREMENTS = {
+    "Peak-Peak":          ("V", lambda t, v: meas_peak_to_peak(v)),
+    "Amplitude":          ("V", lambda t, v: meas_amplitude(v)),
+    "Top Level":          ("V", lambda t, v: meas_top_level(v)),
+    "Base Level":         ("V", lambda t, v: meas_base_level(v)),
+    "Peak +":             ("V", lambda t, v: meas_peak_positive(v)),
+    "Peak -":             ("V", lambda t, v: meas_peak_negative(v)),
+    "Positive Overshoot": ("%", lambda t, v: meas_positive_overshoot(v)),
+    "Negative Overshoot": ("%", lambda t, v: meas_negative_overshoot(v)),
+    "RMS":                ("V", lambda t, v: meas_rms(v)),
+}
+
+
+TIME_MEASUREMENTS = {
+    "Period":             ("s",   meas_period),
+    "Frequency":          ("Hz",  meas_frequency),
+    "Rise Time":          ("s",   meas_rise_time),
+    "Fall Time":          ("s",   meas_fall_time),
+    "Positive Width":     ("s",   meas_positive_width),
+    "Negative Width":     ("s",   meas_negative_width),
+    "Rising Slew Rate":   ("V/s", meas_rising_slew_rate),
+    "Falling Slew Rate":  ("V/s", meas_falling_slew_rate),
+    "Positive Duty":      ("%",   meas_positive_duty),
+    "Negative Duty":      ("%",   meas_negative_duty),
+    "High Time":          ("s",   meas_high_time),
+    "Low Time":           ("s",   meas_low_time),
+    "Time Outside Level": ("s",   meas_time_outside_level),
+    # Phase necesita dos canales → marcador especial "dual"
+    "Phase":              ("°",   ("dual", meas_phase_hilbert)),
+}
+
+
+# Descripciones que aparecen en el panel de preview al seleccionar cada medida
+MEASUREMENT_DESCRIPTIONS = {
+    "Peak-Peak":
+        "Peak-Peak is the absolute difference between the maximum and minimum "
+        "sample values. It includes any overshoot and noise.",
+    "Amplitude":
+        "Amplitude is the difference between the Top value and the Base value. "
+        "Unlike Peak-Peak, it ignores overshoot and noise by using the most "
+        "common high/low levels in the signal.",
+    "Top Level":
+        "Top Level is the statistically most common value of the upper portion "
+        "of the signal (the logic '1' level for digital signals).",
+    "Base Level":
+        "Base Level is the statistically most common value of the lower portion "
+        "of the signal (the logic '0' level for digital signals).",
+    "Peak +":
+        "Peak+ is the absolute maximum sample value in the measurement window.",
+    "Peak -":
+        "Peak- is the absolute minimum sample value in the measurement window.",
+    "Positive Overshoot":
+        "Positive Overshoot is the amount by which the signal exceeds its Top "
+        "level after a rising edge, expressed as a percentage of the Amplitude:"
+        "  (Max - Top) / Amplitude × 100%.",
+    "Negative Overshoot":
+        "Negative Overshoot is the amount by which the signal falls below its "
+        "Base level after a falling edge, expressed as a percentage of the "
+        "Amplitude:  (Base - Min) / Amplitude × 100%.",
+    "RMS":
+        "RMS (Root Mean Square) is the square root of the mean of the squared "
+        "sample values. For a sinusoid, RMS = Amplitude / √2.",
+    "Period":
+        "Period is the time required to complete one cycle. It is measured as "
+        "the time between two adjacent rising crossings of the Mid reference "
+        "level (the average of Top and Base).",
+    "Frequency":
+        "Frequency is the reciprocal of Period: F = 1/T. It tells you how many "
+        "cycles the signal completes per second.",
+    "Rise Time":
+        "Rise Time is the time the signal takes to go from 10% to 90% of its "
+        "Amplitude on a rising edge. Measured on each edge and averaged.",
+    "Fall Time":
+        "Fall Time is the time the signal takes to go from 90% to 10% of its "
+        "Amplitude on a falling edge. Measured on each edge and averaged.",
+    "Positive Width":
+        "Positive Width is the time between a rising and the next falling "
+        "crossing of the Mid reference level. Averaged over all pulses.",
+    "Negative Width":
+        "Negative Width is the time between a falling and the next rising "
+        "crossing of the Mid reference level. Averaged over all pulses.",
+    "Rising Slew Rate":
+        "Rising Slew Rate is the average slope (V/s) between the 10% and 90% "
+        "amplitude points of rising edges.",
+    "Falling Slew Rate":
+        "Falling Slew Rate is the average slope (V/s) between the 90% and 10% "
+        "amplitude points of falling edges. Reported as a negative value.",
+    "Positive Duty":
+        "Positive Duty Cycle = Positive Width / Period × 100%. Fraction of "
+        "the period the signal spends above the Mid level.",
+    "Negative Duty":
+        "Negative Duty Cycle = Negative Width / Period × 100%.",
+    "High Time":
+        "Total time within the measurement window that the signal stays "
+        "above the Mid reference level.",
+    "Low Time":
+        "Total time within the measurement window that the signal stays "
+        "below the Mid reference level.",
+    "Time Outside Level":
+        "Total time the signal spends outside the [Base, Top] band. Useful "
+        "to detect ringing, overshoot and undershoot violations.",
+    "Phase":
+        "Phase difference (in degrees) between the selected channel and a "
+        "reference channel, estimated from the analytic signal (Hilbert "
+        "transform). Range: (-180°, 180°]. Requires two channels.",
+}
+
+
+# Tabla combinada para lookups rápidos desde la UI/cálculos
+ALL_MEASUREMENTS = {}
+ALL_MEASUREMENTS.update(AMPLITUDE_MEASUREMENTS)
+ALL_MEASUREMENTS.update(TIME_MEASUREMENTS)
+
+# Aliases retrocompat (el código antiguo los usa)
+BASIC_MEASUREMENTS = TIME_MEASUREMENTS
+VERTICAL_MEASUREMENTS = AMPLITUDE_MEASUREMENTS
+
+
+# =============================
+# Imágenes explicativas de las medidas
+# =============================
+# Dibujadas con matplotlib puro (líneas, flechas, texto). Devuelven una Figure
+# ya lista para insertar en la ventana de Measurements con FigureCanvasTkAgg.
+# Fondo claro estilo Tektronix, traza amarilla, flechas/líneas de referencia.
+
+def _meas_fig_base():
+    """Crea una figura base con el estilo de los manuales de scope."""
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(5.5, 2.6), dpi=90)
+    fig.patch.set_facecolor("#3a3a3a")
+    ax = fig.add_subplot(111)
+    ax.set_facecolor("#3a3a3a")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlim(0, 10)
+    ax.set_ylim(-2.5, 2.5)
+    return fig, ax
+
+
+def _draw_square_wave(ax, x_start=0.5, x_end=9.5, low=-1.2, high=1.2, cycles=2.5, overshoot=0.0):
+    """Dibuja una onda cuadrada amarilla con flancos finitos y overshoot
+    opcional. La usan casi todos los previews de time/amplitude measurements."""
+    T = (x_end - x_start) / cycles
+    edge_w = T * 0.08
+    # Generar puntos
+    x_pts = [x_start]
+    y_pts = [low]
+    t = x_start
+    state = low
+    while t < x_end:
+        # Subida
+        x_pts.append(t + edge_w); y_pts.append(high + overshoot)
+        if overshoot != 0:
+            x_pts.append(t + edge_w + edge_w*0.5); y_pts.append(high + overshoot*0.3)
+            x_pts.append(t + edge_w + edge_w*1.2); y_pts.append(high)
+        # Meseta alta
+        t2 = t + T/2
+        x_pts.append(t2); y_pts.append(high)
+        # Bajada
+        x_pts.append(t2 + edge_w); y_pts.append(low - overshoot)
+        if overshoot != 0:
+            x_pts.append(t2 + edge_w + edge_w*0.5); y_pts.append(low - overshoot*0.3)
+            x_pts.append(t2 + edge_w + edge_w*1.2); y_pts.append(low)
+        # Meseta baja
+        t = t + T
+        x_pts.append(t); y_pts.append(low)
+    ax.plot(x_pts, y_pts, color="#ffeb3b", linewidth=2.0)
+    return T
+
+
+def _draw_sine(ax, x_start=0.5, x_end=9.5, cycles=2, amp=1.4, dc=0.0):
+    xs = np.linspace(x_start, x_end, 400)
+    ys = dc + amp * np.sin(2 * np.pi * cycles * (xs - x_start) / (x_end - x_start))
+    ax.plot(xs, ys, color="#ffeb3b", linewidth=2.0)
+
+
+def _hline(ax, y, x0=0.3, x1=9.7, **kw):
+    kw.setdefault("color", "#cccccc")
+    kw.setdefault("linewidth", 0.8)
+    kw.setdefault("linestyle", (0, (4, 3)))
+    ax.plot([x0, x1], [y, y], **kw)
+
+
+def _vline(ax, x, y0, y1, **kw):
+    kw.setdefault("color", "#cccccc")
+    kw.setdefault("linewidth", 0.8)
+    kw.setdefault("linestyle", (0, (4, 3)))
+    ax.plot([x, x], [y0, y1], **kw)
+
+
+def _arrow_v(ax, x, y0, y1, label=None, label_offset=(0.15, 0)):
+    """Flecha vertical doble con etiqueta."""
+    ax.annotate(
+        "", xy=(x, y1), xytext=(x, y0),
+        arrowprops=dict(arrowstyle="<->", color="#ffffff", lw=1.5),
+    )
+    if label:
+        ax.text(x + label_offset[0], (y0 + y1) / 2 + label_offset[1], label,
+                color="white", fontsize=11, va="center", ha="left")
+
+
+def _arrow_h(ax, x0, x1, y, label=None, label_offset=(0, 0.2)):
+    """Flecha horizontal doble con etiqueta."""
+    ax.annotate(
+        "", xy=(x1, y), xytext=(x0, y),
+        arrowprops=dict(arrowstyle="<->", color="#ffffff", lw=1.5),
+    )
+    if label:
+        ax.text((x0 + x1) / 2 + label_offset[0], y + label_offset[1], label,
+                color="white", fontsize=11, va="bottom", ha="center")
+
+
+def make_measurement_preview(name):
+    """Genera una Figure con el dibujo explicativo de la medida `name`.
+    Si no hay dibujo específico, devuelve una figura genérica con una
+    onda cuadrada."""
+    fig, ax = _meas_fig_base()
+
+    top, base = 1.2, -1.2
+
+    if name == "Peak-Peak":
+        _draw_square_wave(ax, overshoot=0.5)
+        _hline(ax, top + 0.5)   # máximo con overshoot
+        _hline(ax, base - 0.5)
+        _arrow_v(ax, 1.5, top + 0.5, base - 0.5, "Vpp")
+
+    elif name == "Amplitude":
+        _draw_square_wave(ax, overshoot=0.5)
+        _hline(ax, top)
+        _hline(ax, base)
+        _arrow_v(ax, 1.5, base, top, "A")
+
+    elif name == "Top Level":
+        _draw_square_wave(ax, overshoot=0.5)
+        _hline(ax, top, color="#4caf50", linewidth=1.2)
+        ax.text(9.8, top, " Top", color="#4caf50", fontsize=11, va="center", ha="left", fontweight="bold")
+
+    elif name == "Base Level":
+        _draw_square_wave(ax, overshoot=0.5)
+        _hline(ax, base, color="#4caf50", linewidth=1.2)
+        ax.text(9.8, base, " Base", color="#4caf50", fontsize=11, va="center", ha="left", fontweight="bold")
+
+    elif name == "Peak +":
+        _draw_square_wave(ax, overshoot=0.6)
+        _hline(ax, top + 0.6, color="#e91e63", linewidth=1.2)
+        ax.text(9.8, top + 0.6, " Peak+", color="#e91e63", fontsize=11, va="center", ha="left", fontweight="bold")
+
+    elif name == "Peak -":
+        _draw_square_wave(ax, overshoot=0.6)
+        _hline(ax, base - 0.6, color="#e91e63", linewidth=1.2)
+        ax.text(9.8, base - 0.6, " Peak−", color="#e91e63", fontsize=11, va="center", ha="left", fontweight="bold")
+
+    elif name == "Positive Overshoot":
+        _draw_square_wave(ax, overshoot=0.6)
+        _hline(ax, top)
+        _hline(ax, top + 0.6)
+        _arrow_v(ax, 3.2, top, top + 0.6, "+OS")
+
+    elif name == "Negative Overshoot":
+        _draw_square_wave(ax, overshoot=0.6)
+        _hline(ax, base)
+        _hline(ax, base - 0.6)
+        _arrow_v(ax, 6.8, base - 0.6, base, "−OS")
+
+    elif name == "RMS":
+        _draw_sine(ax, cycles=2)
+        # Indicar Vrms ≈ 0.707·A
+        ax.plot([0.5, 9.5], [0.989, 0.989], color="#e91e63",
+                linewidth=1.2, linestyle=(0, (4, 3)))
+        ax.text(9.8, 0.989, " Vrms", color="#e91e63",
+                fontsize=11, va="center", ha="left", fontweight="bold")
+
+    elif name == "Period":
+        _draw_square_wave(ax, cycles=2.5)
+        # Flecha indicando T entre dos flancos ascendentes
+        T_vis = (9.5 - 0.5) / 2.5
+        _vline(ax, 0.5, base, top + 0.3)
+        _vline(ax, 0.5 + T_vis, base, top + 0.3)
+        _arrow_h(ax, 0.5, 0.5 + T_vis, top + 0.7, "T")
+
+    elif name == "Frequency":
+        _draw_square_wave(ax, cycles=2.5)
+        T_vis = (9.5 - 0.5) / 2.5
+        _vline(ax, 0.5, base, top + 0.3)
+        _vline(ax, 0.5 + T_vis, base, top + 0.3)
+        _arrow_h(ax, 0.5, 0.5 + T_vis, top + 0.7, "T = 1/F")
+
+    elif name == "Rise Time":
+        _draw_square_wave(ax, cycles=1.5, overshoot=0.0)
+        # Niveles 10% y 90%
+        v10 = base + 0.1 * (top - base)
+        v90 = base + 0.9 * (top - base)
+        _hline(ax, v10, color="#e91e63", linewidth=0.9)
+        _hline(ax, v90, color="#e91e63", linewidth=0.9)
+        ax.text(9.8, v10, " 10%", color="#e91e63", fontsize=10, va="center", ha="left")
+        ax.text(9.8, v90, " 90%", color="#e91e63", fontsize=10, va="center", ha="left")
+        # Flecha horizontal sobre el flanco ascendente
+        T_vis = (9.5 - 0.5) / 1.5
+        edge_x = 0.5 + T_vis * 0.08 * 0.5
+        _arrow_h(ax, edge_x - 0.1, edge_x + 0.4, top + 0.6, "tr")
+
+    elif name == "Fall Time":
+        _draw_square_wave(ax, cycles=1.5, overshoot=0.0)
+        v10 = base + 0.1 * (top - base)
+        v90 = base + 0.9 * (top - base)
+        _hline(ax, v10, color="#e91e63", linewidth=0.9)
+        _hline(ax, v90, color="#e91e63", linewidth=0.9)
+        ax.text(9.8, v10, " 10%", color="#e91e63", fontsize=10, va="center", ha="left")
+        ax.text(9.8, v90, " 90%", color="#e91e63", fontsize=10, va="center", ha="left")
+        T_vis = (9.5 - 0.5) / 1.5
+        edge_x = 0.5 + T_vis * 0.5
+        _arrow_h(ax, edge_x - 0.1, edge_x + 0.4, top + 0.6, "tf")
+
+    elif name == "Positive Width":
+        _draw_square_wave(ax, cycles=2.5)
+        T = (9.5 - 0.5) / 2.5
+        edge_w = T * 0.08
+        # Pulso positivo: desde final del flanco subida (0.5+edge_w) hasta
+        # inicio del flanco bajada (0.5+T/2).
+        x0 = 0.5 + edge_w + edge_w * 0.5
+        x1 = 0.5 + T / 2 + edge_w * 0.5
+        _vline(ax, x0, base, top + 0.3)
+        _vline(ax, x1, base, top + 0.3)
+        _arrow_h(ax, x0, x1, top + 0.7, "+W")
+
+    elif name == "Negative Width":
+        _draw_square_wave(ax, cycles=2.5)
+        T = (9.5 - 0.5) / 2.5
+        edge_w = T * 0.08
+        # Pulso negativo: desde inicio flanco bajada hasta inicio siguiente subida
+        x0 = 0.5 + T / 2 + edge_w + edge_w * 0.5
+        x1 = 0.5 + T + edge_w * 0.5
+        _vline(ax, x0, base - 0.3, top)
+        _vline(ax, x1, base - 0.3, top)
+        _arrow_h(ax, x0, x1, base - 0.7, "−W")
+
+    elif name == "Rising Slew Rate":
+        # Onda con un flanco de subida bien marcado
+        xs = np.linspace(0.5, 9.5, 300)
+        ys = np.where(xs < 3.5, -1.2,
+                      np.where(xs > 6.5, 1.2,
+                               -1.2 + (xs - 3.5) * (2.4 / 3.0)))
+        ax.plot(xs, ys, color="#ffeb3b", linewidth=2.0)
+        v10 = -1.2 + 0.1 * 2.4
+        v90 = -1.2 + 0.9 * 2.4
+        _hline(ax, v10, color="#e91e63", linewidth=0.9)
+        _hline(ax, v90, color="#e91e63", linewidth=0.9)
+        ax.text(9.8, v10, " 10%", color="#e91e63", fontsize=10, va="center", ha="left")
+        ax.text(9.8, v90, " 90%", color="#e91e63", fontsize=10, va="center", ha="left")
+        # Flecha diagonal indicando la pendiente
+        x_lo = 3.5 + (v10 - (-1.2)) / (2.4 / 3.0)
+        x_hi = 3.5 + (v90 - (-1.2)) / (2.4 / 3.0)
+        ax.annotate("", xy=(x_hi, v90), xytext=(x_lo, v10),
+                    arrowprops=dict(arrowstyle="->", color="#4cc2ff", lw=2.0))
+        ax.text((x_lo + x_hi) / 2 - 1.2, (v10 + v90) / 2 + 0.1, "ΔV/Δt",
+                color="#4cc2ff", fontsize=10, fontweight="bold", va="center")
+
+    elif name == "Falling Slew Rate":
+        xs = np.linspace(0.5, 9.5, 300)
+        ys = np.where(xs < 3.5, 1.2,
+                      np.where(xs > 6.5, -1.2,
+                               1.2 - (xs - 3.5) * (2.4 / 3.0)))
+        ax.plot(xs, ys, color="#ffeb3b", linewidth=2.0)
+        v10 = -1.2 + 0.1 * 2.4
+        v90 = -1.2 + 0.9 * 2.4
+        _hline(ax, v10, color="#e91e63", linewidth=0.9)
+        _hline(ax, v90, color="#e91e63", linewidth=0.9)
+        ax.text(9.8, v10, " 10%", color="#e91e63", fontsize=10, va="center", ha="left")
+        ax.text(9.8, v90, " 90%", color="#e91e63", fontsize=10, va="center", ha="left")
+        x_hi = 3.5 + (1.2 - v90) / (2.4 / 3.0)
+        x_lo = 3.5 + (1.2 - v10) / (2.4 / 3.0)
+        ax.annotate("", xy=(x_lo, v10), xytext=(x_hi, v90),
+                    arrowprops=dict(arrowstyle="->", color="#4cc2ff", lw=2.0))
+        ax.text((x_lo + x_hi) / 2 - 1.2, (v10 + v90) / 2 + 0.1, "ΔV/Δt",
+                color="#4cc2ff", fontsize=10, fontweight="bold", va="center")
+
+    elif name == "Positive Duty":
+        _draw_square_wave(ax, cycles=2.0)
+        T = (9.5 - 0.5) / 2.0
+        edge_w = T * 0.08
+        # Periodo completo
+        _vline(ax, 0.5, base - 0.3, top + 0.3)
+        _vline(ax, 0.5 + T, base - 0.3, top + 0.3)
+        _arrow_h(ax, 0.5, 0.5 + T, top + 1.0, "T")
+        # Ancho positivo
+        x0 = 0.5 + edge_w * 0.5
+        x1 = 0.5 + T / 2 + edge_w * 0.5
+        _arrow_h(ax, x0, x1, top + 0.3, "+W")
+        ax.text(5.0, base - 1.0, "Duty+ = +W / T × 100%",
+                color="#4cc2ff", fontsize=10, fontweight="bold",
+                ha="center", va="center")
+
+    elif name == "Negative Duty":
+        _draw_square_wave(ax, cycles=2.0)
+        T = (9.5 - 0.5) / 2.0
+        edge_w = T * 0.08
+        _vline(ax, 0.5, base - 0.3, top + 0.3)
+        _vline(ax, 0.5 + T, base - 0.3, top + 0.3)
+        _arrow_h(ax, 0.5, 0.5 + T, top + 1.0, "T")
+        # Ancho negativo
+        x0 = 0.5 + T / 2 + edge_w * 0.5
+        x1 = 0.5 + T + edge_w * 0.5
+        _arrow_h(ax, x0, x1, base - 0.7, "−W")
+        ax.text(5.0, top + 1.6, "Duty− = −W / T × 100%",
+                color="#4cc2ff", fontsize=10, fontweight="bold",
+                ha="center", va="center")
+
+    elif name == "High Time":
+        _draw_square_wave(ax, cycles=2.5)
+        # Sombrear las zonas altas
+        T = (9.5 - 0.5) / 2.5
+        edge_w = T * 0.08
+        for k in range(3):
+            x0 = 0.5 + k * T + edge_w * 0.5
+            x1 = 0.5 + k * T + T / 2 + edge_w * 0.5
+            if x1 > 9.5:
+                x1 = 9.5
+            if x0 > 9.5:
+                break
+            ax.axvspan(x0, x1, ymin=0.5, ymax=0.95,
+                       color="#4cc2ff", alpha=0.3)
+        _hline(ax, 0.0, color="#888888", linewidth=0.8)
+        ax.text(9.8, 0.0, " mid", color="#888888",
+                fontsize=9, va="center", ha="left")
+        ax.text(5.0, top + 0.9, "Σ time above mid",
+                color="#4cc2ff", fontsize=10, fontweight="bold",
+                ha="center", va="center")
+
+    elif name == "Low Time":
+        _draw_square_wave(ax, cycles=2.5)
+        T = (9.5 - 0.5) / 2.5
+        edge_w = T * 0.08
+        for k in range(3):
+            x0 = 0.5 + k * T + T / 2 + edge_w * 0.5
+            x1 = 0.5 + (k + 1) * T + edge_w * 0.5
+            if x1 > 9.5:
+                x1 = 9.5
+            if x0 > 9.5:
+                break
+            ax.axvspan(x0, x1, ymin=0.05, ymax=0.5,
+                       color="#4cc2ff", alpha=0.3)
+        _hline(ax, 0.0, color="#888888", linewidth=0.8)
+        ax.text(9.8, 0.0, " mid", color="#888888",
+                fontsize=9, va="center", ha="left")
+        ax.text(5.0, base - 0.9, "Σ time below mid",
+                color="#4cc2ff", fontsize=10, fontweight="bold",
+                ha="center", va="center")
+
+    elif name == "Time Outside Level":
+        # Onda cuadrada con overshoot marcado
+        _draw_square_wave(ax, overshoot=0.6, cycles=2.0)
+        # Top/Base
+        _hline(ax, top, color="#888888", linewidth=0.8)
+        _hline(ax, base, color="#888888", linewidth=0.8)
+        ax.text(9.8, top, " Top", color="#888888", fontsize=9, va="center", ha="left")
+        ax.text(9.8, base, " Base", color="#888888", fontsize=9, va="center", ha="left")
+        # Sombrear overshoots (arriba de top y debajo de base)
+        T = (9.5 - 0.5) / 2.0
+        edge_w = T * 0.08
+        for k in range(2):
+            x0 = 0.5 + k * T + edge_w
+            x1 = x0 + edge_w * 1.2
+            ax.axvspan(x0, x1, ymin=0.82, ymax=0.92,
+                       color="#e91e63", alpha=0.5)
+            x0b = 0.5 + k * T + T / 2 + edge_w
+            x1b = x0b + edge_w * 1.2
+            ax.axvspan(x0b, x1b, ymin=0.08, ymax=0.18,
+                       color="#e91e63", alpha=0.5)
+        ax.text(5.0, top + 1.1, "time outside [Base, Top]",
+                color="#e91e63", fontsize=10, fontweight="bold",
+                ha="center", va="center")
+
+    elif name == "Phase":
+        # Dos senoidales desfasadas
+        xs = np.linspace(0.5, 9.5, 400)
+        cycles = 1.5
+        w = 2 * np.pi * cycles / (9.5 - 0.5)
+        y1 = 1.0 * np.sin(w * (xs - 0.5))
+        y2 = 1.0 * np.sin(w * (xs - 0.5) - np.pi / 3)  # 60° detrás
+        ax.plot(xs, y1, color="#ffeb3b", linewidth=2.0, label="CH A")
+        ax.plot(xs, y2, color="#4caf50", linewidth=2.0, label="CH B")
+        # Buscar primer cruce por cero ascendente de cada uno
+        def first_rising_zero(ys, xs):
+            for i in range(len(ys) - 1):
+                if ys[i] <= 0 < ys[i + 1]:
+                    # interp
+                    t = ys[i] / (ys[i] - ys[i + 1])
+                    return xs[i] + t * (xs[i + 1] - xs[i])
+            return xs[0]
+        x_a = first_rising_zero(y1, xs)
+        x_b = first_rising_zero(y2, xs)
+        _vline(ax, x_a, -1.5, 1.5, color="#ffeb3b", linewidth=0.8)
+        _vline(ax, x_b, -1.5, 1.5, color="#4caf50", linewidth=0.8)
+        _arrow_h(ax, x_a, x_b, 1.6, "Δφ")
+        ax.text(9.8, 0.9, " CH A", color="#ffeb3b",
+                fontsize=10, va="center", ha="left", fontweight="bold")
+        ax.text(9.8, -0.4, " CH B", color="#4caf50",
+                fontsize=10, va="center", ha="left", fontweight="bold")
+
+    else:
+        _draw_square_wave(ax)
+
+    fig.tight_layout(pad=0.4)
+    return fig
+
+
+
+# -----------------------------
+# Configuración de osciloscopio
+# -----------------------------
+H_DIVS = 12   # divisiones horizontales (tiempo)
+V_DIVS = 10   # divisiones verticales (voltaje)
+
+TIME_DIV_VALUES = [
+    1e-9, 2e-9, 5e-9,
+    10e-9, 20e-9, 40e-9,
+    80e-9, 200e-9, 500e-9,
+    1e-6, 2e-6, 5e-6,
+    10e-6, 20e-6, 50e-6,
+    100e-6, 200e-6, 500e-6,
+    1e-3, 2e-3, 5e-3,
+    10e-3, 20e-3, 50e-3,
+    100e-3, 200e-3, 500e-3,
+    1, 2, 5, 10, 20, 50, 100, 200, 500
+]
+
+V_DIV_VALUES = [
+    # mV
+    0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+    # V
+    1, 2, 5, 10, 20, 50, 100, 200, 500,
+    # kV
+    1000, 2000, 5000, 10000, 20000, 50000,
+]
+
+
+# -----------------------------
+# Decimation min/max para render
+# -----------------------------
+# Umbral: si hay más de POINTS_PER_PIXEL * ancho_pixeles puntos visibles,
+# aplicamos decimation min/max. Con 2 (min y max por bucket) ya conservamos
+# picos; subir esto pinta más pero da más detalle fino.
+POINTS_PER_PIXEL = 4
+
+
+def minmax_decimate(t, v, n_pixels):
+    """Reduce (t, v) a ~4*n_buckets puntos conservando min/max por bucket.
+
+    Diferencia clave vs. downsample por salto:
+      - salto   -> pierde picos (el pico puede caer entre muestras elegidas)
+      - min/max -> conserva envolvente (siempre ves el peor caso por bucket)
+
+    Version robusta (sin "resto" que rompa la traza):
+      - Los buckets cubren TODO el array con bordes np.linspace; el ultimo
+        absorbe decimales. No hay muestras fuera que haya que concatenar.
+      - Por cada bucket emitimos hasta 4 puntos: primero, min, max, ultimo.
+        Emitir first y last ademas de min/max evita el artefacto de "linea
+        que salta de pico a pico" entre buckets y deja cruces limpios.
+    """
+    n = len(v)
+    if n_pixels < 1:
+        n_pixels = 1
+    threshold = POINTS_PER_PIXEL * n_pixels
+    if n <= threshold:
+        return t, v
+
+    # Bordes de bucket: cubren [0, n) exactamente.
+    edges = np.linspace(0, n, n_pixels + 1, dtype=np.int64)
+
+    # Preallocamos holgado (hasta 4 puntos por bucket, des-duplicados luego)
+    out_t = np.empty(4 * n_pixels, dtype=t.dtype)
+    out_v = np.empty(4 * n_pixels, dtype=v.dtype)
+    k = 0
+
+    for b in range(n_pixels):
+        lo = int(edges[b])
+        hi = int(edges[b + 1])
+        if hi <= lo:
+            continue
+        seg_v = v[lo:hi]
+        seg_t = t[lo:hi]
+        i_min = int(np.argmin(seg_v))
+        i_max = int(np.argmax(seg_v))
+        # Indices distintivos dentro del bucket: primero, min, max, ultimo.
+        # Los emitimos en orden temporal y sin repetidos.
+        idx_set = sorted({0, i_min, i_max, hi - lo - 1})
+        for j in idx_set:
+            out_t[k] = seg_t[j]
+            out_v[k] = seg_v[j]
+            k += 1
+
+    return out_t[:k], out_v[:k]
+
+
+# -----------------------------
+# FFT: ventanas y sus ENBW
+# -----------------------------
+# ENBW = equivalent noise bandwidth (en bins). Se usa para:
+#   - relación RBW <-> W  (RBW = ENBW * fs / N)
+#   - compensación de amplitud al aplicar la ventana
+FFT_WINDOWS = {
+    "Rectangular": {"enbw": 1.0,    "coherent_gain": 1.0},
+    "Hann":        {"enbw": 1.5,    "coherent_gain": 0.5},
+    "Hamming":     {"enbw": 1.3628, "coherent_gain": 0.54},
+    "Blackman":    {"enbw": 1.7269, "coherent_gain": 0.42},
+}
+
+
+def apply_window(v, name):
+    """Devuelve la señal ventaneada y la ganancia coherente de la ventana."""
+    N = len(v)
+    if name == "Rectangular":
+        w = np.ones(N)
+    elif name == "Hann":
+        w = np.hanning(N)
+    elif name == "Hamming":
+        w = np.hamming(N)
+    elif name == "Blackman":
+        w = np.blackman(N)
+    else:
+        w = np.ones(N)
+
+    cg = np.mean(w)   # ganancia coherente real de la ventana generada
+    return v * w, cg
+
+
+# Escalas verticales del FFT
+FFT_Y_SCALES = ["Linear (Vrms)", "dBV", "dBm (50Ω)", "dBµV"]
+
+
+# -----------------------------
+# Configuración persistente FFT
+# -----------------------------
+# Defaults usados:
+#   - como base al crear una ventana FFT por primera vez (sin config guardada)
+#   - como destino del botón "Reset configuration" del usuario
+#
+# IMPORTANTE: aquí solo van las preferencias "estables" de display. Los
+# parámetros que dependen del archivo cargado (W, RBW, Start/Stop/Center/
+# Span) NO se persisten: se recalculan al abrir la ventana porque dependen
+# de fs y duración del trace. Persistirlos provocaría valores fuera de
+# rango al cambiar de archivo.
+FFT_DEFAULT_CONFIG = {
+    "window_name":     "Hann",
+    "y_scale":         "Linear (Vrms)",
+    "trace_mode":      "Live",
+    "avg_n":           8,
+    "show_harmonics":  False,
+    "n_harmonics":     5,
+    "cursor_enabled":  False,
+}
+
+
+def load_fft_config():
+    """Devuelve dict de config FFT del user config (key 'fft_config'),
+    completado con FFT_DEFAULT_CONFIG para claves ausentes."""
+    user = load_user_config().get("fft_config", {})
+    out = dict(FFT_DEFAULT_CONFIG)
+    if isinstance(user, dict):
+        # Filtrar solo claves conocidas para no propagar basura
+        for k in FFT_DEFAULT_CONFIG:
+            if k in user:
+                out[k] = user[k]
+    return out
+
+
+def save_fft_config(cfg):
+    """Guarda dict completo de config FFT bajo la key 'fft_config' del
+    user config. Filtra solo claves conocidas."""
+    clean = {k: cfg[k] for k in FFT_DEFAULT_CONFIG if k in cfg}
+    save_user_config({"fft_config": clean})
+
+
+def vrms_to_scale(vrms, scale):
+    """Convierte un array de Vrms a la escala pedida."""
+    # Evitar log(0)
+    eps = 1e-20
+    v = np.maximum(vrms, eps)
+
+    if scale == "Linear (Vrms)":
+        return vrms
+    elif scale == "dBV":
+        return 20.0 * np.log10(v)
+    elif scale == "dBm (50Ω)":
+        # P = V² / R ; dBm = 10·log10(P / 1mW)
+        p_mw = (v ** 2) / 50.0 * 1000.0
+        return 10.0 * np.log10(p_mw)
+    elif scale == "dBµV":
+        # 1 µV = 1e-6 V ; dBµV = 20·log10(V / 1µV)
+        return 20.0 * np.log10(v / 1e-6)
+    return vrms
+
+
+def scale_unit(scale):
+    """Devuelve la unidad que se muestra en el eje Y."""
+    if scale == "Linear (Vrms)":
+        return "Vrms"
+    if scale == "dBV":
+        return "dBV"
+    if scale == "dBm (50Ω)":
+        return "dBm"
+    if scale == "dBµV":
+        return "dBµV"
+    return ""
+
+
+
+def format_si(value, unit, sig_figs=6):
+    """Formatea un valor con prefijo SI. `sig_figs` controla las cifras
+    significativas (default 6 = comportamiento legacy). Para xticks/yticks
+    usamos sig_figs=3 que da etiquetas cortas estilo scope real:
+      "33.3 µs"  no  "33.3332 µs"
+      "1.5 ms"   no  "1.50000 ms"
+      "120 kHz"  no  "120000 Hz"
+    """
+    # Unidad adimensional: solo el número, sin sufijo.
+    if unit == "—" or unit == "":
+        if abs(value) < 1e-15:
+            return "0"
+        fmt = f"{{:.{sig_figs}g}}"
+        return fmt.format(value)
+
+    # Tratamiento de cero (ruido numérico)
+    if abs(value) < 1e-15:
+        return f"0 {unit}"
+
+    # Unidades sin prefijo SI (°C, °F, dB, %, PSI, RPM, lux, lm):
+    # mostrar con formato directo sin escalar a k/M/m/µ/etc.
+    if unit in _NO_SI_PREFIX_UNITS:
+        # % conserva el formato histórico con 2 decimales.
+        if unit == "%":
+            return f"{value:.2f} {unit}"
+        fmt = f"{{:.{sig_figs}g}}"
+        return f"{fmt.format(value)} {unit}"
+
+    prefixes = [
+        (1e9, "G"),
+        (1e6, "M"),
+        (1e3, "k"),
+        (1, ""),
+        (1e-3, "m"),
+        (1e-6, "µ"),
+        (1e-9, "n"),
+        (1e-12, "p"),
+    ]
+
+    for scale, prefix in prefixes:
+        if abs(value) >= scale:
+            scaled = value / scale
+            # Format con sig_figs cifras significativas
+            fmt = f"{{:.{sig_figs}g}}"
+            return f"{fmt.format(scaled)} {prefix}{unit}"
+
+    fmt = f"{{:.{sig_figs}g}}"
+    return f"{fmt.format(value)} {unit}"
+
+
+# Prefijos SI para parsear strings. IMPORTANTE: case sensitive.
+#   - m = mili (1e-3), M = mega (1e6)
+#   - u (ASCII) y µ = micro (1e-6)
+_SI_PARSE_PREFIXES = {
+    "T": 1e12,
+    "G": 1e9,
+    "M": 1e6,
+    "k": 1e3,
+    "":  1.0,
+    "m": 1e-3,
+    "u": 1e-6,
+    "µ": 1e-6,
+    "n": 1e-9,
+    "p": 1e-12,
+    "f": 1e-15,
+}
+
+
+def parse_si(text, unit=""):
+    """Convierte un string con prefijo SI a float.
+
+    Acepta: '240k', '240 k', '240 kHz', '1.5M', '20 us', '0.001', '-3.3', '.5m'
+    CASE SENSITIVE en prefijos (m = mili, M = mega).
+    La unidad final es opcional: si se pasa `unit`, se tolera al final.
+    Devuelve None si no se puede parsear.
+    """
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+
+    # Quitar la unidad al final si se proporcionó (p. ej. 'Hz', 's', 'V').
+    # Tolerante con mayúsculas/minúsculas para la unidad solo (no para el prefijo).
+    if unit:
+        u_lower = unit.lower()
+        if s.lower().endswith(u_lower):
+            s = s[: -len(unit)].rstrip()
+
+    # Separar número del posible prefijo. El número puede llevar signo,
+    # punto decimal y notación exponencial.
+    # Recorremos desde el final quitando caracteres hasta quedarnos con un número válido.
+    # Más simple: buscar el split entre dígitos/e/E/.,+/- y el resto.
+    import re
+    m = re.match(r"^\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*([a-zA-ZµT]?)\s*$", s)
+    if not m:
+        return None
+
+    num_str, prefix = m.group(1), m.group(2)
+    # El prefijo debe estar EXACTAMENTE en la tabla (case sensitive)
+    if prefix not in _SI_PARSE_PREFIXES:
+        return None
+
+    try:
+        value = float(num_str) * _SI_PARSE_PREFIXES[prefix]
+    except ValueError:
+        return None
+    return value
+
+
+# =============================
+# Inteligencia de carga de CSV
+# =============================
+
+def _try_float(s):
+    """Intenta convertir a float aceptando coma decimal europea. Devuelve None si no."""
+    if s is None:
+        return None
+    s = s.strip().strip('"').strip("'")
+    if not s:
+        return None
+    # Coma decimal → punto (solo si no hay ya punto, para no fastidiar miles)
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _detect_separator(lines, min_cols=2):
+    """Detecta el separador más probable (',', ';', '\\t') mirando una
+    muestra de líneas. Puntúa por:
+      - coherencia (frecuencia relativa de la moda de columnas)
+      - cantidad de filas que, al partirse, son 'mayormente numéricas'
+      - nº de columnas (pero menos que los dos primeros)
+    Esto resuelve el caso europeo (sep=';', decimales con ',')."""
+    candidates = [",", ";", "\t"]
+    best_sep = ","
+    best_score = -1
+
+    for sep in candidates:
+        col_counts = []
+        numeric_rows = 0
+        for line in lines:
+            if not line.strip():
+                continue
+            cells = line.split(sep)
+            col_counts.append(len(cells))
+            if len(cells) >= min_cols and _is_mostly_numeric_row(cells):
+                numeric_rows += 1
+        if not col_counts:
+            continue
+        from collections import Counter
+        mode_cols, mode_freq = Counter(col_counts).most_common(1)[0]
+        if mode_cols < min_cols:
+            continue
+        # coherencia: 0..1
+        coherence = mode_freq / len(col_counts)
+        # Score: priorizamos "filas realmente numéricas" y coherencia
+        score = numeric_rows * 10 + coherence * 5 + mode_cols * 0.5
+        if score > best_score:
+            best_score = score
+            best_sep = sep
+    return best_sep
+
+
+def _is_mostly_numeric_row(cells, min_ratio=0.8):
+    """Una fila es 'mayormente numérica' si al menos min_ratio de sus celdas
+    se parsean como float. Ignoramos celdas vacías."""
+    non_empty = [c for c in cells if c.strip()]
+    if len(non_empty) < 2:
+        return False
+    numeric = sum(1 for c in non_empty if _try_float(c) is not None)
+    return numeric / len(non_empty) >= min_ratio
+
+
+def _find_data_start(lines, sep):
+    """Devuelve el índice de la PRIMERA línea de datos numéricos.
+
+    Criterio robusto: buscamos al menos 3 líneas consecutivas "mayormente
+    numéricas" y tomamos la primera de esa racha. Así descartamos líneas
+    sueltas de metadata que contengan números (p.ej. 'Record Length,10000').
+    """
+    streak_start = None
+    streak_len = 0
+    REQUIRED = 3
+
+    for i, line in enumerate(lines):
+        cells = line.split(sep)
+        if _is_mostly_numeric_row(cells):
+            if streak_start is None:
+                streak_start = i
+            streak_len += 1
+            if streak_len >= REQUIRED:
+                return streak_start
+        else:
+            streak_start = None
+            streak_len = 0
+
+    # Si no hay racha de 3 pero hay alguna numérica, cogemos la primera
+    for i, line in enumerate(lines):
+        if _is_mostly_numeric_row(line.split(sep)):
+            return i
+    return -1  # no se encontró nada
+
+
+def _extract_metadata(header_lines, sep):
+    """Extrae pares clave→valor conocidos de la cabecera.
+    Soporta los formatos 'Key,value', 'Key:,value', 'Key:value'."""
+    meta = {}
+    interesting_keys = {
+        # Nombre limpio → lista de aliases conocidos
+        "x_increment": ["xincrement", "x increment", "sample interval",
+                        "increment", "horizontal increment", "time per sample"],
+        "x_start":     ["xstart", "x start", "horizontal start", "start",
+                        "trigger offset", "x zero", "xorigin"],
+        "sample_rate": ["sample rate", "sampling rate", "samplerate", "fs"],
+    }
+
+    for line in header_lines:
+        # Intento parsear con el separador detectado
+        parts = [p.strip().strip('"').strip("'") for p in line.split(sep)]
+        if len(parts) < 2:
+            # A veces la metadata viene como "Key: valor" con dos puntos
+            if ":" in line:
+                k, _, v = line.partition(":")
+                parts = [k.strip(), v.strip()]
+            else:
+                continue
+
+        key_raw = parts[0].lower().rstrip(":").strip()
+        # El valor puede estar en parts[1] o más adelante
+        val_raw = None
+        for p in parts[1:]:
+            if p:
+                val_raw = p
+                break
+        if val_raw is None:
+            continue
+
+        val = _try_float(val_raw)
+        if val is None:
+            continue
+
+        # Mapear a clave limpia
+        for clean, aliases in interesting_keys.items():
+            if any(a == key_raw or a in key_raw for a in aliases):
+                if clean not in meta:   # primera ocurrencia gana
+                    meta[clean] = val
+                break
+    return meta
+
+
+def _score_time_column(col):
+    """Evalúa qué tan bien una columna sirve como eje temporal.
+
+    Devuelve un dict {score: float 0..1, monotonic: bool, dt_median: float,
+    cv_robust: float, jumps: int, reason: str}. score alto = candidato fuerte.
+
+    Criterios (todos pesan):
+      - monotonía estricta creciente (must)
+      - dt mediana > 0 (must)
+      - coeficiente de variación ROBUSTO bajo: IQR(diffs)/median(diffs)
+        (resiste outliers puntuales mucho mejor que std/mean)
+      - número de saltos atípicos (diff > 5x mediana) → no descalifica si pocos
+    """
+    n = len(col)
+    if n < 3:
+        return {"score": 0.0, "monotonic": False, "dt_median": 0.0,
+                "cv_robust": float("inf"), "jumps": 0,
+                "reason": "too few rows"}
+    diffs = np.diff(col)
+    if np.any(diffs <= 0):
+        return {"score": 0.0, "monotonic": False, "dt_median": 0.0,
+                "cv_robust": float("inf"), "jumps": 0,
+                "reason": "not strictly monotonic"}
+
+    dt_median = float(np.median(diffs))
+    if dt_median <= 0:
+        return {"score": 0.0, "monotonic": True, "dt_median": dt_median,
+                "cv_robust": float("inf"), "jumps": 0,
+                "reason": "non-positive median dt"}
+
+    # CV robusto: usamos IQR (Q3-Q1) / mediana. IQR es resistente a outliers.
+    q1 = float(np.quantile(diffs, 0.25))
+    q3 = float(np.quantile(diffs, 0.75))
+    iqr = q3 - q1
+    cv_robust = iqr / dt_median if dt_median > 0 else float("inf")
+
+    # Cuántas diffs son anomalías gruesas (>5x la mediana)
+    jumps = int(np.sum(diffs > 5.0 * dt_median))
+
+    # Score: 1.0 si cv_robust ≈ 0 y sin jumps, decae conforme empeora.
+    # cv_robust=0 (perfectamente uniforme) → 1.0
+    # cv_robust=0.05 → ~0.95
+    # cv_robust=0.5 → ~0.5
+    # cv_robust=1.0 o más → bajo
+    score = 1.0 / (1.0 + 5.0 * cv_robust)
+    # Penalizar jumps: cada jump resta 0.05, hasta -0.5
+    score *= max(0.5, 1.0 - 0.05 * jumps)
+    score = max(0.0, min(1.0, score))
+
+    return {
+        "score":     score,
+        "monotonic": True,
+        "dt_median": dt_median,
+        "cv_robust": cv_robust,
+        "jumps":     jumps,
+        "reason":    f"cv_robust={cv_robust:.3f}, jumps={jumps}",
+    }
+
+
+def _read_csv_smart(filename):
+    """Carga un CSV ignorando cabeceras de metadata y devuelve un dict:
+        {
+          'time':            np.array  (None si no había columna temporal clara),
+          'columns':         lista de np.arrays (el resto de canales),
+          'col_names':       lista de strings con los nombres detectados,
+          'all_columns':     TODAS las columnas como arrays (incluida la que
+                              se eligió como tiempo, si la hubo). Útil para
+                              que un diálogo "elegir columna de tiempo" pueda
+                              re-mapear sin volver a parsear el fichero.
+          'all_col_names':   nombres de todas las columnas.
+          'time_col_index':  índice (en all_columns) de la columna usada como
+                              tiempo, o None si no se eligió ninguna.
+          'time_confidence': 'high' | 'medium' | 'low' | 'none'.
+                              'high'   → eje temporal totalmente fiable.
+                              'medium' → mejor candidato pero con dudas.
+                              'low'    → hay una columna que parece tiempo
+                                          pero la heurística no está segura.
+                              'none'   → ninguna columna parece tiempo.
+          'time_scores':     lista de dicts con el score de cada columna
+                              (en orden de all_columns).
+          'metadata':        dict con XStart, XIncrement, etc. si los había.
+          'n_metadata_lines': cuántas líneas se saltaron.
+          'separator':       el separador detectado.
+          'brand':           marca de scope detectada, si la hay.
+        }
+    Lanza ValueError con mensaje descriptivo si no consigue interpretar el fichero.
+    """
+    # Leer el fichero completo como texto (los CSV de scope no son enormes)
+    with open(filename, "r", encoding="utf-8", errors="replace") as f:
+        raw_lines = f.readlines()
+
+    if not raw_lines:
+        raise ValueError("El fichero está vacío.")
+
+    # Quitar BOM si aparece en la primera línea
+    if raw_lines[0].startswith("\ufeff"):
+        raw_lines[0] = raw_lines[0].lstrip("\ufeff")
+
+    # Limpiamos saltos de línea
+    lines = [l.rstrip("\r\n") for l in raw_lines]
+
+    # 1) Detectar separador usando las primeras 60 líneas
+    sample = lines[:60]
+    sep = _detect_separator(sample)
+
+    # 2) Localizar inicio de datos
+    data_start = _find_data_start(lines, sep)
+    if data_start < 0:
+        raise ValueError("No se han encontrado datos numéricos en el fichero.")
+
+    header_lines = lines[:data_start]
+    data_lines = lines[data_start:]
+
+    # 3) Intentar leer la línea inmediatamente anterior como nombres de columna
+    col_names = None
+    if data_start > 0:
+        last_header = header_lines[-1].split(sep)
+        # Si las celdas parecen nombres (texto + pocas numéricas), usar
+        non_num = sum(1 for c in last_header if _try_float(c) is None and c.strip())
+        if non_num >= max(1, len(last_header) // 2):
+            col_names = [c.strip().strip('"').strip("'") for c in last_header]
+
+    # 4) Extraer metadata (Start, Increment, etc.)
+    metadata = _extract_metadata(header_lines, sep)
+
+    # 5) Parsear los datos con numpy. Primero en memoria para tolerar comas decimales.
+    n_rows = len(data_lines)
+    n_cols = len(data_lines[0].split(sep))
+
+    # Descartar columnas vacías al final (Tek y otros meten ",," al final)
+    parsed = np.full((n_rows, n_cols), np.nan, dtype=float)
+    for i, line in enumerate(data_lines):
+        cells = line.split(sep)
+        for j, c in enumerate(cells[:n_cols]):
+            val = _try_float(c)
+            if val is not None:
+                parsed[i, j] = val
+
+    # Quitar columnas que son todo NaN (celdas vacías estructurales)
+    col_mask = ~np.all(np.isnan(parsed), axis=0)
+    parsed = parsed[:, col_mask]
+    if col_names:
+        col_names = [col_names[j] for j in range(len(col_names))
+                     if j < len(col_mask) and col_mask[j]]
+
+    # Filas enteramente NaN fuera
+    row_mask = ~np.all(np.isnan(parsed), axis=1)
+    parsed = parsed[row_mask]
+
+    if parsed.shape[0] < 2 or parsed.shape[1] < 1:
+        raise ValueError("Datos insuficientes tras el parseo.")
+
+    # Garantizar nombres
+    if not col_names or len(col_names) != parsed.shape[1]:
+        col_names = [f"col{j}" for j in range(parsed.shape[1])]
+
+    all_columns = [parsed[:, j] for j in range(parsed.shape[1])]
+    all_col_names = list(col_names)
+
+    # 6) Scorear TODAS las columnas como candidatas a tiempo. La columna 0
+    #    NO tiene prioridad por posición — solo por su score.
+    scores = [_score_time_column(c) for c in all_columns]
+    # Mejor candidato
+    best_j = int(np.argmax([s["score"] for s in scores])) if scores else -1
+    best_score = scores[best_j]["score"] if best_j >= 0 else 0.0
+
+    # 7) Decidir confidence con umbrales explícitos:
+    #    high   ≥ 0.85   → no preguntar al usuario
+    #    medium 0.55–0.85 → preguntar al usuario (probable pero verificar)
+    #    low    0.25–0.55 → preguntar obligatoriamente
+    #    none   < 0.25    → ofrecer reconstruir vía metadata o pedir manual
+    if best_score >= 0.85 and scores[best_j]["monotonic"]:
+        confidence = "high"
+    elif best_score >= 0.55:
+        confidence = "medium"
+    elif best_score >= 0.25:
+        confidence = "low"
+    else:
+        confidence = "none"
+
+    time = None
+    data_cols = []
+    data_names = []
+    time_col_index = None
+
+    if confidence == "high":
+        time = all_columns[best_j]
+        time_col_index = best_j
+        for j in range(parsed.shape[1]):
+            if j == best_j:
+                continue
+            data_cols.append(all_columns[j])
+            data_names.append(all_col_names[j])
+    elif confidence == "none":
+        # No hay candidato fiable. Probar metadata XStart/XIncrement.
+        xinc = metadata.get("x_increment")
+        xstart = metadata.get("x_start", 0.0)
+        if xinc is not None and xinc > 0:
+            time = xstart + np.arange(parsed.shape[0]) * xinc
+            for j in range(parsed.shape[1]):
+                # Saltamos la primera si parece índice 0,1,2,...
+                if j == 0 and np.allclose(parsed[:, j],
+                                          np.arange(parsed.shape[0]),
+                                          atol=0.5):
+                    continue
+                data_cols.append(all_columns[j])
+                data_names.append(all_col_names[j])
+        else:
+            # Sin info temporal y sin candidato: dejamos time=None y devolvemos
+            # todas las columnas como datos. El caller decidirá si abrir el
+            # diálogo de selección o pedir paso de muestreo.
+            for j in range(parsed.shape[1]):
+                data_cols.append(all_columns[j])
+                data_names.append(all_col_names[j])
+    else:
+        # medium / low: PROVISIONALMENTE asignamos el mejor candidato y
+        # marcamos para que el caller pregunte al usuario.
+        time = all_columns[best_j]
+        time_col_index = best_j
+        for j in range(parsed.shape[1]):
+            if j == best_j:
+                continue
+            data_cols.append(all_columns[j])
+            data_names.append(all_col_names[j])
+
+    # Detectar marca del osciloscopio buscando pistas en la cabecera
+    brand = _detect_scope_brand(header_lines)
+
+    return {
+        "time":            time,
+        "columns":         data_cols,
+        "col_names":       data_names,
+        "all_columns":     all_columns,
+        "all_col_names":   all_col_names,
+        "time_col_index":  time_col_index,
+        "time_confidence": confidence,
+        "time_scores":     scores,
+        "metadata":        metadata,
+        "n_metadata_lines": data_start,
+        "separator":       sep,
+        "brand":           brand,
+    }
+
+
+# Marcas de osciloscopio y patrones para identificarlas en la cabecera.
+# Case-insensitive. El orden importa porque buscamos el primer match.
+_SCOPE_BRAND_PATTERNS = [
+    ("Tektronix",       ["tektronix", "tek ", "mso", "tds", "mdo", "dpo"]),
+    ("Keysight",        ["keysight", "agilent", "infiniivision", "infiniium"]),
+    ("Rohde & Schwarz", ["rohde", "schwarz", "r&s", "rtb", "rtm", "rto", "rte"]),
+    ("Rigol",           ["rigol", "ds1", "ds2", "ds4", "mso1", "mso2"]),
+    ("Siglent",         ["siglent", "sds", "sdg"]),
+    ("Hantek",          ["hantek"]),
+    ("LeCroy",          ["lecroy", "teledyne"]),
+    ("Pico",            ["picoscope", "pico "]),
+    ("OWON",            ["owon"]),
+]
+
+
+def _detect_scope_brand(header_lines):
+    """Escanea las primeras líneas de cabecera buscando pistas de marca.
+    Devuelve el nombre comercial ("Tektronix", "Rohde & Schwarz"…) o None."""
+    if not header_lines:
+        return None
+    # Unir las primeras líneas para hacer una búsqueda plana
+    blob = " ".join(header_lines[:30]).lower()
+    for brand, patterns in _SCOPE_BRAND_PATTERNS:
+        for p in patterns:
+            if p in blob:
+                return brand
+    return None
+
+
+# =============================
+# MATH expression parser + evaluator
+# =============================
+# Gramática mínima:
+#   expr   := term (('+' | '-') term)*
+#   term   := unary (('*' | '/') unary)*
+#   unary  := '-' unary | primary
+#   primary:= NUMBER | REF | FUNC '(' expr (',' expr)? ')' | '(' expr ')'
+#   REF    := CH<digits> | M<digits>    (1-based)
+#   FUNC   := INT | DIFF | ABS | POW | SQRT | MIN | MAX
+#
+# AST nodes: tuples.
+#   ('num', value)
+#   ('ref', kind, idx)     kind in ('CH','M'), idx 0-based
+#   ('bin', op, l, r)
+#   ('neg', x)
+#   ('fn1', name, x)
+#   ('fn2', name, a, b)
+
+import re as _re_math
+
+_MATH_TOKEN_RE = _re_math.compile(
+    r"\s*(?:(?P<num>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"
+    r"|(?P<ref>(?:CH|M)\d+)"
+    r"|(?P<id>[A-Z]+)"
+    r"|(?P<op>[+\-*/(),]))"
+)
+
+_MATH_FN1 = {"INT", "DIFF", "ABS", "POW", "SQRT"}
+_MATH_FN2 = {"MIN", "MAX"}
+
+
+def math_tokenize(expr):
+    """Tokeniza la expresión. Lanza ValueError con mensaje útil."""
+    s = expr.upper().replace(" ", "")
+    tokens = []
+    i = 0
+    src = expr.upper()
+    while i < len(src):
+        if src[i].isspace():
+            i += 1
+            continue
+        m = _MATH_TOKEN_RE.match(src, i)
+        if not m or m.start() != i:
+            raise ValueError(f"Unexpected character at position {i}: '{src[i]}'")
+        if m.group("num"):
+            tokens.append(("num", float(m.group("num"))))
+        elif m.group("ref"):
+            r = m.group("ref")
+            kind = "CH" if r.startswith("CH") else "M"
+            idx = int(r[len(kind):]) - 1
+            if idx < 0:
+                raise ValueError(f"Invalid reference: {r}")
+            tokens.append(("ref", kind, idx))
+        elif m.group("id"):
+            name = m.group("id")
+            if name in _MATH_FN1 or name in _MATH_FN2:
+                tokens.append(("fn", name))
+            else:
+                raise ValueError(f"Unknown identifier: {name}")
+        elif m.group("op"):
+            tokens.append(("op", m.group("op")))
+        i = m.end()
+    return tokens
+
+
+class _MathParser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self):
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def eat(self):
+        t = self.peek()
+        self.pos += 1
+        return t
+
+    def expect_op(self, op):
+        t = self.peek()
+        if not t or t[0] != "op" or t[1] != op:
+            raise ValueError(f"Expected '{op}'")
+        self.eat()
+
+    def parse(self):
+        node = self.parse_expr()
+        if self.peek() is not None:
+            raise ValueError("Unexpected trailing tokens")
+        return node
+
+    def parse_expr(self):
+        node = self.parse_term()
+        while True:
+            t = self.peek()
+            if t and t[0] == "op" and t[1] in ("+", "-"):
+                self.eat()
+                r = self.parse_term()
+                node = ("bin", t[1], node, r)
+            else:
+                break
+        return node
+
+    def parse_term(self):
+        node = self.parse_unary()
+        while True:
+            t = self.peek()
+            if t and t[0] == "op" and t[1] in ("*", "/"):
+                self.eat()
+                r = self.parse_unary()
+                node = ("bin", t[1], node, r)
+            else:
+                break
+        return node
+
+    def parse_unary(self):
+        t = self.peek()
+        if t and t[0] == "op" and t[1] == "-":
+            self.eat()
+            return ("neg", self.parse_unary())
+        return self.parse_primary()
+
+    def parse_primary(self):
+        t = self.peek()
+        if t is None:
+            raise ValueError("Unexpected end of expression")
+        if t[0] == "num":
+            self.eat()
+            return ("num", t[1])
+        if t[0] == "ref":
+            self.eat()
+            return ("ref", t[1], t[2])
+        if t[0] == "fn":
+            self.eat()
+            fname = t[1]
+            self.expect_op("(")
+            a = self.parse_expr()
+            if fname in _MATH_FN2:
+                self.expect_op(",")
+                b = self.parse_expr()
+                self.expect_op(")")
+                return ("fn2", fname, a, b)
+            else:
+                self.expect_op(")")
+                return ("fn1", fname, a)
+        if t[0] == "op" and t[1] == "(":
+            self.eat()
+            node = self.parse_expr()
+            self.expect_op(")")
+            return node
+        raise ValueError(f"Unexpected token: {t}")
+
+
+def math_parse(expr):
+    """Parsea y devuelve AST. Lanza ValueError si inválida."""
+    if not expr or not expr.strip():
+        raise ValueError("Empty expression")
+    tokens = math_tokenize(expr)
+    return _MathParser(tokens).parse()
+
+
+def math_deps(ast):
+    """Devuelve (ch_indices_set, m_indices_set) del AST."""
+    chs = set()
+    ms = set()
+
+    def walk(n):
+        tag = n[0]
+        if tag == "num":
+            return
+        if tag == "ref":
+            if n[1] == "CH":
+                chs.add(n[2])
+            else:
+                ms.add(n[2])
+            return
+        if tag == "neg":
+            walk(n[1]); return
+        if tag == "bin":
+            walk(n[2]); walk(n[3]); return
+        if tag == "fn1":
+            walk(n[2]); return
+        if tag == "fn2":
+            walk(n[2]); walk(n[3]); return
+
+    walk(ast)
+    return chs, ms
+
+
+def math_eval(ast, time, ch_arrays, m_arrays):
+    """Evalúa el AST. ch_arrays: dict idx -> np.ndarray. m_arrays: idx -> np.ndarray.
+    time: np.ndarray común. Devuelve np.ndarray del mismo tamaño que time."""
+    def ev(n):
+        tag = n[0]
+        if tag == "num":
+            return np.full_like(time, n[1], dtype=float)
+        if tag == "ref":
+            src = ch_arrays if n[1] == "CH" else m_arrays
+            arr = src.get(n[2])
+            if arr is None:
+                raise ValueError(f"Missing data for {n[1]}{n[2]+1}")
+            return arr
+        if tag == "neg":
+            return -ev(n[1])
+        if tag == "bin":
+            a = ev(n[2]); b = ev(n[3])
+            if n[1] == "+": return a + b
+            if n[1] == "-": return a - b
+            if n[1] == "*": return a * b
+            if n[1] == "/":
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    out = np.where(b != 0, a / b, 0.0)
+                return out
+        if tag == "fn1":
+            x = ev(n[2])
+            fn = n[1]
+            if fn == "ABS":  return np.abs(x)
+            if fn == "POW":  return x * x
+            if fn == "SQRT":
+                with np.errstate(invalid="ignore"):
+                    return np.sqrt(np.maximum(x, 0.0))
+            if fn == "INT":
+                # integral acumulada (trapezoidal)
+                return np.concatenate(([0.0], np.cumsum(0.5 * (x[1:] + x[:-1]) * np.diff(time))))
+            if fn == "DIFF":
+                # diferencia centrada, bordes con forward/backward
+                dt = np.gradient(time)
+                return np.gradient(x, time)
+        if tag == "fn2":
+            a = ev(n[2]); b = ev(n[3])
+            if n[1] == "MIN": return np.minimum(a, b)
+            if n[1] == "MAX": return np.maximum(a, b)
+        raise ValueError(f"Bad node: {n}")
+    return ev(ast)
+
+
+# =====================================================
+# Tooltip widget reutilizable
+# =====================================================
+class Tooltip:
+    """Tooltip ligero para widgets Tk.
+
+    Uso:
+        Tooltip(btn, "Texto del tooltip")
+        Tooltip(spinbox, "Línea 1\\nLínea 2", delay_ms=400)
+
+    Comportamiento:
+    - Aparece tras `delay_ms` desde el <Enter>.
+    - Desaparece al <Leave>, <ButtonPress>, o destruir el widget.
+    - Se posiciona cerca del cursor; si se saldría de la pantalla por la
+      derecha o por abajo, se reajusta.
+    - Lee COLOR_BG_ALT/COLOR_TEXT/COLOR_BORDER del módulo en el momento de
+      mostrarse, no del constructor: así respeta el tema activo aunque se
+      cambie entre uno y otro mientras la app está corriendo.
+    - Soporta texto dinámico mediante `set_text(...)` o pasando un callable
+      al constructor (se llama justo antes de mostrar).
+
+    Decisión: usar Toplevel sin decoración en vez de Canvas/Label dentro del
+    widget. Es más limpio, soporta wrap automático con `wraplength`, y se
+    posiciona libremente sobre la ventana.
+    """
+
+    # Mantenemos un set global de tooltips activos para poder ocultarlos
+    # todos a la vez si fuera necesario (debug, abrir modal, etc.).
+    _ALL = set()
+
+    def __init__(self, widget, text, delay_ms=500, wraplength=320):
+        self.widget = widget
+        self._text = text                  # str o callable que devuelve str
+        self.delay_ms = delay_ms
+        self.wraplength = wraplength
+        self._tip = None                   # Toplevel cuando está visible
+        self._after_id = None              # id del after pendiente
+        widget.bind("<Enter>", self._on_enter, add="+")
+        widget.bind("<Leave>", self._on_leave, add="+")
+        widget.bind("<ButtonPress>", self._on_leave, add="+")
+        widget.bind("<Destroy>", self._on_destroy, add="+")
+        Tooltip._ALL.add(self)
+
+    # Permite cambiar el texto en runtime (p.ej. tooltip dinámico de "Cursor: ON/OFF")
+    def set_text(self, text):
+        self._text = text
+        if self._tip is not None:
+            # Actualizar in-place si está visible
+            try:
+                self._label.config(text=self._resolve_text())
+            except Exception:
+                pass
+
+    def _resolve_text(self):
+        if callable(self._text):
+            try:
+                return str(self._text())
+            except Exception:
+                return ""
+        return str(self._text)
+
+    def _on_enter(self, _e):
+        self._cancel_pending()
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _on_leave(self, _e):
+        self._cancel_pending()
+        self._hide()
+
+    def _on_destroy(self, _e):
+        self._cancel_pending()
+        self._hide()
+        Tooltip._ALL.discard(self)
+
+    def _cancel_pending(self):
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        text = self._resolve_text()
+        if not text:
+            return
+        if self._tip is not None:
+            return
+
+        # Crear toplevel
+        try:
+            tip = tk.Toplevel(self.widget)
+        except Exception:
+            return
+        tip.wm_overrideredirect(True)
+        # En algunos WMs hace falta forzar topmost para que aparezca encima
+        # de los Toplevels modales (grab_set).
+        try:
+            tip.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+
+        # Colocar fuera de pantalla mientras se mide
+        tip.wm_geometry("+0+0")
+        tip.configure(bg=COLOR_BORDER)  # actúa como borde
+
+        lbl = tk.Label(
+            tip, text=text,
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            font=("Segoe UI", 9),
+            justify="left",
+            padx=8, pady=4,
+            wraplength=self.wraplength,
+        )
+        lbl.pack(padx=1, pady=1)   # 1 px gap → borde fino
+
+        # Posicionar: cerca del cursor, ajustando si se sale del escritorio
+        # virtual (la unión de todos los monitores). winfo_screenwidth/height
+        # devuelve SIEMPRE la pantalla primaria, así que clampar contra eso
+        # empuja el tooltip al monitor primario cuando el cursor está en uno
+        # secundario. Usamos winfo_vrootx/y/width/height (X virtual root) que
+        # cubre el escritorio completo en setups multimonitor.
+        try:
+            px = self.widget.winfo_pointerx()
+            py = self.widget.winfo_pointery()
+            x = px + 14
+            y = py + 18
+            tip.update_idletasks()
+            w = tip.winfo_reqwidth()
+            h = tip.winfo_reqheight()
+            # Escritorio virtual (todos los monitores)
+            vrx = self.widget.winfo_vrootx()
+            vry = self.widget.winfo_vrooty()
+            vrw = self.widget.winfo_vrootwidth()
+            vrh = self.widget.winfo_vrootheight()
+            right_edge  = vrx + vrw
+            bottom_edge = vry + vrh
+            if x + w > right_edge - 4:
+                x = right_edge - w - 4
+            if y + h > bottom_edge - 4:
+                # Subir el tooltip por encima del cursor
+                y = py - h - 6
+            # No dejar el tooltip fuera del escritorio virtual por la izquierda
+            # o por arriba (puede pasar con monitores con offsets negativos).
+            if x < vrx + 4:
+                x = vrx + 4
+            if y < vry + 4:
+                y = vry + 4
+            tip.wm_geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+        self._tip = tip
+        self._label = lbl
+
+    def _hide(self):
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+            self._label = None
+
+
+class OscilloscopeApp:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Oscilloscope CSV Viewer")
+
+        # Datos
+        self.time = None
+        self.voltage = None
+        self.t_total = 0.0
+        # time_origin: offset original del primer punto del CSV. Internamente
+        # self.time SIEMPRE empieza en 0 (simplifica todos los algoritmos),
+        # pero los osciloscopios suelen guardar capturas con un eje temporal
+        # que incluye pre-trigger (t < 0). Para no perder esa info, guardamos
+        # el offset original y lo SUMAMOS solo en las etiquetas visibles
+        # (eje X, cursores, etc.). Así "0 s" interno = "time_origin" real.
+        self.time_origin = 0.0
+
+        # Modo de visualización del eje temporal:
+        #   True  = "Absolute": muestra tiempos REALES del CSV
+        #           (incluye pre-trigger negativo si lo había)
+        #   False = "Relative to start": el primer punto del CSV es t=0
+        #           (comportamiento legacy de la app)
+        # Se persiste en config.json. El valor real se aplica al renderizar
+        # (ver _t_display_origin()). Inicializamos con el config persistido.
+        _cfg_time_abs = load_user_config().get("time_show_absolute", True)
+        self.time_show_absolute = tk.BooleanVar(value=bool(_cfg_time_abs))
+        self.current_filename = None   # solo el nombre base, sin path
+        self.current_filepath = None   # path completo (para sesiones)
+        self.current_brand = None      # marca detectada del osciloscopio
+        # Cache del CSV embebido tras cargar un .ocv. Necesario porque al
+        # cargar sesión current_filepath queda en None (el temp se borra),
+        # y un re-save sin este cache produciría csv_content vacío.
+        # Se invalida al cargar un CSV nuevo desde disco.
+        self._embedded_csv_content = None
+
+        # -----------------------------
+        # Sesión: estado Untitled + dirty (v1.25)
+        # -----------------------------
+        # session_path: path del .ocv activo (None = Untitled, aún no guardado).
+        # session_dirty: True = hay cambios no guardados desde el último save/load.
+        # _suppress_dirty: cuando True, _mark_dirty() es no-op. Se usa al cargar
+        #   una sesión para evitar que los traces de tk.Vars que escribimos al
+        #   restaurar marquen dirty de forma espuria.
+        self.session_path = None
+        self.session_dirty = False
+        self._suppress_dirty = False
+
+        # -----------------------------
+        # Multi-canal
+        # -----------------------------
+        # Lista de dicts, uno por canal cargado:
+        #   {
+        #     "_uid":    int (estable durante la vida del canal),
+        #     "name":    str,
+        #     "color":   "#hex",
+        #     "voltage": np.array,    # misma longitud que self.time
+        #     "visible": tk.BooleanVar,
+        #     "v_div":   float,       # individual por canal
+        #     "v_offset": float,      # individual por canal
+        #     "unit":    str,         # v1.29 — etiqueta de unidad (default "V").
+        #                             # Solo afecta a display (V/div label, ticks,
+        #                             # cursores, medidas). NO afecta a MATH.
+        #   }
+        self.channels = []
+        self._next_channel_uid = 1   # contador monotónicamente creciente
+        self.active_channel_idx = 0   # índice del canal "activo" (el que
+                                       # controla V/div, V offset, cursores,
+                                       # medidas, FFT…)
+
+        # Variables de control
+        self.t_div = tk.DoubleVar(value=1e-3)
+        self.v_div = tk.DoubleVar(value=1.0)
+
+        # Variables de display (formato SI legible) para los spinbox
+        self.t_div_display = tk.StringVar(value=format_si(self.t_div.get(), "s"))
+        self.v_div_display = tk.StringVar(value=format_si(self.v_div.get(), "V"))
+
+        # Modo Fine: cuando está activo, V/div se mueve en pasos de 0.1 V
+        # (en vez de saltar a los valores canónicos de V_DIV_VALUES)
+        self.fine_mode = tk.BooleanVar(value=False)
+
+        # Guarda para evitar que el trace del StringVar se dispare
+        # cuando el propio código escribe en el display
+        self._updating_display = False
+        self.t_offset = tk.DoubleVar(value=0.0)
+        self.v_offset = tk.DoubleVar(value=0.0)   # ⬅️ NUEVO: offset vertical (en voltios)
+        
+        # -----------------------------
+        # Cursores
+        # -----------------------------
+        self.cursors_enabled = tk.BooleanVar(value=False)
+        self.cursor_mode = tk.StringVar(value="Vertical")
+
+        # Cuando el cursor vertical está activo, por defecto solo se pinta
+        # la cruz (marker X + valor) en el canal activo. Con este flag
+        # activado, se pinta también en TODOS los canales visibles, lo
+        # que permite leer la tensión de cada canal en el mismo instante
+        # temporal. Persistido en user_config.
+        _cur_show_all = bool(
+            load_user_config().get("cursor_show_all_channels", False))
+        self.cursor_show_all = tk.BooleanVar(value=_cur_show_all)
+        
+        
+
+        # -----------------------------
+        # Cursores (estado)
+        # -----------------------------
+        self.cursor_x = [0.0, 0.0]   # posiciones iniciales (en segundos)
+        self.active_cursor = None     # índice del cursor activo (0 o 1)
+        
+        
+        
+        # -----------------------------
+        # Cursores horizontales (estado)
+        # -----------------------------
+        self.cursor_y = [0.0, 0.0]    # niveles de voltaje
+        self.active_cursor_y = None  # cursor horizontal activo
+
+
+        self.dragging = False
+        self.drag_start_x = None
+        self.drag_start_y = None                # ⬅️ NUEVO
+        self.drag_start_offset = 0.0
+        self.drag_start_v_offset = 0.0          # ⬅️ NUEVO
+        
+        
+        # -----------------------------
+        # Measurements
+        # -----------------------------
+        # Lista de dicts: [{"channel_idx": int, "name": str}], máx 10
+        self.active_measurements = []
+        self.MAX_MEASUREMENTS = 16
+
+        # -----------------------------
+        # MATH channels
+        # -----------------------------
+        # Máx 4 MATH. Se guardan como dicts dentro de self.channels con
+        # un campo extra "math" = {"expr", "ast", "deps_ch", "deps_m"}.
+        # self.math_order mantiene el orden de creación (determina M1..M4).
+        self.MAX_MATH = 8
+        self.math_order = []   # lista de índices en self.channels, en orden M1..M4
+
+        # -----------------------------
+        # Grid view (tema del plot)
+        # -----------------------------
+        # Inicialización en dos fases:
+        #   1. Defaults: colores PLOT_* del tema GLOBAL activo. Si el config
+        #      persistió "Light", al arrancar el plot ya sale claro sin
+        #      necesidad de re-aplicar el tema manualmente.
+        #   2. Sobreescritura desde config.json si el usuario personalizó
+        #      colores en Appearance → Advanced. Persistir en config evita
+        #      que al cerrar y reabrir la app se pierdan esos ajustes.
+        _theme_plot = THEMES.get(CURRENT_THEME_NAME, THEMES["Dark"])
+        self.grid_theme = {
+            "bg":            _theme_plot["PLOT_BG"],
+            "grid_color":    _theme_plot["PLOT_GRID"],
+            "text_color":    _theme_plot["PLOT_TEXT"],
+            "time_label_bg": _theme_plot["PLOT_TIME_LBL_BG"],
+        }
+        # Cargar overrides del usuario si existen en config.json
+        try:
+            _cfg_grid = load_user_config().get("grid_theme", {})
+            if isinstance(_cfg_grid, dict):
+                for k in ("bg", "grid_color", "text_color", "time_label_bg"):
+                    v = _cfg_grid.get(k)
+                    if isinstance(v, str) and v.startswith("#"):
+                        self.grid_theme[k] = v
+        except Exception:
+            pass
+
+        # -----------------------------
+        # Phosphor intensity grading (v1.27)
+        # -----------------------------
+        # Estilo visual que emula el brillo no uniforme del fósforo de un
+        # CRT analógico: en zonas de la traza con |dV/dt| alto el "haz"
+        # pasa rápido y deposita poca energía → segmento más tenue. En
+        # zonas planas el haz se queda más tiempo → segmento más brillante.
+        #
+        # Para CSV estático esto se traduce en alpha por segmento:
+        #   alpha = lerp(alpha_min, 1.0, 1 - normalized(|dV/dt|))
+        # donde alpha_min = 1 - phosphor_intensity. A intensity=0 todos los
+        # segmentos quedan alpha=1 (efecto desactivado). A intensity=1 los
+        # tramos rápidos llegan a alpha_min=0 (casi invisibles).
+        #
+        # Ambos parámetros son preferencia visual del usuario, no parte
+        # del estado de sesión: NO marcan dirty y SÍ persisten en config.json
+        # como cualquier otro setting global (theme, grid_theme, etc.).
+        _cfg = load_user_config()
+        self.phosphor_enabled = tk.BooleanVar(
+            value=bool(_cfg.get("phosphor_enabled", False)))
+        self.phosphor_intensity = tk.DoubleVar(
+            value=float(_cfg.get("phosphor_intensity", 0.6)))
+
+        # -----------------------------
+        # Annotations
+        # -----------------------------
+        # Lista de dicts. Coords en DATOS (tiempo, voltios) para que se muevan
+        # con pan/zoom. Tipos: "stroke" (lista de puntos), "text" (pos + content).
+        self.annotations = []
+        self.annotation_mode = None      # None | "draw" | "text" | "erase"
+        self.annotation_color = "#ffff00"
+        self.annotation_width = 2
+        self._current_stroke = None      # stroke en construcción
+        self._annotation_toolbar = None  # Frame flotante
+
+        # ---- Undo/redo de anotaciones ----
+        # Cada entrada del stack es un dict que describe una acción reversible:
+        #   {"kind": "add",    "items": [(index, annotation_dict), ...]}
+        #     -> undo: borrar esos índices. redo: re-insertarlos.
+        #   {"kind": "remove", "items": [(index, annotation_dict), ...]}
+        #     -> undo: re-insertarlos en sus índices. redo: borrarlos.
+        # Los items van en orden ASCENDENTE de índice. Para el remove con
+        # múltiples elementos, la inserción undo debe hacerse en orden
+        # ascendente para que los índices coincidan.
+        # Stack acotado para no crecer indefinidamente.
+        self._undo_stack = []
+        self._redo_stack = []
+        self.UNDO_STACK_LIMIT = 100
+
+        # -----------------------------
+        # Trigger
+        # -----------------------------
+        # Config viva: se recalcula al cambiar parámetros
+        self.trigger_config = {
+            "enabled":   False,
+            "source":    0,          # ch_idx
+            "type":      "Edge",     # "Edge" | "Width"
+            "slope":     "Rising",   # "Rising" | "Falling"
+            "level":     0.0,
+            "polarity":  "Positive", # para Width
+            "condition": "Width >",  # Width >, <, =, ≠, Inside, Outside
+            "width1":    1e-3,
+            "width2":    2e-3,
+            "show_markers": True,
+        }
+        self.trigger_events = []     # lista de dicts: {"t_trigger", "t_start", "t_end" (Width)}
+        self.trigger_current_idx = -1
+        self._trigger_window = None
+
+        # -----------------------------
+        # XY mode
+        # -----------------------------
+        self.xy_config = {
+            "enabled":  False,
+            "x_idx":    0,       # canal X
+            "y_idx":    1,       # canal Y
+            "style":    "Line",  # "Line" | "Dots" | "Line + Dots"
+            "window":   "Visible range",  # "Visible range" | "Full capture"
+        }
+        self._xy_window = None
+
+        # -----------------------------
+        # Render mode: Detail vs Fast
+        # -----------------------------
+        # "Detail" → sin decimation, pinta todos los puntos del rango visible.
+        #            Mejor fidelidad visual, útil cuando la señal es corta o
+        #            cuando quieres examinar detalles finos sin artefactos.
+        # "Fast"   → decimation min/max activa, salta el aliasing vertical
+        #            a cambio de mucha más fluidez con muchos puntos.
+        # El botón de la topbar alterna entre los dos.
+        self.render_mode = tk.StringVar(value="Detail")
+
+        # -----------------------------
+        # Throttle de redraws
+        # -----------------------------
+        # Durante pan/drag el ratón dispara eventos mucho más rápido
+        # de lo que matplotlib puede redibujar. En vez de hacer
+        # update_plot() por cada evento, planificamos uno con after()
+        # y coalescemos los eventos intermedios.
+        self._redraw_pending = False
+        # 16 ms ~ 60 FPS objetivo. Si tu PC va justo sube a 25-33 ms.
+        self._redraw_interval_ms = 16
+
+        # Layout (debe ir DESPUÉS de inicializar estado que usan los builders)
+        self.build_layout()
+
+        # Atajos globales: sesiones y carga de CSV
+        # Bindeamos en la root para que funcionen independientemente del
+        # widget con foco (siempre que la app tenga el foco del SO).
+        # Ctrl+S        → Save (sin diálogo si ya hay path; Save As si Untitled)
+        # Ctrl+Shift+S  → Save As... (siempre pregunta path)
+        # En tkinter, <Control-S> con S mayúscula = Ctrl+Shift+s.
+        self.root.bind_all("<Control-s>", lambda e: self.save_session())
+        self.root.bind_all("<Control-S>", lambda e: self.save_session_as())
+        self.root.bind_all("<Control-o>", lambda e: self.load_session())
+        self.root.bind_all("<Control-O>", lambda e: self.load_session())
+
+        # Undo/redo de anotaciones (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z).
+        # Convención: Ctrl+Z deshace, Ctrl+Y (Windows/Linux) y Ctrl+Shift+Z
+        # (Mac/varios) rehacen. Las versiones con mayúscula cubren el caso
+        # de tener Caps Lock activado.
+        self.root.bind_all("<Control-z>", lambda e: self._undo_annotation_action())
+        self.root.bind_all("<Control-Z>", lambda e: self._undo_annotation_action())
+        self.root.bind_all("<Control-y>", lambda e: self._redo_annotation_action())
+        self.root.bind_all("<Control-Y>", lambda e: self._redo_annotation_action())
+        self.root.bind_all("<Control-Shift-Z>", lambda e: self._redo_annotation_action())
+        self.root.bind_all("<Control-Shift-z>", lambda e: self._redo_annotation_action())
+
+        # Atajos numéricos 1-9 → seleccionan canal activo por índice.
+        # bind_all dispara con cualquier foco, así que el handler filtra
+        # widgets de edición (Entry/Spinbox/Text) para no robar teclas
+        # mientras el usuario escribe nombres, V/div, expresiones math, etc.
+        for _n in range(1, 10):
+            self.root.bind_all(
+                f"<Key-{_n}>",
+                lambda e, i=_n - 1: self._on_active_channel_hotkey(i),
+            )
+
+        # =====================
+        # Atajos globales v1.30 — todos pasan por _hotkey_guard() para
+        # ignorar la pulsación si el foco está en un Entry/Spinbox/Text
+        # (sin esto la edición de V/div, MATH, rename, etc. se rompe).
+        # Lista completa de combinaciones en el dialog Commands legend
+        # (Settings → Commands legend).
+        # =====================
+        # Funciones (letras): cursores, unidad, snap GND, centrar.
+        self.root.bind_all("<Key-c>", lambda e: self._hotkey_toggle_cursors())
+        self.root.bind_all("<Key-C>", lambda e: self._hotkey_toggle_cursors())
+        self.root.bind_all("<Key-u>", lambda e: self._hotkey_open_unit_picker())
+        self.root.bind_all("<Key-U>", lambda e: self._hotkey_open_unit_picker())
+        self.root.bind_all("<Key-g>", lambda e: self._hotkey_snap_gnd())
+        self.root.bind_all("<Key-G>", lambda e: self._hotkey_snap_gnd())
+        self.root.bind_all("<Key-0>", lambda e: self._hotkey_center_channel())
+
+        # Ctrl+1..9 → toggle visibilidad del canal idx-1.
+        for _n in range(1, 10):
+            self.root.bind_all(
+                f"<Control-Key-{_n}>",
+                lambda e, i=_n - 1: self._hotkey_toggle_channel_visibility(i),
+            )
+
+        # Flechas (sin modificador) → mover canal activo / vista.
+        # Arr/abj = v_offset del canal activo. Izq/der = t_offset global.
+        self.root.bind_all("<Key-Up>",    lambda e: self._hotkey_pan_v(+1))
+        self.root.bind_all("<Key-Down>",  lambda e: self._hotkey_pan_v(-1))
+        self.root.bind_all("<Key-Left>",  lambda e: self._hotkey_pan_h(-1))
+        self.root.bind_all("<Key-Right>", lambda e: self._hotkey_pan_h(+1))
+
+        # Shift+flechas v → cambio discreto de V/div (canal activo).
+        self.root.bind_all("<Shift-Up>",   lambda e: self._hotkey_step_v_div(-1))
+        self.root.bind_all("<Shift-Down>", lambda e: self._hotkey_step_v_div(+1))
+
+        # Ctrl+Shift+flechas v → cambio discreto de T/div global.
+        # (Antes era Ctrl+↑/↓; v1.30 lo desplazó para liberar Ctrl+↑/↓
+        # como cursor Y1.)
+        self.root.bind_all("<Control-Shift-Up>",   lambda e: self._hotkey_step_t_div(-1))
+        self.root.bind_all("<Control-Shift-Down>", lambda e: self._hotkey_step_t_div(+1))
+        # Variantes con shift mayúscula explícita (Caps Lock):
+        self.root.bind_all("<Control-Shift-KP_Up>",   lambda e: self._hotkey_step_t_div(-1))
+        self.root.bind_all("<Control-Shift-KP_Down>", lambda e: self._hotkey_step_t_div(+1))
+
+        # Cursores con Ctrl / Ctrl+Alt:
+        #   Ctrl+←/→         → cursor X1 (tiempo, vertical izq)
+        #   Ctrl+↑/↓         → cursor Y1 (voltaje, horizontal inf)
+        #   Ctrl+Alt+←/→     → cursor X2 (vertical der)
+        #   Ctrl+Alt+↑/↓     → cursor Y2 (horizontal sup)
+        # Convención mental: Ctrl = "cursor", Alt = "el otro" (idx 1).
+        self.root.bind_all("<Control-Left>",  lambda e: self._hotkey_move_cursor("x", 0, -1))
+        self.root.bind_all("<Control-Right>", lambda e: self._hotkey_move_cursor("x", 0, +1))
+        self.root.bind_all("<Control-Up>",    lambda e: self._hotkey_move_cursor("y", 0, +1))
+        self.root.bind_all("<Control-Down>",  lambda e: self._hotkey_move_cursor("y", 0, -1))
+        self.root.bind_all("<Control-Alt-Left>",  lambda e: self._hotkey_move_cursor("x", 1, -1))
+        self.root.bind_all("<Control-Alt-Right>", lambda e: self._hotkey_move_cursor("x", 1, +1))
+        self.root.bind_all("<Control-Alt-Up>",    lambda e: self._hotkey_move_cursor("y", 1, +1))
+        self.root.bind_all("<Control-Alt-Down>",  lambda e: self._hotkey_move_cursor("y", 1, -1))
+
+        # Título inicial: "Untitled — Oscilloscope CSV Viewer".
+        # Sustituye al title() estático del principio de __init__.
+        self._update_title()
+
+        # Trace de tk.Vars que pertenecen al estado de sesión: cualquier
+        # cambio marca dirty. _mark_dirty es O(1) si ya estaba dirty, así
+        # que no penaliza arrastres de slider que disparan miles de set().
+        # Durante load_session/load_csv envolvemos con _suppress_dirty para
+        # que estas mismas escrituras no marquen dirty espurio.
+        def _dirty_trace(*_):
+            self._mark_dirty()
+        for _var in (
+            self.t_div, self.v_div, self.t_offset, self.v_offset,
+            self.fine_mode, self.render_mode,
+            self.cursors_enabled, self.cursor_mode, self.cursor_show_all,
+        ):
+            try:
+                _var.trace_add("write", _dirty_trace)
+            except Exception:
+                # Si alguna Var aún no existe en esta versión, no es crítico.
+                pass
+
+        # Traces de phosphor: NO marcan dirty (preferencia visual), pero
+        # SÍ persisten a config.json y refrescan el plot.
+        #
+        # Dos handlers para evitar cuellos de botella:
+        #   - enabled  → inmediato. Toggle del checkbox debe responder ya.
+        #     Invalida fingerprint (cambia el tipo de artist por canal).
+        #   - intensity → debounced. tk.Scale dispara write por cada pixel
+        #     que mueve el thumb; sin debounce, arrastrar el slider es un
+        #     update_plot por píxel. 80 ms da feedback visual fluido sin
+        #     saturar la CPU.
+        def _persist_phosphor_config():
+            try:
+                save_user_config({
+                    "phosphor_enabled":   bool(self.phosphor_enabled.get()),
+                    "phosphor_intensity": float(self.phosphor_intensity.get()),
+                })
+            except Exception:
+                pass
+
+        def _on_phosphor_enabled(*_):
+            self._last_structure_fingerprint = None
+            try:
+                self.update_plot()
+            except Exception:
+                pass
+            _persist_phosphor_config()
+
+        def _on_phosphor_intensity(*_):
+            prev = getattr(self, "_phosphor_after_id", None)
+            if prev is not None:
+                try:
+                    self.root.after_cancel(prev)
+                except Exception:
+                    pass
+            def _flush():
+                self._phosphor_after_id = None
+                # No invalidamos fingerprint: el tipo de artist no cambia,
+                # el fast path va a recomputar RGBA con la intensity nueva.
+                try:
+                    self.update_plot()
+                except Exception:
+                    pass
+                _persist_phosphor_config()
+            self._phosphor_after_id = self.root.after(80, _flush)
+
+        try:
+            self.phosphor_enabled.trace_add("write",   _on_phosphor_enabled)
+            self.phosphor_intensity.trace_add("write", _on_phosphor_intensity)
+        except Exception:
+            pass
+
+
+        
+        
+
+
+
+
+
+
+
+    # -----------------------------
+    def build_layout(self):
+        # ---- TopBar horizontal ----
+        self.topbar = tk.Frame(self.root, bg=COLOR_BG_ALT, height=52)
+        self.topbar.pack(side=tk.TOP, fill=tk.X)
+        self.topbar.pack_propagate(False)
+
+        # ---- Zona principal (izquierda: sidebar, centro: plot, derecha: meas) ----
+        main = tk.Frame(self.root, bg=COLOR_BG)
+        main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Sidebar izquierdo
+        sidebar = tk.Frame(main, bg=COLOR_BG, padx=5)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y)
+
+        # Panel derecho: columna de medidas activas
+        self.meas_panel = tk.Frame(main, bg=COLOR_BG, width=220)
+        self.meas_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
+        self.meas_panel.pack_propagate(False)
+
+        # Zona central: minimap arriba + plot debajo
+        plot_area = tk.Frame(main, bg=COLOR_BG)
+        plot_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.minimap_canvas = tk.Canvas(
+            plot_area, bg=COLOR_BG_ALT, height=40,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            bd=0, cursor="hand2",
+        )
+        self.minimap_canvas.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(4, 0))
+
+        plot = tk.Frame(plot_area)
+        plot.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Estado minimap
+        self._minimap_dragging = False
+        self._minimap_drag_offset = 0.0
+
+        # Bindings minimap
+        self.minimap_canvas.bind("<Configure>", lambda e: self._redraw_minimap())
+        self.minimap_canvas.bind("<Button-1>",  self._on_minimap_press)
+        self.minimap_canvas.bind("<B1-Motion>", self._on_minimap_drag)
+        self.minimap_canvas.bind("<ButtonRelease-1>", self._on_minimap_release)
+        # Scroll rueda: zoom
+        self.minimap_canvas.bind("<MouseWheel>", self._on_minimap_wheel)  # Windows/Mac
+        self.minimap_canvas.bind("<Button-4>",  lambda e: self._on_minimap_wheel_linux(e, +1))
+        self.minimap_canvas.bind("<Button-5>",  lambda e: self._on_minimap_wheel_linux(e, -1))
+
+        self.build_topbar(self.topbar)
+        self.build_controls(sidebar)
+        self.build_plot(plot)
+        self._build_measurements_panel()
+
+    # -----------------------------
+    def build_topbar(self, bar):
+        """Barra horizontal superior: TOOLS (izq) | CURSORS (centro) | ☀ (der)."""
+        # --- Helper local para crear botones con hover ---
+        def mkbtn(parent, text, command, width=8, fg=None):
+            b = tk.Button(
+                parent, text=text,
+                bg=COLOR_BG_ALT, fg=fg or COLOR_TEXT,
+                activebackground=COLOR_BG_HOVER,
+                activeforeground=COLOR_TEXT,
+                bd=1, relief="flat",
+                font=("Segoe UI", 9, "bold"),
+                padx=10, pady=4,
+                width=width,
+                highlightbackground=COLOR_BORDER,
+                highlightthickness=1,
+                command=command,
+            )
+            self._add_hover_shadow(b)
+            return b
+
+        # ---- TOOLS (grupo izquierdo) ----
+        tools_frame = tk.Frame(bar, bg=COLOR_BG_ALT)
+        tools_frame.pack(side=tk.LEFT, padx=(8, 0), pady=8)
+
+        tk.Label(tools_frame, text="TOOLS",
+                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(side=tk.LEFT, padx=(0, 8))
+
+        for txt, cmd, tip in [
+            ("FFT",     self.open_fft_window,
+             "Open FFT analyzer window\nFrequency-domain view of the active channel"),
+            ("XY",      self.open_xy_window,
+             "X-Y plot\nPlot one channel against another (Lissajous, I-V curves, etc.)"),
+            ("Eye",     self.open_eye_window,
+             "Eye diagram\nOverlay UI slices to evaluate jitter, eye height/width and ISI"),
+            ("Decode",  self.open_decoder_window,
+             "Protocol decoder (UART / I2C / SPI)\n"
+             "Map channels to protocol roles and decode frames"),
+            ("Math",    self.open_math_window,
+             "Create math channels (M1, M2, ...)\nExpressions: CH1+CH2, sin(CH1), abs(CH1-CH2), etc."),
+            ("Meas",    self.open_meas_window,
+             "Add measurements (amplitude, frequency, rise time, ...)\nShown live in the right-hand panel"),
+            ("Annot",   self.open_annotation_toolbar,
+             "Annotations\nFreehand draw, text, erase. Ctrl+Z to undo, Ctrl+Y to redo"),
+            ("Trigger", self.open_trigger_window,
+             "Post-capture trigger\nEdge / Pulse-width detection on a chosen channel"),
+        ]:
+            btn = mkbtn(tools_frame, txt, cmd, width=7)
+            btn.pack(side=tk.LEFT, padx=2)
+            Tooltip(btn, tip)
+
+        # --- Toggle Detail / Fast ---
+        # Se "pinta" diferente según modo para dar feedback visual sin abrir ventana.
+        self._render_mode_btn = tk.Button(
+            tools_frame,
+            text="Detail",
+            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            activebackground=COLOR_BG_HOVER,
+            activeforeground=COLOR_ACCENT,
+            bd=1, relief="flat",
+            font=("Segoe UI", 9, "bold"),
+            padx=10, pady=4, width=7,
+            highlightbackground=COLOR_ACCENT,
+            highlightthickness=1,
+            command=self._toggle_render_mode,
+        )
+        self._add_hover_shadow(self._render_mode_btn)
+        self._render_mode_btn.pack(side=tk.LEFT, padx=(8, 2))
+        self._update_render_mode_btn_visual()
+        Tooltip(self._render_mode_btn,
+                lambda: (
+                    "Render mode: DETAIL — draws every sample (best fidelity, slower)"
+                    if self.render_mode.get() == "Detail" else
+                    "Render mode: FAST — min/max decimation per pixel (best fluidity)\n"
+                    "Switch to Detail for fine zoom inspection"
+                ))
+
+        # --- Botón Session con menú desplegable Save/Load ---
+        session_btn = mkbtn(tools_frame, "Session",
+                            self._open_session_menu, width=8)
+        session_btn.pack(side=tk.LEFT, padx=(8, 2))
+        self._session_btn = session_btn
+        Tooltip(session_btn,
+                "Save or load full session (channels, settings, annotations, ...)\n"
+                "Ctrl+S to save, Ctrl+O to load")
+
+        # Separador vertical
+        tk.Frame(bar, bg=COLOR_BORDER, width=1
+                 ).pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=8)
+
+        # ---- CURSORS (grupo central) ----
+        cursors_frame = tk.Frame(bar, bg=COLOR_BG_ALT)
+        cursors_frame.pack(side=tk.LEFT, pady=8)
+
+        tk.Label(cursors_frame, text="CURSORS",
+                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(side=tk.LEFT, padx=(0, 8))
+
+        cursor_enable_chk = ttk.Checkbutton(
+            cursors_frame, text="Enable",
+            variable=self.cursors_enabled,
+            command=self.on_cursors_toggle
+        )
+        cursor_enable_chk.pack(side=tk.LEFT)
+        Tooltip(cursor_enable_chk,
+                "Enable measurement cursors\n"
+                "Click on the plot to position. Drag to move.")
+
+        self.cursor_mode_combo = ttk.Combobox(
+            cursors_frame,
+            textvariable=self.cursor_mode,
+            values=["Vertical", "Horizontal", "Horizontal + Vertical"],
+            state="disabled",
+            width=20
+        )
+        self.cursor_mode_combo.pack(side=tk.LEFT, padx=(8, 4))
+        self.cursor_mode_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda event: self.update_plot()
+        )
+        Tooltip(self.cursor_mode_combo,
+                "Cursor type:\n"
+                "  Vertical — time markers (Δt, frequency 1/Δt)\n"
+                "  Horizontal — voltage markers (ΔV)\n"
+                "  Both — full XY readout")
+
+        center_cursors_btn = mkbtn(cursors_frame, "Center", self.center_cursors, width=7)
+        center_cursors_btn.pack(side=tk.LEFT, padx=(4, 0))
+        Tooltip(center_cursors_btn,
+                "Re-center cursors at 25% and 75% of the visible window")
+
+        # Checkbox: pintar la cruz de tensión en todos los canales o solo
+        # en el activo. Persiste el valor al cambiar para que se respete
+        # entre sesiones.
+        def _on_cursor_show_all_toggle():
+            try:
+                save_user_config({
+                    "cursor_show_all_channels":
+                        bool(self.cursor_show_all.get())
+                })
+            except Exception:
+                pass
+            # Repintar para reflejar el cambio inmediatamente
+            self.update_plot()
+
+        cursor_all_chk = ttk.Checkbutton(
+            cursors_frame, text="Show on all channels",
+            variable=self.cursor_show_all,
+            command=_on_cursor_show_all_toggle
+        )
+        cursor_all_chk.pack(side=tk.LEFT, padx=(8, 0))
+        Tooltip(cursor_all_chk,
+                "When on, the vertical cursor draws a voltage marker (X)\n"
+                "on every visible channel at the same time instant.\n"
+                "Useful for comparing voltages across channels at a glance.")
+
+        # ---- ⚙ Settings (derecha) — v1.30 ----
+        # Antes era "☀ Grid view". Ahora muestra una tuerca y abre la
+        # ventana de Settings (tema, grid colors, phosphor, commands legend).
+        gear_btn = tk.Frame(
+            bar, bg=COLOR_BG_ALT,
+            highlightbackground=COLOR_BORDER,
+            highlightthickness=1,
+            cursor="hand2",
+        )
+        gear_btn.pack(side=tk.RIGHT, padx=12, pady=8)
+
+        # Canvas con tuerca dibujada
+        gear_size = 22
+        gear_canvas = tk.Canvas(
+            gear_btn, width=gear_size, height=gear_size,
+            bg=COLOR_BG_ALT, highlightthickness=0, bd=0,
+        )
+        gear_canvas.pack(side=tk.LEFT, padx=(6, 2), pady=4)
+
+        def draw_gear(color=None):
+            """Dibuja una tuerca: anillo dentado + círculo central hueco.
+            Polígono de 8 dientes alternando radio outer/inner."""
+            if color is None:
+                color = COLOR_ACCENT
+            gear_canvas.delete("all")
+            cx = cy = gear_size / 2
+            import math
+            n_teeth = 8
+            r_outer = gear_size * 0.46
+            r_inner = gear_size * 0.34
+            r_hole  = gear_size * 0.18
+            # Cada diente = 2 vértices outer + 2 inner (separados angular).
+            # Construimos 4 * n_teeth puntos para que el polígono dibuje
+            # los dientes rectangulares en lugar de triangulares.
+            pts = []
+            step = math.pi / (2 * n_teeth)  # 1/4 de paso por diente
+            for k in range(n_teeth):
+                base = k * 2 * math.pi / n_teeth
+                # 2 vértices en outer (lados del diente)
+                a1 = base - step
+                a2 = base + step
+                pts.extend([cx + r_outer * math.cos(a1),
+                            cy + r_outer * math.sin(a1)])
+                pts.extend([cx + r_outer * math.cos(a2),
+                            cy + r_outer * math.sin(a2)])
+                # 2 vértices en inner (entre dientes)
+                a3 = base + step
+                a4 = base + 2 * math.pi / n_teeth - step
+                pts.extend([cx + r_inner * math.cos(a3),
+                            cy + r_inner * math.sin(a3)])
+                pts.extend([cx + r_inner * math.cos(a4),
+                            cy + r_inner * math.sin(a4)])
+            gear_canvas.create_polygon(
+                pts, outline=color, fill="", width=1.6, smooth=False,
+            )
+            # Círculo central (hueco)
+            gear_canvas.create_oval(
+                cx - r_hole, cy - r_hole, cx + r_hole, cy + r_hole,
+                outline=color, width=1.6,
+            )
+
+        draw_gear()
+
+        # Texto
+        gear_label = tk.Label(
+            gear_btn, text="Settings",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            font=("Segoe UI", 9, "bold"),
+        )
+        gear_label.pack(side=tk.LEFT, padx=(2, 8), pady=4)
+
+        # v1.30: registrar redraw callback para que el icono se repinte
+        # con COLOR_ACCENT actualizado cuando cambia el tema. El tk.Canvas
+        # mantiene los items dibujados con su color absoluto — si no
+        # repintamos aquí, la tuerca queda con el accent del tema viejo.
+        def _gear_redraw_for_theme():
+            try:
+                if not gear_canvas.winfo_exists():
+                    return
+                cur_bg = COLOR_BG_ALT
+                gear_btn.config(bg=cur_bg,
+                                highlightbackground=COLOR_BORDER)
+                gear_canvas.config(bg=cur_bg)
+                gear_label.config(bg=cur_bg, fg=COLOR_TEXT)
+                draw_gear(COLOR_ACCENT)
+            except Exception:
+                pass
+        self._gear_redraw = _gear_redraw_for_theme
+
+        # Hover y click: propagar a todos los hijos para que se comporte como botón
+        def on_enter(_e=None):
+            gear_btn.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+            gear_canvas.config(bg=COLOR_BG_HOVER)
+            gear_label.config(bg=COLOR_BG_HOVER)
+            draw_gear(COLOR_ACCENT)
+        def on_leave(_e=None):
+            gear_btn.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+            gear_canvas.config(bg=COLOR_BG_ALT)
+            gear_label.config(bg=COLOR_BG_ALT)
+            draw_gear(COLOR_ACCENT)
+        def on_click(_e=None):
+            self._open_grid_view_window()
+
+        for w in (gear_btn, gear_canvas, gear_label):
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave)
+            w.bind("<Button-1>", on_click)
+
+        # Tooltip explica ambos roles: tema global y tema fino del plot
+        Tooltip(gear_btn,
+                "Settings: app theme, plot colors, phosphor mode\n"
+                "and keyboard shortcuts legend")
+
+        # ---- About button (a la izquierda del settings, pero a la derecha del resto) ----
+        # Con side=RIGHT el orden de pack importa: lo primero packeado queda
+        # más a la derecha. Como gear_btn ya se packeó, el About queda a su
+        # izquierda. Visualmente: [...cursors...]  [About]  [⚙ Settings]
+        about_btn = tk.Frame(
+            bar, bg=COLOR_BG_ALT,
+            highlightbackground=COLOR_BORDER,
+            highlightthickness=1,
+            cursor="hand2",
+        )
+        about_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=8)
+        about_label = tk.Label(
+            about_btn, text="ⓘ  About",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        )
+        about_label.pack(side=tk.LEFT, padx=10, pady=4)
+
+        def about_enter(_e=None):
+            about_btn.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+            about_label.config(bg=COLOR_BG_HOVER)
+        def about_leave(_e=None):
+            about_btn.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+            about_label.config(bg=COLOR_BG_ALT)
+        def about_click(_e=None):
+            self._open_about_window()
+        for w in (about_btn, about_label):
+            w.bind("<Enter>", about_enter)
+            w.bind("<Leave>", about_leave)
+            w.bind("<Button-1>", about_click)
+        Tooltip(about_btn, "About this application")
+
+    def build_controls(self, frame):
+        # Configurar el frame padre como oscuro
+        frame.configure(bg=COLOR_BG, padx=10, pady=10)
+
+        # ---- Load CSV destacado arriba ----
+        open_btn = ttk.Button(frame, text="📂  Open CSV", command=self.load_csv,
+                              style="Accent.TButton")
+        open_btn.pack(fill=tk.X, pady=(0, 4))
+        Tooltip(open_btn,
+                "Load a CSV file exported from an oscilloscope\n"
+                "Tek, Keysight, R&S, Rigol, Siglent, Hantek, LeCroy, PicoScope, OWON supported")
+
+        auto_fit_btn = ttk.Button(frame, text="Auto fit", command=self.auto_fit)
+        auto_fit_btn.pack(fill=tk.X, pady=(0, 10))
+        Tooltip(auto_fit_btn,
+                "Automatic fit: pick V/div and Time/div so every channel fits in view")
+
+        # ---- Sección: Scale ----
+        self._section_header(frame, "TIMEBASE & VERTICAL")
+
+        ttk.Label(frame, text="V / div").pack(anchor="w", pady=(4, 0))
+
+        # Fila con Entry + botones ⯅ ⯆
+        vdiv_row = tk.Frame(frame, bg=COLOR_BG)
+        vdiv_row.pack(fill=tk.X, pady=(2, 4))
+
+        self.v_div_entry = ttk.Entry(
+            vdiv_row,
+            width=10,
+            font=("Consolas", 13),
+            justify="center",
+            textvariable=self.v_div_display,
+        )
+        self.v_div_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.v_div_display.trace_add("write", self._on_v_div_display_changed)
+        self.v_div_entry.bind("<Return>",   lambda e: self._on_v_div_typed())
+        self.v_div_entry.bind("<FocusOut>", lambda e: self._on_v_div_typed())
+        Tooltip(self.v_div_entry,
+                "Volts per division of the ACTIVE channel (the one tagged ▶ on the plot)\n"
+                "Type a value (e.g. '500 mV', '2 V') and press Enter, or use the arrow buttons.\n"
+                "Snaps to 1-2-5 series unless Fine is enabled.")
+
+        v_step_up = tk.Button(
+            vdiv_row, text="⯅",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 8, "bold"),
+            padx=4, pady=0,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=lambda: self._step_v_div("up"),
+        )
+        v_step_up.pack(side=tk.LEFT, padx=(2, 0))
+        self._add_hover_shadow(v_step_up)
+        Tooltip(v_step_up, "Increase V/div (1 → 2 → 5 → 10 ...)")
+
+        v_step_dn = tk.Button(
+            vdiv_row, text="⯆",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 8, "bold"),
+            padx=4, pady=0,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=lambda: self._step_v_div("down"),
+        )
+        v_step_dn.pack(side=tk.LEFT, padx=(0, 0))
+        self._add_hover_shadow(v_step_dn)
+        Tooltip(v_step_dn, "Decrease V/div (... 5 → 2 → 1)")
+
+        # Checkbox Fine
+        fine_chk = ttk.Checkbutton(
+            frame, text="Fine (0.1 V steps)",
+            variable=self.fine_mode,
+            command=self._on_fine_mode_toggle,
+        )
+        fine_chk.pack(anchor="w", pady=(0, 6))
+        Tooltip(fine_chk,
+                "Fine mode: free V/div values instead of the 1-2-5 series\n"
+                "Useful for matching the exact value of a reference signal")
+
+        ttk.Label(frame, text="Time / div").pack(anchor="w", pady=(4, 0))
+
+        # Fila con Entry central + botones ⯅ ⯆ manuales (evita los problemas
+        # del Spinbox con valores no-canónicos/textuales).
+        tdiv_row = tk.Frame(frame, bg=COLOR_BG)
+        tdiv_row.pack(fill=tk.X, pady=(2, 10))
+
+        self.t_div_entry = ttk.Entry(
+            tdiv_row,
+            width=10,
+            font=("Consolas", 13),
+            justify="center",
+            textvariable=self.t_div_display,
+        )
+        self.t_div_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.t_div_display.trace_add("write", self._on_t_div_display_changed)
+        self.t_div_entry.bind("<Return>",   lambda e: self._on_t_div_typed())
+        self.t_div_entry.bind("<FocusOut>", lambda e: self._on_t_div_typed())
+        Tooltip(self.t_div_entry,
+                "Time per division (horizontal scale)\n"
+                "Type e.g. '100 us', '1 ms', '5 s' and press Enter, or use the arrows.\n"
+                "Snaps to the 1-2-5 series.")
+
+        # Botones de step
+        step_up = tk.Button(
+            tdiv_row, text="⯅",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 8, "bold"),
+            padx=4, pady=0,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=lambda: self._step_t_div("up"),
+        )
+        step_up.pack(side=tk.LEFT, padx=(2, 0))
+        self._add_hover_shadow(step_up)
+        Tooltip(step_up, "Slower time base (zoom out)")
+
+        step_dn = tk.Button(
+            tdiv_row, text="⯆",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 8, "bold"),
+            padx=4, pady=0,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=lambda: self._step_t_div("down"),
+        )
+        step_dn.pack(side=tk.LEFT, padx=(0, 0))
+        self._add_hover_shadow(step_dn)
+        Tooltip(step_dn, "Faster time base (zoom in)")
+
+        # ---- Sección: Position ----
+        self._section_header(frame, "POSITION")
+
+        ttk.Label(frame, text="Horizontal").pack(anchor="w", pady=(4, 0))
+        self.h_slider = ttk.Scale(
+            frame,
+            from_=0, to=0,
+            orient=tk.HORIZONTAL,
+            command=self.on_slider_move
+        )
+        self.h_slider.pack(fill=tk.X, pady=(2, 6))
+        Tooltip(self.h_slider,
+                "Horizontal position — pan through the captured trace\n"
+                "Tip: you can also click-drag on the plot itself")
+
+        # ---- Align grid to t=0 ----
+        # Justo bajo el slider horizontal porque es una acción de
+        # posicionamiento horizontal fino. Solo útil cuando el eje se
+        # muestra en modo "Absolute" (toggle en Appearance): desplaza
+        # t_offset para que la línea vertical t=0 absoluto del CSV
+        # coincida con un tick del grid. Equivalente al snap-to-grid
+        # vertical pero para el eje temporal.
+        self._snap_t0_btn = ttk.Button(
+            frame, text="Align grid to t=0",
+            command=self._snap_horizontal_to_zero)
+        self._snap_t0_btn.pack(fill=tk.X, pady=(0, 6))
+        Tooltip(self._snap_t0_btn,
+                "Shift the trace horizontally so the absolute t=0 of the "
+                "CSV (the trigger instant in scope captures) lands exactly "
+                "on a grid tick.\nOnly available when Time axis is in "
+                "'Absolute' mode (Appearance).")
+        # Estado inicial — se actualiza cuando cambia el toggle de
+        # time_show_absolute o cuando se carga un CSV nuevo.
+        self._update_snap_t0_state()
+
+        ttk.Label(frame, text="Vertical").pack(anchor="w", pady=(4, 0))
+        self.v_slider = ttk.Scale(
+            frame,
+            from_=-5.0, to=5.0,
+            orient=tk.HORIZONTAL,
+            command=self.on_v_slider_move
+        )
+        self.v_slider.set(0.0)
+        self.v_slider.pack(fill=tk.X, pady=(2, 6))
+        Tooltip(self.v_slider,
+                "Vertical offset — shift the whole view up/down")
+
+        center_trace_btn = ttk.Button(frame, text="Center trace", command=self.center_trace)
+        center_trace_btn.pack(fill=tk.X, pady=(2, 10))
+        Tooltip(center_trace_btn, "Reset horizontal and vertical position to zero")
+
+        # ---- Sección: Channels ----
+        self._section_header(frame, "CHANNELS")
+
+        # Frame contenedor que se rellena dinámicamente al cargar CSV
+        self.channels_frame = tk.Frame(frame, bg=COLOR_BG)
+        self.channels_frame.pack(fill=tk.X, pady=(4, 10))
+
+        # Placeholder cuando no hay canales
+        self.channels_placeholder = tk.Label(
+            self.channels_frame, text="No CSV loaded",
+            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            font=("Segoe UI", 9, "italic")
+        )
+        self.channels_placeholder.pack(anchor="w", padx=4)
+
+
+    def _section_header(self, parent, text):
+        """Crea una cabecera de sección con línea separadora."""
+        sep = ttk.Separator(parent, orient="horizontal")
+        sep.pack(fill=tk.X, pady=(6, 2))
+        tk.Label(
+            parent, text=text,
+            font=("Segoe UI", 8, "bold"),
+            fg=COLOR_ACCENT, bg=COLOR_BG
+        ).pack(anchor="w", pady=(0, 2))
+
+
+    def _rebuild_channels_panel(self):
+        """Rellena el panel de canales con un checkbox por canal,
+        coloreado con su color asignado, y un radio oculto para indicar
+        el canal activo (el check del propio canal va "iluminado" si es
+        el activo)."""
+        # Limpiar contenido previo
+        for w in self.channels_frame.winfo_children():
+            w.destroy()
+
+        if not self.channels:
+            self.channels_placeholder = tk.Label(
+                self.channels_frame, text="No CSV loaded",
+                fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+                font=("Segoe UI", 9, "italic")
+            )
+            self.channels_placeholder.pack(anchor="w", padx=4)
+            return
+
+        for i, ch in enumerate(self.channels):
+            row = tk.Frame(self.channels_frame, bg=COLOR_BG)
+            row.pack(fill=tk.X, pady=1)
+
+            # Rectángulo de color (pequeño cuadrado)
+            swatch = tk.Label(
+                row, text="■",
+                fg=ch["color"], bg=COLOR_BG,
+                font=("Segoe UI", 12, "bold")
+            )
+            swatch.pack(side=tk.LEFT, padx=(2, 4))
+
+            # Checkbox visible/oculto
+            cb = tk.Checkbutton(
+                row,
+                text=ch["name"],
+                variable=ch["visible"],
+                bg=COLOR_BG,
+                fg=ch["color"],
+                activebackground=COLOR_BG,
+                activeforeground=ch["color"],
+                selectcolor=COLOR_BG_ALT,
+                font=("Segoe UI", 10, "bold" if i == self.active_channel_idx else "normal"),
+                bd=0, highlightthickness=0,
+                anchor="w",
+            )
+            cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # Click sobre el nombre → seleccionar como activo
+            def make_selector(idx):
+                def _sel(event):
+                    self.set_active_channel(idx)
+                    self._rebuild_channels_panel()
+                return _sel
+
+            def make_color_picker(idx):
+                def _pick(event):
+                    self._open_color_picker(idx)
+                    return "break"
+                return _pick
+
+            def make_click_handler(idx, widget):
+                """Distingue clic simple (toggle visible) de doble (rename).
+                Al primer Button-1 programamos un 'after' con el delay de doble
+                clic del sistema; si llega el doble antes, lo cancelamos."""
+                state = {"after_id": None}
+
+                def _on_single(event):
+                    # Cancelar cualquier pendiente anterior
+                    if state["after_id"] is not None:
+                        widget.after_cancel(state["after_id"])
+
+                    def _do_toggle():
+                        state["after_id"] = None
+                        widget.invoke()  # togglea el Checkbutton
+
+                    # Delay estándar de doble clic en Tk
+                    delay = widget.tk.call("::tk::DoubleClickTime") \
+                        if False else 150
+                    state["after_id"] = widget.after(delay, _do_toggle)
+                    return "break"  # bloquea el toggle nativo
+
+                def _on_double(event):
+                    # Cancelar el single pendiente y abrir rename
+                    if state["after_id"] is not None:
+                        widget.after_cancel(state["after_id"])
+                        state["after_id"] = None
+                    self._open_rename_dialog(idx)
+                    return "break"
+
+                return _on_single, _on_double
+
+            single_cb, double_cb = make_click_handler(i, cb)
+            cb.bind("<Button-3>", make_selector(i))                 # click derecho: activa canal
+            cb.bind("<Button-1>", single_cb)                        # clic simple: toggle (con delay)
+            cb.bind("<Double-Button-1>", double_cb)                 # doble clic: renombrar
+            swatch.bind("<Button-1>", make_color_picker(i))         # clic izq swatch: color
+
+            # Orden visual deseado (izq → der): [unit] [⟲] [✕]
+            # Con side=RIGHT, el PRIMER pack queda a la derecha.
+            # → pack en orden inverso: ✕, ⟲, unit.
+
+            # Botón X para borrar el canal (data o MATH).
+            # Para canales MATH: si hay otros MATH que dependen de éste,
+            # pregunta confirmación de borrado en cascada.
+            # Para canales de datos: si hay MATH que los referencian,
+            # mismo flujo de cascada (un MATH sin su fuente no tiene sentido).
+            # Si se borra el último canal, la app vuelve al estado
+            # "sin datos cargados" (igual que arranque limpio).
+            def make_deleter(idx):
+                def _del():
+                    self._delete_channel(idx)
+                return _del
+            del_btn = tk.Label(
+                row, text="✕",
+                bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                font=("Segoe UI", 9, "bold"),
+                cursor="hand2",
+            )
+            del_btn.pack(side=tk.RIGHT, padx=(2, 4))
+            del_btn.bind("<Button-1>", lambda e, f=make_deleter(i): f())
+            del_btn.bind("<Enter>", lambda e, w=del_btn: w.config(fg=COLOR_DANGER))
+            del_btn.bind("<Leave>", lambda e, w=del_btn: w.config(fg=COLOR_TEXT_DIM))
+
+            # Botón ⟲ GND: alinea el 0V del canal a la división vertical más cercana
+            def make_gnd_snap(idx):
+                def _snap():
+                    self._snap_channel_gnd_to_grid(idx)
+                return _snap
+            gnd_btn = tk.Label(
+                row, text="⟲",
+                bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                font=("Segoe UI", 10, "bold"),
+                cursor="hand2",
+            )
+            gnd_btn.pack(side=tk.RIGHT, padx=(2, 2))
+            gnd_btn.bind("<Button-1>", lambda e, f=make_gnd_snap(i): f())
+            gnd_btn.bind("<Enter>", lambda e, w=gnd_btn: w.config(fg=COLOR_ACCENT))
+            gnd_btn.bind("<Leave>", lambda e, w=gnd_btn: w.config(fg=COLOR_TEXT_DIM))
+
+            # Botón-casilla de unidad (v1.29): muestra la unidad del canal.
+            # Clic → abre picker grid 5x5 para seleccionar otra.
+            ch_unit = self._ch_unit(i)
+            unit_btn = tk.Label(
+                row, text=ch_unit,
+                bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                font=("Segoe UI", 8, "bold"),
+                cursor="hand2",
+                padx=5, pady=0,
+                bd=1, relief="solid",
+            )
+            unit_btn.pack(side=tk.RIGHT, padx=(2, 2))
+            unit_btn.bind(
+                "<Button-1>",
+                lambda e, idx=i: self._open_unit_picker_dialog(idx),
+            )
+            unit_btn.bind(
+                "<Enter>",
+                lambda e, w=unit_btn: w.config(
+                    highlightbackground=COLOR_ACCENT, fg=COLOR_ACCENT),
+            )
+            unit_btn.bind(
+                "<Leave>",
+                lambda e, w=unit_btn: w.config(
+                    highlightbackground=COLOR_BORDER, fg=COLOR_TEXT),
+            )
+            Tooltip(unit_btn, "Channel unit — click to change")
+
+        # Leyenda minimalista — wrap para no forzar el ancho de la sidebar
+        # cuando hay muchos canales o la sidebar es estrecha.
+        tk.Label(
+            self.channels_frame,
+            text=("swatch = color · dbl-click = rename · "
+                  "box = unit · ⟲ = snap · ✕ = delete"),
+            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            font=("Segoe UI", 7, "italic"),
+            wraplength=240, justify="left",
+        ).pack(anchor="w", padx=4, pady=(4, 0))
+
+
+    def _build_measurements_panel(self):
+        """Construye la cabecera del panel derecho. El contenido (filas de
+        medidas) se regenera con _rebuild_measurements_panel."""
+        # Header
+        hdr = tk.Frame(self.meas_panel, bg=COLOR_BG_ALT, height=28)
+        hdr.pack(fill=tk.X, pady=(0, 4))
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="MEASUREMENTS",
+                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 font=("Segoe UI", 8, "bold")
+                 ).pack(side=tk.LEFT, padx=10, pady=6)
+
+        # Frame contenedor scrollable de filas
+        self.meas_rows_frame = tk.Frame(self.meas_panel, bg=COLOR_BG)
+        self.meas_rows_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Placeholder
+        self._rebuild_measurements_panel()
+
+    def _rebuild_measurements_panel(self):
+        """Reconstruye las filas con los valores actuales."""
+        if not hasattr(self, "meas_rows_frame"):
+            return
+
+        # Limpiar contenido previo
+        for w in self.meas_rows_frame.winfo_children():
+            w.destroy()
+
+        if not self.active_measurements:
+            # Placeholder
+            tk.Label(
+                self.meas_rows_frame,
+                text="No measurements\nadded",
+                bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                font=("Segoe UI", 9, "italic"),
+                justify="center"
+            ).pack(expand=True, pady=20)
+            return
+
+        results = self.compute_measurements()
+        # Dibujar una fila por resultado
+        for i, r in enumerate(results):
+            self._draw_meas_row(i, r)
+
+    def _draw_meas_row(self, idx, result):
+        """Dibuja una fila del panel de medidas con color del canal, nombre,
+        valor y click derecho para eliminar."""
+        row = tk.Frame(self.meas_rows_frame, bg=COLOR_BG)
+        row.pack(fill=tk.X, padx=4, pady=1)
+
+        # Separador superior sutil
+        sep = tk.Frame(row, bg=COLOR_BORDER, height=1)
+        sep.pack(fill=tk.X)
+
+        # Contenido
+        body = tk.Frame(row, bg=COLOR_BG)
+        body.pack(fill=tk.X, padx=6, pady=4)
+
+        # Cabecera: canal + nombre de la medida (color del canal)
+        top_line = tk.Frame(body, bg=COLOR_BG)
+        top_line.pack(fill=tk.X)
+
+        tk.Label(
+            top_line, text=result["channel_name"],
+            bg=COLOR_BG, fg=result["color"],
+            font=("Segoe UI", 8, "bold")
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            top_line, text=f"  {result['name']}",
+            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            font=("Segoe UI", 8)
+        ).pack(side=tk.LEFT)
+
+        # Valor en grande
+        value_text = (format_si(result["value"], result["unit"])
+                      if result["value"] is not None else "---")
+        val_lbl = tk.Label(
+            body, text=value_text,
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Consolas", 11, "bold"),
+            anchor="w"
+        )
+        val_lbl.pack(fill=tk.X, pady=(2, 0))
+
+        # Click derecho en cualquier parte de la fila → menú eliminar
+        def show_ctx(event, i=idx):
+            menu = tk.Menu(
+                self.root, tearoff=0,
+                bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                activebackground=COLOR_ACCENT, activeforeground="#000000",
+                bd=0,
+            )
+            menu.add_command(
+                label="Remove measurement",
+                command=lambda: self._remove_measurement(i)
+            )
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        for w in (row, body, top_line, val_lbl):
+            w.bind("<Button-3>", show_ctx)
+
+    def _remove_measurement(self, idx):
+        """Elimina la medida activa en la posición idx."""
+        if 0 <= idx < len(self.active_measurements):
+            self.active_measurements.pop(idx)
+            self.update_plot()
+            self._mark_dirty()
+
+
+    def _open_rename_dialog(self, ch_idx):
+        """Ventana modal de tamaño fijo para renombrar un canal.
+        El Entry viene precargado con el nombre actual y seleccionado."""
+        if not (0 <= ch_idx < len(self.channels)):
+            return
+
+        old_name = self.channels[ch_idx]["name"]
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash: ocultar antes de cualquier configure
+        win.title("Rename channel")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, luego transient (evita fantasma).
+        self._make_resizable_dialog(win, 320, 140)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(
+            win,
+            text=f"New name for {old_name}:",
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(padx=12, pady=(14, 6), anchor="w")
+
+        var = tk.StringVar(value=old_name)
+        entry = ttk.Entry(win, textvariable=var, font=("Segoe UI", 10))
+        entry.pack(fill=tk.X, padx=12)
+        entry.focus_set()
+        entry.select_range(0, tk.END)
+        entry.icursor(tk.END)
+
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(fill=tk.X, padx=12, pady=12)
+
+        def apply_rename(*_):
+            new_name = var.get().strip()
+            if new_name and new_name != old_name:
+                self.channels[ch_idx]["name"] = new_name
+                self._rebuild_channels_panel()
+                # Redibuja plot para actualizar leyenda/etiquetas
+                try:
+                    self.update_plot()
+                except Exception:
+                    pass
+                self._mark_dirty()
+            win.destroy()
+
+        def cancel(*_):
+            win.destroy()
+
+        ttk.Button(btns, text="Cancel", command=cancel).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="OK", style="Accent.TButton",
+                   command=apply_rename).pack(side=tk.RIGHT, padx=(0, 6))
+
+        entry.bind("<Return>", apply_rename)
+        entry.bind("<Escape>", cancel)
+
+    def _open_color_picker(self, ch_idx):
+        """Paleta tipo Paint para elegir color del canal ch_idx."""
+        if not (0 <= ch_idx < len(self.channels)):
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title(f"Color — {self.channels[ch_idx]['name']}")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+        # Geometry PRIMERO, luego transient (evita fantasma).
+        self._center_dialog(win, 320, 360)
+        win.transient(self.root)
+        win.grab_set()
+
+        # Header
+        tk.Label(
+            win,
+            text=f"Pick color for {self.channels[ch_idx]['name']}",
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(padx=12, pady=(12, 4), anchor="w")
+
+        # Paleta: 8×10 = 80 colores bien distribuidos
+        palette = [
+            # Fila 1: básicos vivos
+            "#ffeb3b", "#ffc107", "#ff9800", "#ff5722",
+            "#f44336", "#e91e63", "#9c27b0", "#673ab7",
+            "#3f51b5", "#2196f3",
+            # Fila 2: cool
+            "#03a9f4", "#00bcd4", "#009688", "#4caf50",
+            "#8bc34a", "#cddc39", "#ffc107", "#ff9800",
+            "#795548", "#607d8b",
+            # Fila 3: neones / scope
+            "#00e5ff", "#00ffff", "#00ff88", "#00ff00",
+            "#aaff00", "#ffff00", "#ff8800", "#ff4400",
+            "#ff0080", "#ff00ff",
+            # Fila 4: pasteles
+            "#ffcdd2", "#f8bbd0", "#e1bee7", "#d1c4e9",
+            "#c5cae9", "#bbdefb", "#b3e5fc", "#b2ebf2",
+            "#b2dfdb", "#c8e6c9",
+            # Fila 5: oscuros / saturados
+            "#b71c1c", "#880e4f", "#4a148c", "#311b92",
+            "#1a237e", "#0d47a1", "#01579b", "#006064",
+            "#004d40", "#1b5e20",
+            # Fila 6: grises / blancos
+            "#ffffff", "#e0e0e0", "#bdbdbd", "#9e9e9e",
+            "#757575", "#616161", "#424242", "#212121",
+            "#101010", "#000000",
+        ]
+
+        grid = tk.Frame(win, bg=COLOR_BG)
+        grid.pack(padx=12, pady=4)
+
+        def make_picker(color):
+            def _pick(event=None):
+                self.channels[ch_idx]["color"] = color
+                self._rebuild_channels_panel()
+                self.update_plot()
+                self._mark_dirty()
+                win.destroy()
+            return _pick
+
+        COLS = 10
+        for i, color in enumerate(palette):
+            r, c = divmod(i, COLS)
+            sq = tk.Frame(
+                grid, bg=color,
+                width=24, height=24,
+                highlightbackground=COLOR_BORDER,
+                highlightcolor=COLOR_ACCENT,
+                highlightthickness=1,
+                cursor="hand2",
+            )
+            sq.grid(row=r, column=c, padx=1, pady=1)
+            sq.bind("<Button-1>", make_picker(color))
+            # Hover feedback (bordecillo azul al pasar encima)
+            sq.bind("<Enter>", lambda e, s=sq: s.config(highlightthickness=2, highlightbackground=COLOR_ACCENT))
+            sq.bind("<Leave>", lambda e, s=sq: s.config(highlightthickness=1, highlightbackground=COLOR_BORDER))
+
+        # Botón Cancel
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(pady=(10, 12))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack()
+
+        # Centrar sobre la root (con fallback a pantalla)
+        win.update_idletasks()
+        rw_min = win.winfo_reqwidth()
+        rh_min = win.winfo_reqheight()
+        rx = self.root.winfo_rootx()
+        ry = self.root.winfo_rooty()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+        if rw < rw_min + 40 or rh < rh_min + 40:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            x = (sw - rw_min) // 2
+            y = (sh - rh_min) // 2
+        else:
+            x = rx + (rw - rw_min) // 2
+            y = ry + (rh - rh_min) // 2
+        win.geometry(f"+{x}+{y}")
+
+
+    # -----------------------------
+    # Unidades de canal (v1.29)
+    # -----------------------------
+    def _ch_unit(self, ch_idx):
+        """Devuelve la unidad del canal `ch_idx` con fallback al default.
+
+        Backward-compat: canales cargados de sesiones <v1.29 no traen
+        la clave 'unit'; en ese caso devolvemos DEFAULT_UNIT ('V')."""
+        if not (0 <= ch_idx < len(self.channels)):
+            return DEFAULT_UNIT
+        return self.channels[ch_idx].get("unit", DEFAULT_UNIT)
+
+    def _active_unit(self):
+        """Unidad del canal activo (helper para ticks Y, V/div, cursores)."""
+        return self._ch_unit(self.active_channel_idx)
+
+    def _update_v_div_display(self):
+        """Refresca la StringVar del label V/div con la unidad del canal
+        activo. Útil cuando solo cambia la unidad (sin tocar el valor)."""
+        try:
+            self.v_div_display.set(
+                format_si(self.v_div.get(), self._active_unit()))
+        except Exception:
+            pass
+
+    def _open_unit_picker_dialog(self, ch_idx):
+        """Diálogo modal para elegir la unidad del canal `ch_idx`.
+
+        Grid 5x5 de botones-casilla con la unidad actual marcada. El
+        cambio se aplica solo al confirmar con OK (no en vivo).
+        """
+        if not (0 <= ch_idx < len(self.channels)):
+            return
+
+        current = self._ch_unit(ch_idx)
+        # Selección pendiente (no se aplica hasta OK).
+        selected = {"unit": current}
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title(f"Unit — {self.channels[ch_idx].get('name', f'CH{ch_idx+1}')}")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+        # Geometry PRIMERO, transient DESPUÉS (patrón anti-fantasma).
+        self._center_dialog(win, 380, 440)
+        win.transient(self.root)
+        win.grab_set()
+        self._apply_window_chrome(win)
+        self._bind_escape_to_close(win)
+
+        # Header
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=40)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
+        tk.Label(
+            hdr, text="CHANNEL UNIT",
+            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(side=tk.LEFT, padx=14, pady=10)
+
+        # Grid de botones
+        grid = tk.Frame(win, bg=COLOR_BG)
+        grid.pack(padx=14, pady=12)
+
+        cells = {}  # unit -> Label widget
+
+        def refresh_styles():
+            for u, w in cells.items():
+                if u == selected["unit"]:
+                    w.config(bg=COLOR_ACCENT, fg="#000000",
+                             relief="sunken",
+                             highlightbackground=COLOR_ACCENT)
+                else:
+                    w.config(bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                             relief="solid",
+                             highlightbackground=COLOR_BORDER)
+
+        def make_pick(unit):
+            def _pick(_e=None):
+                selected["unit"] = unit
+                refresh_styles()
+            return _pick
+
+        def make_hover(w, unit):
+            def _enter(_e):
+                if selected["unit"] != unit:
+                    w.config(bg=COLOR_BG_HOVER)
+            def _leave(_e):
+                if selected["unit"] != unit:
+                    w.config(bg=COLOR_BG_ALT)
+            return _enter, _leave
+
+        # Layout 5x5 — itera CHANNEL_UNITS y rellena huecos vacíos.
+        ROWS, COLS = 5, 5
+        for idx in range(ROWS * COLS):
+            r = idx // COLS
+            c = idx % COLS
+            if idx < len(CHANNEL_UNITS):
+                u = CHANNEL_UNITS[idx]
+                cell = tk.Label(
+                    grid, text=u,
+                    bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                    font=("Segoe UI", 11, "bold"),
+                    cursor="hand2",
+                    width=4, height=2,
+                    bd=1, relief="solid",
+                    highlightbackground=COLOR_BORDER,
+                    highlightthickness=1,
+                )
+                cell.grid(row=r, column=c, padx=3, pady=3)
+                cell.bind("<Button-1>", make_pick(u))
+                e, l = make_hover(cell, u)
+                cell.bind("<Enter>", e)
+                cell.bind("<Leave>", l)
+                cells[u] = cell
+            else:
+                # Hueco vacío — placeholder invisible para mantener layout
+                tk.Label(grid, text="", bg=COLOR_BG,
+                         width=4, height=2).grid(row=r, column=c, padx=3, pady=3)
+
+        refresh_styles()
+
+        # Bottom bar
+        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=12)
+
+        def on_cancel():
+            win.destroy()
+
+        def on_ok():
+            new_unit = selected["unit"]
+            if new_unit != current:
+                self.channels[ch_idx]["unit"] = new_unit
+                self._mark_dirty()
+                # Forzar full redraw para que ticks, V/div label y cursores
+                # se rebuilden con la nueva unidad.
+                self._last_structure_fingerprint = None
+                self._update_v_div_display()
+                self._rebuild_channels_panel()
+                self.update_plot()
+            win.destroy()
+
+        ttk.Button(bottom, text="Cancel",
+                   command=on_cancel).pack(side=tk.RIGHT)
+        ttk.Button(bottom, text="OK", style="Accent.TButton",
+                   command=on_ok).pack(side=tk.RIGHT, padx=(0, 6))
+
+        # Enter = OK
+        win.bind("<Return>", lambda _e: on_ok())
+
+    # -----------------------------
+    # Save image as...
+    # -----------------------------
+    def _snap_channel_gnd_to_grid(self, ch_idx):
+        """Ajusta el v_offset del canal para que su 0V caiga exactamente
+        sobre la división vertical más cercana a su posición actual."""
+        if not (0 <= ch_idx < len(self.channels)):
+            return
+        ch = self.channels[ch_idx]
+        v_div_active = self.v_div.get()
+        if v_div_active <= 0 or ch["v_div"] <= 0:
+            return
+        # Posición pantalla actual del 0V del canal
+        y_gnd_screen = (-ch["v_offset"] / ch["v_div"]) * v_div_active
+        # División más cercana
+        snapped = round(y_gnd_screen / v_div_active) * v_div_active
+        # Clamp a ±4 divisiones para no salir del rango del slider
+        max_y = v_div_active * (V_DIVS / 2 - 1)
+        snapped = max(-max_y, min(max_y, snapped))
+        # Calcular nuevo offset
+        new_offset = -snapped / v_div_active * ch["v_div"]
+        ch["v_offset"] = new_offset
+        # Si es el canal activo, sincronizar var + slider
+        if ch_idx == self.active_channel_idx:
+            self.v_offset.set(new_offset)
+            try:
+                self.v_slider.set(-new_offset)
+            except Exception:
+                pass
+        self.update_plot()
+
+    # =============================
+    # MATH channels
+    # =============================
+    def _real_channels(self):
+        """Lista de (idx, ch) de canales NO-MATH en orden de self.channels."""
+        return [(i, ch) for i, ch in enumerate(self.channels) if "math" not in ch]
+
+    def _ch_ref_map(self):
+        """Dict idx_CH_1based -> índice real en self.channels."""
+        return {i + 1: idx for i, (idx, ch) in enumerate(self._real_channels())}
+
+    def _m_ref_map(self):
+        """Dict idx_M_1based -> índice en self.channels."""
+        return {i + 1: idx for i, idx in enumerate(self.math_order)}
+
+    def _resolve_refs(self, ast):
+        """Recorre el AST y convierte ('ref', kind, user_idx) a índices
+        reales en self.channels. Devuelve (ast_resuelto, falta_de_datos_msg|None).
+        Los user_idx son 0-based (como dan los tokens)."""
+        ch_map = self._ch_ref_map()  # 1-based user -> idx channels
+        m_map = self._m_ref_map()
+
+        def resolve(n):
+            tag = n[0]
+            if tag in ("num",):
+                return n
+            if tag == "ref":
+                kind = n[1]; user_idx = n[2] + 1
+                src_map = ch_map if kind == "CH" else m_map
+                if user_idx not in src_map:
+                    raise ValueError(f"{kind}{user_idx} does not exist")
+                real_idx = src_map[user_idx]
+                # guardamos como ('ref_real', real_idx)
+                return ("ref_real", real_idx)
+            if tag == "neg":
+                return ("neg", resolve(n[1]))
+            if tag == "bin":
+                return ("bin", n[1], resolve(n[2]), resolve(n[3]))
+            if tag == "fn1":
+                return ("fn1", n[1], resolve(n[2]))
+            if tag == "fn2":
+                return ("fn2", n[1], resolve(n[2]), resolve(n[3]))
+            return n
+
+        return resolve(ast)
+
+    def _eval_resolved(self, ast):
+        """Evalúa AST ya resuelto (con ref_real)."""
+        t = self.time
+
+        def ev(n):
+            tag = n[0]
+            if tag == "num":
+                return np.full_like(t, n[1], dtype=float)
+            if tag == "ref_real":
+                return self.channels[n[1]]["voltage"]
+            if tag == "neg":
+                return -ev(n[1])
+            if tag == "bin":
+                a = ev(n[2]); b = ev(n[3])
+                if n[1] == "+": return a + b
+                if n[1] == "-": return a - b
+                if n[1] == "*": return a * b
+                if n[1] == "/":
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        return np.where(b != 0, a / b, 0.0)
+            if tag == "fn1":
+                x = ev(n[2]); fn = n[1]
+                if fn == "ABS":  return np.abs(x)
+                if fn == "POW":  return x * x
+                if fn == "SQRT":
+                    with np.errstate(invalid="ignore"):
+                        return np.sqrt(np.maximum(x, 0.0))
+                if fn == "INT":
+                    return np.concatenate(([0.0], np.cumsum(0.5 * (x[1:] + x[:-1]) * np.diff(t))))
+                if fn == "DIFF":
+                    return np.gradient(x, t)
+            if tag == "fn2":
+                a = ev(n[2]); b = ev(n[3])
+                if n[1] == "MIN": return np.minimum(a, b)
+                if n[1] == "MAX": return np.maximum(a, b)
+            raise ValueError(f"Bad node: {n}")
+
+        return ev(ast)
+
+    def _math_deps_resolved(self, ast):
+        """Devuelve set de índices (en self.channels) de los que depende
+        el AST ya resuelto."""
+        deps = set()
+        def walk(n):
+            tag = n[0]
+            if tag == "num": return
+            if tag == "ref_real": deps.add(n[1]); return
+            if tag == "neg": walk(n[1]); return
+            if tag in ("bin", "fn2"): walk(n[2]); walk(n[3]); return
+            if tag == "fn1": walk(n[2]); return
+        walk(ast)
+        return deps
+
+    def _math_would_create_cycle(self, target_idx, new_deps):
+        """¿Crear/editar la MATH en target_idx con las dependencias new_deps
+        crearía un ciclo en el grafo de canales MATH?
+
+        Algoritmo: DFS sobre las dependencias transitivas de new_deps. Si en
+        algún punto llegamos a target_idx, hay ciclo (porque entonces target_idx
+        dependería de sí mismo).
+
+        Parámetros:
+            target_idx : índice del canal MATH que se está creando/editando.
+                         Puede ser len(self.channels) si todavía no existe
+                         (no estará en self.channels), en cuyo caso solo se
+                         comprueba si target_idx es elemento de new_deps
+                         (autorefencia directa).
+            new_deps   : set de índices (en self.channels) de los que dependerá.
+
+        Devuelve True si hay ciclo.
+
+        Notas:
+        - Cualquier dep que apunte a un canal REAL (no MATH) no propaga, son
+          hojas del grafo.
+        - Si new_deps contiene índices fuera de rango, los ignoramos (deberían
+          haberse filtrado antes; aquí solo evitamos crashear).
+        """
+        # Autoreferencia directa
+        if target_idx in new_deps:
+            return True
+
+        # DFS
+        visited = set()
+        stack = list(new_deps)
+        while stack:
+            idx = stack.pop()
+            if idx in visited:
+                continue
+            visited.add(idx)
+            if idx == target_idx:
+                return True
+            # Solo seguir si idx es MATH (tiene deps propias)
+            if 0 <= idx < len(self.channels):
+                ch = self.channels[idx]
+                math = ch.get("math")
+                if math:
+                    transitive = math.get("deps_resolved", set())
+                    for d in transitive:
+                        if d not in visited:
+                            stack.append(d)
+        return False
+
+    def _recompute_math_channel(self, ch_idx):
+        """Recalcula el voltage de un canal MATH a partir de su AST."""
+        ch = self.channels[ch_idx]
+        if "math" not in ch:
+            return
+        try:
+            v = self._eval_resolved(ch["math"]["ast_resolved"])
+            ch["voltage"] = np.asarray(v, dtype=float)
+            ch["math"]["invalid"] = False
+        except Exception as e:
+            ch["math"]["invalid"] = True
+            ch["math"]["error"] = str(e)
+            ch["voltage"] = np.zeros_like(self.time) if self.time is not None else np.array([])
+
+    def _recompute_all_math(self):
+        """Recalcula todos los MATH en orden M1..M4 (los posteriores pueden
+        depender de los anteriores)."""
+        for idx in list(self.math_order):
+            if 0 <= idx < len(self.channels):
+                self._recompute_math_channel(idx)
+
+    def _recompute_math_depending_on(self, changed_idx):
+        """Recalcula los MATH que dependen (directa o transitivamente) del
+        canal changed_idx."""
+        dirty = {changed_idx}
+        for idx in self.math_order:
+            ch = self.channels[idx]
+            deps = ch["math"]["deps_resolved"]
+            if deps & dirty:
+                self._recompute_math_channel(idx)
+                dirty.add(idx)
+
+    def open_math_window(self):
+        """Ventana para crear un nuevo canal MATH."""
+        if self.time is None or not self._real_channels():
+            self._show_toast("Load a CSV first")
+            return
+        if len(self.math_order) >= self.MAX_MATH:
+            self._show_toast(f"Max {self.MAX_MATH} MATH channels reached")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("New MATH channel")
+        win.configure(bg=COLOR_BG)
+        # 720 de ancho garantiza que los 11 botones de la fila "Nums" entren
+        # con padding. El alto 500 sigue siendo suficiente para todo el contenido.
+        # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 720, 500, min_w=680, min_h=460)
+        self._apply_window_chrome(win)
+        win.grab_set()
+        # ESC cierra
+        self._bind_escape_to_close(win)
+
+        # Bottom bar reservada PRIMERO con side=BOTTOM. Si la packeáramos al
+        # final, Tk la pondría arriba (orden de llamada a pack manda, no el
+        # atributo side, cuando hay TOP+BOTTOM). Los botones se añaden más
+        # abajo a este frame ya packeado.
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+
+        tk.Label(win, text="Math expression",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(anchor="w", padx=14, pady=(14, 4))
+
+        expr_var = tk.StringVar(value="")
+        entry = ttk.Entry(win, textvariable=expr_var, font=("Consolas", 11))
+        entry.pack(fill=tk.X, padx=14, pady=(0, 6))
+        entry.focus_set()
+
+        status = tk.Label(win, text="Type an expression",
+                          bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                          font=("Segoe UI", 9), anchor="w", justify="left")
+        status.pack(fill=tk.X, padx=14, pady=(0, 6))
+
+        # Insertadores
+        def insert(text):
+            entry.insert(tk.INSERT, text)
+            entry.focus_set()
+
+        # Canales reales
+        pads = tk.Frame(win, bg=COLOR_BG)
+        pads.pack(fill=tk.X, padx=14, pady=(4, 0))
+
+        tk.Label(pads, text="Channels:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).grid(row=0, column=0, sticky="nw", pady=(4, 0))
+
+        # Lista combinada: primero CHs reales, luego MATH
+        chan_btns = []
+        for i, (_ridx, ch) in enumerate(self._real_channels()):
+            chan_btns.append((f"CH{i+1}", ch["name"], ch["color"]))
+        for i, midx in enumerate(self.math_order):
+            mch = self.channels[midx]
+            chan_btns.append((f"M{i+1}", mch["name"], mch["color"]))
+
+        CHANS_PER_ROW = 4
+        ch_grid = tk.Frame(pads, bg=COLOR_BG)
+        ch_grid.grid(row=0, column=1, columnspan=20, sticky="we", pady=(0, 4))
+        for idx, (tag, name, color) in enumerate(chan_btns):
+            r, c = divmod(idx, CHANS_PER_ROW)
+            # Etiqueta con flecha para evitar confusión con el operador '·' (multiplicación)
+            b = tk.Button(
+                ch_grid, text=f"{tag}  →  {name}",
+                bg=COLOR_BG_ALT, fg=color,
+                activebackground=COLOR_BG_HOVER,
+                activeforeground=color,
+                bd=1, relief="flat",
+                font=("Segoe UI", 9, "bold"),
+                padx=6, pady=3,
+                highlightbackground=COLOR_BORDER,
+                highlightthickness=1,
+                command=lambda s=tag: insert(s),
+            )
+            b.grid(row=r, column=c, padx=2, pady=2, sticky="we")
+            ch_grid.columnconfigure(c, weight=1)
+            self._add_hover_shadow(b)
+
+        tk.Label(pads, text="Ops:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        for j, op in enumerate(["+", "-", "*", "/", "(", ")"]):
+            ttk.Button(pads, text=op, width=4,
+                       command=lambda s=op: insert(s)
+                       ).grid(row=1, column=1 + j, padx=2, pady=(6, 0))
+
+        tk.Label(pads, text="Funcs:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        funcs_1 = [("INT", "INT("), ("DIFF", "DIFF("),
+                   ("ABS", "ABS("), ("POW", "POW("), ("SQRT", "SQRT(")]
+        funcs_2 = [("MIN", "MIN(,)"), ("MAX", "MAX(,)")]
+        for j, (lbl, tx) in enumerate(funcs_1 + funcs_2):
+            ttk.Button(pads, text=lbl, width=6,
+                       command=lambda s=tx: insert(s)
+                       ).grid(row=2, column=1 + j, padx=2, pady=(6, 0))
+
+        # Fila de números
+        tk.Label(pads, text="Nums:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).grid(row=3, column=0, sticky="w", pady=(6, 0))
+        nums = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "."]
+        for j, n in enumerate(nums):
+            ttk.Button(pads, text=n, width=3,
+                       command=lambda s=n: insert(s)
+                       ).grid(row=3, column=1 + j, padx=2, pady=(6, 0))
+
+        # Nombre + Unidad (v1.29)
+        name_frame = tk.Frame(win, bg=COLOR_BG)
+        name_frame.pack(fill=tk.X, padx=14, pady=(14, 0))
+        tk.Label(name_frame, text="Name:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT)
+        name_var = tk.StringVar(value="")
+        name_entry = ttk.Entry(name_frame, textvariable=name_var,
+                               font=("Segoe UI", 10))
+        name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+        tk.Label(name_frame, text="Unit:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(12, 4))
+        unit_var = tk.StringVar(value=DEFAULT_UNIT)
+        unit_combo = ttk.Combobox(
+            name_frame, textvariable=unit_var,
+            values=CHANNEL_UNITS, state="readonly",
+            width=5, font=("Segoe UI", 10),
+        )
+        unit_combo.pack(side=tk.LEFT)
+
+        # Validación en vivo
+        validation = {"ast": None, "ok": False}
+        name_touched = {"v": False}
+
+        def on_name_typed(*_):
+            name_touched["v"] = True
+        name_var.trace_add("write", on_name_typed)
+
+        def validate(*_):
+            expr = expr_var.get()
+            if not expr.strip():
+                status.config(text="Type an expression", fg=COLOR_TEXT_DIM)
+                validation["ast"] = None
+                validation["ok"] = False
+                if not name_touched["v"]:
+                    name_var.set("")
+                return
+            try:
+                ast = math_parse(expr)
+                resolved = self._resolve_refs(ast)
+                deps = self._math_deps_resolved(resolved)
+                # check ciclos: no puede depender de sí mismo (no aplica al crear
+                # nuevo porque aún no existe, pero lo dejamos preparado para edit)
+                status.config(
+                    text=f"✓ valid   (deps: {len(deps)} channel(s))",
+                    fg="#4caf50"
+                )
+                validation["ast"] = resolved
+                validation["ok"] = True
+                if not name_touched["v"]:
+                    # normalizar para el nombre
+                    name_var.trace_remove("write", name_trace_id[0])
+                    name_var.set(expr.upper().replace(" ", ""))
+                    name_trace_id[0] = name_var.trace_add("write", on_name_typed)
+            except ValueError as e:
+                status.config(text=f"✗ {e}", fg=COLOR_DANGER)
+                validation["ast"] = None
+                validation["ok"] = False
+
+        name_trace_id = [name_var.trace_add("write", on_name_typed)]
+        expr_var.trace_add("write", validate)
+
+        # Botones (btns ya fue packeado al principio para que quede abajo
+        # incluso si la ventana es muy pequeña)
+        def on_cancel():
+            win.destroy()
+
+        def on_create():
+            if not validation["ok"] or validation["ast"] is None:
+                return
+            expr = expr_var.get().strip()
+            name = name_var.get().strip() or expr.upper().replace(" ", "")
+            unit = unit_var.get() or DEFAULT_UNIT
+            self._create_math_channel(expr, validation["ast"], name, unit=unit)
+            win.destroy()
+
+        ttk.Button(btns, text="Cancel", command=on_cancel).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Create", style="Accent.TButton",
+                   command=on_create).pack(side=tk.RIGHT, padx=(0, 6))
+
+        entry.bind("<Return>", lambda e: on_create())
+
+    def _create_math_channel(self, expr, ast_resolved, name, unit=DEFAULT_UNIT):
+        """Añade un canal MATH a self.channels y recalcula.
+
+        Retorna True si se creó, False si fue rechazado (p.ej. por ciclo).
+        `unit` (v1.29) es la etiqueta de unidad del canal, solo display.
+        """
+        deps = self._math_deps_resolved(ast_resolved)
+
+        # Defensa en profundidad: detección de ciclos. En el flujo normal
+        # de creación no debería ser posible (las refs apuntan a canales ya
+        # existentes), pero esto cubre dos casos no triviales:
+        #   1) Sesiones cargadas con dependencias circulares corruptas.
+        #   2) Una hipotética futura feature de edición de MATH.
+        # Si se detecta, abortamos sin tocar self.channels y avisamos.
+        target_idx = len(self.channels)
+        if self._math_would_create_cycle(target_idx, deps):
+            self._show_toast(f"Cannot create {name}: would form a cycle")
+            return False
+
+        # Color: toma el siguiente disponible (usamos el índice del canal como
+        # semilla estable)
+        next_idx = len(self.channels)
+        color = channel_color(next_idx)
+
+        ch = {
+            "_uid":     self._next_channel_uid,
+            "name":     name,
+            "color":    color,
+            "voltage":  np.zeros_like(self.time),
+            "visible":  tk.BooleanVar(value=True),
+            "v_div":    1.0,
+            "v_offset": 0.0,
+            "unit":     unit,
+            "math": {
+                "expr":          expr,
+                "ast_resolved":  ast_resolved,
+                "deps_resolved": deps,
+                "invalid":       False,
+                "error":         None,
+            },
+        }
+        self._next_channel_uid += 1
+        ch["visible"].trace_add(
+            "write", lambda *a: (self.update_plot(), self._mark_dirty()))
+        self.channels.append(ch)
+        self.math_order.append(len(self.channels) - 1)
+
+        # Calcular
+        self._recompute_math_channel(len(self.channels) - 1)
+
+        # Auto-scale razonable
+        v = ch["voltage"]
+        if len(v) > 0 and np.all(np.isfinite(v)):
+            vmax = float(np.max(np.abs(v)))
+            if vmax > 0:
+                ch["v_div"] = max(vmax / (V_DIVS / 2), 1e-9)
+
+        self._rebuild_channels_panel()
+        self.update_plot()
+        self._show_toast(f"Created {name}")
+        self._mark_dirty()
+        return True
+
+    def _math_dependents_of(self, ch_idx):
+        """Devuelve lista de índices MATH que dependen (directa o
+        transitivamente) de ch_idx."""
+        dependents = []
+        dirty = {ch_idx}
+        for midx in self.math_order:
+            if midx == ch_idx:
+                continue
+            deps = self.channels[midx]["math"]["deps_resolved"]
+            if deps & dirty:
+                dependents.append(midx)
+                dirty.add(midx)
+        return dependents
+
+    def _delete_math_channel(self, ch_idx):
+        """Borra un canal MATH. Si hay otros MATH que dependen de él,
+        pregunta al usuario si borrarlos en cascada.
+
+        Mantenido por compatibilidad — el código nuevo debería llamar a
+        _delete_channel(idx), que maneja correctamente tanto MATH como
+        canales de datos."""
+        return self._delete_channel(ch_idx)
+
+    def _delete_channel(self, ch_idx):
+        """Borra cualquier canal (data o MATH) del listado.
+
+        Reglas:
+        - Si hay canales MATH que dependen del que se borra (referencian
+          su voltaje vía la fórmula), se propone borrado en cascada.
+        - Si se borra el último canal, la app vuelve al estado "sin datos
+          cargados" (igual que arranque limpio): self.time/voltage = None
+          y panel mostrando "No CSV loaded".
+        """
+        if ch_idx < 0 or ch_idx >= len(self.channels):
+            return
+        ch = self.channels[ch_idx]
+        is_math = "math" in ch
+
+        # Detectar MATH dependientes — un MATH puede referenciar tanto a
+        # otro MATH como a un canal de datos.
+        dependents = self._math_dependents_of(ch_idx)
+        if dependents:
+            names = [self.channels[d]["name"] for d in dependents]
+            if not self._ask_delete_cascade(ch["name"], names):
+                return
+            to_delete = sorted(dependents + [ch_idx], reverse=True)
+        else:
+            to_delete = [ch_idx]
+
+        will_be_empty = (len(self.channels) - len(to_delete)) == 0
+
+        self._delete_channels_by_indices(to_delete)
+
+        if will_be_empty:
+            # Vaciar también el resto del estado para que la app vuelva
+            # al modo "sin datos". Esto es útil porque si dejamos
+            # self.time y self.voltage con valores antiguos, las medidas
+            # y FFT siguen "pensando" que hay datos pero no hay canales
+            # — comportamiento inconsistente.
+            self.time = None
+            self.voltage = None
+            self.active_channel_idx = 0
+            self._rebuild_channels_panel()
+            try:
+                self._rebuild_measurements_panel()
+            except Exception:
+                pass
+            try:
+                self.update_plot()
+            except Exception:
+                pass
+            self._show_toast("All channels removed — no data loaded")
+            return
+
+        if len(to_delete) > 1:
+            self._show_toast(f"Deleted {len(to_delete)} channel(s)")
+        else:
+            kind = "MATH" if is_math else "data"
+            self._show_toast(f"Deleted {kind} channel")
+        self._mark_dirty()
+
+    def _delete_channels_by_indices(self, indices_desc):
+        """Borra canales de self.channels en orden descendente de índices.
+        Actualiza math_order y resuelve referencias (el ast_resolved guarda
+        índices reales, así que hay que remapear)."""
+        indices_desc = sorted(indices_desc, reverse=True)
+
+        # Mapa viejo_idx -> nuevo_idx para remapear referencias de AST
+        idx_map = {}
+        new_idx = 0
+        for old_idx in range(len(self.channels)):
+            if old_idx in indices_desc:
+                idx_map[old_idx] = None  # borrado
+            else:
+                idx_map[old_idx] = new_idx
+                new_idx += 1
+
+        # Borrar
+        for idx in indices_desc:
+            del self.channels[idx]
+
+        # Remapear math_order
+        self.math_order = [idx_map[i] for i in self.math_order if idx_map.get(i) is not None]
+
+        # Remapear AST de MATH restantes
+        def remap(n):
+            tag = n[0]
+            if tag == "num": return n
+            if tag == "ref_real":
+                new = idx_map.get(n[1])
+                if new is None:
+                    raise ValueError("dependency deleted")
+                return ("ref_real", new)
+            if tag == "neg": return ("neg", remap(n[1]))
+            if tag == "bin": return ("bin", n[1], remap(n[2]), remap(n[3]))
+            if tag == "fn1": return ("fn1", n[1], remap(n[2]))
+            if tag == "fn2": return ("fn2", n[1], remap(n[2]), remap(n[3]))
+            return n
+
+        for midx in self.math_order:
+            ch = self.channels[midx]
+            try:
+                ch["math"]["ast_resolved"] = remap(ch["math"]["ast_resolved"])
+                ch["math"]["deps_resolved"] = self._math_deps_resolved(ch["math"]["ast_resolved"])
+            except Exception as e:
+                ch["math"]["invalid"] = True
+                ch["math"]["error"] = str(e)
+
+        # Ajustar active_channel_idx si fue borrado o quedó fuera de rango
+        if self.active_channel_idx >= len(self.channels):
+            self.active_channel_idx = max(0, len(self.channels) - 1)
+
+        # Limpiar measurements que apunten a canales borrados y reasignar índices
+        new_meas = []
+        for m in self.active_measurements:
+            old = m.get("channel_idx", 0)
+            new = idx_map.get(old)
+            if new is not None:
+                m["channel_idx"] = new
+                new_meas.append(m)
+        self.active_measurements = new_meas
+
+        self._rebuild_channels_panel()
+        self._rebuild_measurements_panel()
+        self.update_plot()
+
+    def _ask_delete_cascade(self, ch_name, dependent_names):
+        """Diálogo modal: confirmar borrado en cascada."""
+        result = {"ok": False}
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Delete MATH channel")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 420, 200)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(
+            win, text=f"Delete {ch_name}?",
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(padx=14, pady=(14, 4), anchor="w")
+
+        dep_list = ", ".join(dependent_names)
+        tk.Label(
+            win,
+            text=f"The following MATH channel(s) depend on it and will\n"
+                 f"also be deleted:\n\n   {dep_list}",
+            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9), justify="left"
+        ).pack(padx=14, pady=(0, 10), anchor="w")
+
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+
+        def do_ok():
+            result["ok"] = True
+            win.destroy()
+
+        def do_cancel():
+            result["ok"] = False
+            win.destroy()
+
+        ttk.Button(btns, text="Cancel", command=do_cancel).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Delete all", style="Accent.TButton",
+                   command=do_ok).pack(side=tk.RIGHT, padx=(0, 6))
+
+        self.root.wait_window(win)
+        return result["ok"]
+
+    # =====================================================
+    # About dialog
+    # =====================================================
+    # NOTA: para personalizar el contenido del Acerca de... (versión,
+    # autor, descripción, enlaces...), edita los strings de este método.
+    # Las claves de configuración están agrupadas en la parte superior
+    # para facilitar el cambio sin tener que tocar la lógica de layout.
+
+    def _open_about_window(self):
+        """Ventana modal "About" con información de la aplicación."""
+
+        # === EDITA AQUÍ los textos del Acerca de... ===
+        APP_NAME      = "Oscilloscope CSV Viewer"
+        APP_VERSION   = "1.24"
+        APP_AUTHOR    = "Jotapeveloper"
+        APP_DESCRIPTION = (
+            "Offline visualizer for oscilloscope CSV captures. "
+            "Supports Tektronix, Keysight, R&S, Rigol, Siglent, Hantek, "
+            "LeCroy, PicoScope and OWON formats among others.\n\n"
+            "Features include math channels, measurements, FFT analysis "
+            "with harmonics & THD, eye diagrams, protocol decoding "
+            "(UART / I²C / SPI / LIN / I²S / CAN / CAN FD / J1939 / SDIO / "
+            "MIL-STD-1553 / ARINC 429), annotations and full session save/load."
+        )
+        APP_HOMEPAGE  = ""   # ej: "https://github.com/yourname/scope-viewer"
+        APP_LICENSE   = "Personal use"
+        # === fin de la zona editable ===
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("About")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 480, 380, min_w=440, min_h=320)
+        self._apply_window_chrome(win)
+        win.grab_set()
+        self._bind_escape_to_close(win)
+
+        # Bottom bar primero para que el botón Close quede siempre visible
+        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+
+        # Logo / nombre prominente
+        title_lbl = tk.Label(
+            win, text=APP_NAME,
+            bg=COLOR_BG, fg=COLOR_ACCENT,
+            font=("Segoe UI", 16, "bold"),
+        )
+        title_lbl.pack(pady=(20, 4))
+
+        version_lbl = tk.Label(
+            win, text=f"Version {APP_VERSION}",
+            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            font=("Segoe UI", 10),
+        )
+        version_lbl.pack(pady=(0, 14))
+
+        # Descripción
+        desc = tk.Label(
+            win, text=APP_DESCRIPTION,
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 9),
+            wraplength=420, justify="center",
+        )
+        desc.pack(padx=20, pady=4)
+
+        # Info adicional
+        info_frame = tk.Frame(win, bg=COLOR_BG)
+        info_frame.pack(pady=(14, 4))
+
+        def info_row(label, value):
+            row = tk.Frame(info_frame, bg=COLOR_BG)
+            row.pack(anchor="center", pady=1)
+            tk.Label(row, text=label, bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                     font=("Segoe UI", 9)).pack(side=tk.LEFT)
+            tk.Label(row, text=value, bg=COLOR_BG, fg=COLOR_TEXT,
+                     font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(4, 0))
+
+        info_row("Author:",  APP_AUTHOR)
+        info_row("License:", APP_LICENSE)
+        if APP_HOMEPAGE:
+            info_row("Web:",  APP_HOMEPAGE)
+
+        # Close button
+        ttk.Button(bottom, text="Close", command=win.destroy,
+                   style="Accent.TButton"
+                   ).pack(side=tk.RIGHT)
+
+    def _open_grid_view_window(self):
+        """Ventana para editar la apariencia: tema global de la app + colores
+        finos del plot del osciloscopio."""
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Settings")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 440, 680, min_w=400, min_h=480)
+        self._apply_window_chrome(win)
+        win.grab_set()
+        # Cleanup del callback de swatch refresh (v1.29) al cerrar con Esc.
+        def _close_with_cleanup():
+            self._appearance_swatch_refresh = None
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        self._bind_escape_to_close(win, on_close=_close_with_cleanup)
+
+        # Layout: contenido scrollable arriba, bottom bar fija abajo.
+        # El botón Close se packea en `bottom` y queda SIEMPRE visible
+        # aunque la ventana sea más pequeña que el contenido.
+        content, bottom = self._make_scrollable_dialog(win)
+
+        # =====================
+        # Sección 1: Tema global
+        # =====================
+        tk.Label(content, text="App theme",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(anchor="w", padx=14, pady=(14, 4))
+
+        tk.Label(content,
+                 text="Changes colors of the whole UI. Plot colors below "
+                      "are synchronized to the chosen theme.",
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 8), justify="left", wraplength=400
+                 ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        theme_frame = tk.Frame(content, bg=COLOR_BG)
+        theme_frame.pack(fill=tk.X, padx=14, pady=(0, 4))
+
+        # Botones-swatch para cada tema. Visualmente preview del color de fondo
+        # con el texto del tema en su color de texto.
+        theme_buttons = {}
+        def make_theme_btn(parent, name):
+            t = THEMES[name]
+            # highlightthickness FIJO para todos los estados.
+            # Si lo cambiamos según activo/inactivo, el botón crece/encoge y
+            # los demás botones del grid se reflowan — efecto "salto" feo al
+            # cambiar tema. Mantenemos un borde constante y solo variamos su
+            # color (ACCENT cuando activo, BORDER cuando inactivo).
+            b = tk.Button(
+                parent, text=name,
+                bg=t["BG_ALT"], fg=t["TEXT"],
+                activebackground=t["BG_HOVER"],
+                activeforeground=t["TEXT"],
+                bd=2, relief="flat",
+                font=("Segoe UI", 9, "bold"),
+                padx=10, pady=8,
+                highlightbackground=t["ACCENT"] if name == CURRENT_THEME_NAME else t["BORDER"],
+                highlightthickness=3,
+                command=lambda n=name: choose_theme(n),
+            )
+            # Estos botones SON una muestra/preview del tema correspondiente:
+            # los colores deben permanecer fijos (los del tema que representan)
+            # incluso cuando el usuario cambia el tema activo. La marca
+            # _theme_protected hace que _retheme_tk_widgets() y el barrido
+            # ligero del fade los ignoren. El highlightbackground (que sí
+            # cambia para indicar cuál está activo) se gestiona aparte vía
+            # refresh_theme_buttons() y no pasa por el barrido.
+            b._theme_protected = True
+            return b
+
+        def refresh_theme_buttons():
+            # Solo cambia el COLOR del borde, NO su grosor (el grosor es
+            # fijo en make_theme_btn). Cambiar grosor causa que el botón
+            # crezca/encoja y reflowea el grid → efecto "salto".
+            for n, btn in theme_buttons.items():
+                t = THEMES[n]
+                is_active = (n == CURRENT_THEME_NAME)
+                btn.config(
+                    highlightbackground=t["ACCENT"] if is_active else t["BORDER"],
+                )
+
+        def choose_theme(name):
+            self.apply_theme_runtime(name, sync_plot=True)
+            # Refrescar la propia ventana
+            try:
+                win.configure(bg=COLOR_BG)
+                refresh_theme_buttons()
+                refresh_swatches()
+                # Rerender de etiquetas de la propia ventana
+                _retheme_tk_widgets(win)
+            except Exception:
+                pass
+
+        names = list(THEMES.keys())
+        for i, n in enumerate(names):
+            b = make_theme_btn(theme_frame, n)
+            theme_buttons[n] = b
+            b.grid(row=i // 2, column=i % 2, padx=4, pady=4, sticky="we")
+            theme_frame.columnconfigure(i % 2, weight=1)
+
+        ttk.Separator(content, orient="horizontal").pack(fill=tk.X, padx=14, pady=10)
+
+        # =====================
+        # Sección 1.5: Time axis
+        # =====================
+        # Control de cómo se muestra el eje temporal. Capturas de osciloscopios
+        # físicos suelen traer pre-trigger negativo. Internamente la app siempre
+        # normaliza a t=0 para simplificar; aquí elegimos qué mostrar al usuario.
+        tk.Label(content, text="Time axis",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(anchor="w", padx=14, pady=(4, 4))
+
+        tk.Label(content,
+                 text="How the time axis labels are displayed. Internally the "
+                      "data is always referenced from 0; this only changes "
+                      "what you see in the X-axis ticks, cursors and the "
+                      "decoder table.",
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 8), justify="left", wraplength=400
+                 ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        time_axis_frame = tk.Frame(content, bg=COLOR_BG)
+        time_axis_frame.pack(fill=tk.X, padx=14, pady=(0, 4))
+
+        # Usamos un StringVar interno como "radio" para garantizar mutua
+        # exclusión. La elección se sincroniza con self.time_show_absolute
+        # (BooleanVar) que es lo que consulta _t_display_origin().
+        ta_radio_var = tk.StringVar(
+            value=("absolute" if self.time_show_absolute.get() else "relative"))
+
+        def _apply_time_axis_choice(*_):
+            is_abs = (ta_radio_var.get() == "absolute")
+            self.time_show_absolute.set(is_abs)
+            # Persistir en config.json para que se recuerde en la próxima
+            # sesión sin necesidad de guardar/cargar manualmente.
+            try:
+                save_user_config({"time_show_absolute": bool(is_abs)})
+            except Exception:
+                pass
+            # Repintar el plot para que el cambio se vea inmediatamente.
+            try:
+                self.update_plot()
+            except Exception:
+                pass
+            # Refrescar disponibilidad del botón "Snap horizontal to t=0"
+            # (solo tiene sentido en modo Absolute).
+            self._update_snap_t0_state()
+
+        rb_abs = ttk.Radiobutton(
+            time_axis_frame,
+            text="Absolute — show real times from the CSV (e.g. pre-trigger "
+                 "appears as negative)",
+            variable=ta_radio_var, value="absolute",
+            command=_apply_time_axis_choice,
+        )
+        rb_abs.pack(anchor="w", pady=2)
+
+        rb_rel = ttk.Radiobutton(
+            time_axis_frame,
+            text="Relative to start — first sample of the CSV is t = 0",
+            variable=ta_radio_var, value="relative",
+            command=_apply_time_axis_choice,
+        )
+        rb_rel.pack(anchor="w", pady=2)
+
+        ttk.Separator(content, orient="horizontal").pack(fill=tk.X, padx=14, pady=10)
+
+        # =====================
+        # Sección 2: Plot grid
+        # =====================
+        tk.Label(content, text="Plot grid (advanced)",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(anchor="w", padx=14, pady=(4, 4))
+
+        tk.Label(content,
+                 text="Fine-tune the oscilloscope plot independently of the app theme.",
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 8), justify="left", wraplength=400
+                 ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        # Presets de plot (legacy, dejados por si alguien los prefiere).
+        # Importante: todos los valores deben ser hex (#rrggbb), no nombres
+        # CSS ("white", "black"), porque al persistir + recargar el config
+        # se validan estrictamente como hex (ver __init__ de OscilloscopeApp).
+        presets = {
+            "Classic dark":  {"bg": "#000000", "grid_color": "#555555", "text_color": "#ffffff"},
+            "Classic light": {"bg": "#ffffff", "grid_color": "#888888", "text_color": "#000000"},
+            "Blueprint":     {"bg": "#0a2540", "grid_color": "#5fa8d3", "text_color": "#e8f4ff"},
+            "Phosphor":      {"bg": "#0a1a0a", "grid_color": "#2d5a2d", "text_color": "#7fff7f"},
+        }
+
+        tk.Label(content, text="Plot presets:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=14, pady=(4, 2))
+
+        preset_frame = tk.Frame(content, bg=COLOR_BG)
+        preset_frame.pack(fill=tk.X, padx=14, pady=(0, 10))
+
+        def apply_preset(p):
+            self.grid_theme.update(p)
+            # Persistir el grid_theme completo en config.json para que el
+            # preset elegido se conserve al reabrir la app. Misma lógica
+            # que cuando el usuario edita un color individual en pick_color.
+            try:
+                save_user_config({"grid_theme": dict(self.grid_theme)})
+            except Exception:
+                pass
+            refresh_swatches()
+            self.update_plot()
+            # v1.29: grid_theme es preferencia personal, NO marca dirty.
+
+        for i, (name, p) in enumerate(presets.items()):
+            b = tk.Button(
+                preset_frame, text=name,
+                bg=p["bg"], fg=p["text_color"],
+                activebackground=p["bg"],
+                activeforeground=p["text_color"],
+                bd=1, relief="flat",
+                font=("Segoe UI", 9, "bold"),
+                padx=8, pady=4,
+                highlightbackground=p["grid_color"],
+                highlightthickness=1,
+                command=lambda pp=p: apply_preset(pp),
+            )
+            # Igual que los botones del selector de tema en Appearance:
+            # estos son muestras visuales del preset que representan, y sus
+            # colores deben permanecer fijos al cambiar el tema activo.
+            # _theme_protected hace que _retheme_tk_widgets() y el barrido
+            # ligero del fade los ignoren.
+            b._theme_protected = True
+            b.grid(row=i // 2, column=i % 2, padx=3, pady=3, sticky="we")
+            preset_frame.columnconfigure(i % 2, weight=1)
+
+        # Editores individuales
+        tk.Label(content, text="Custom:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=14, pady=(4, 2))
+
+        custom_frame = tk.Frame(content, bg=COLOR_BG)
+        custom_frame.pack(fill=tk.X, padx=14, pady=(0, 10))
+
+        swatches = {}
+
+        def pick_color(key, label):
+            from tkinter import colorchooser
+            initial = self.grid_theme.get(key, "#000000")
+            color = colorchooser.askcolor(initial, parent=win, title=f"Pick {label}")
+            if color and color[1]:
+                self.grid_theme[key] = color[1]
+                # Persistir el grid_theme completo en config.json para que
+                # se recuerden los colores personalizados al reabrir la app.
+                try:
+                    save_user_config({"grid_theme": dict(self.grid_theme)})
+                except Exception:
+                    pass
+                refresh_swatches()
+                self.update_plot()
+                # v1.29: grid_theme es preferencia personal, NO marca dirty.
+
+        def refresh_swatches():
+            for key, lbl in swatches.items():
+                try:
+                    lbl.config(bg=self.grid_theme.get(key, "#000000"))
+                except Exception:
+                    # widgets ya destruidos (ventana cerrada)
+                    pass
+
+        # v1.29: registrar callback para que _apply_theme_immediate refresque
+        # los swatches cuando el fade de tema termine. Sin esto, los swatches
+        # quedaban con el color residual del tema previo.
+        self._appearance_swatch_refresh = refresh_swatches
+        def _on_close_appearance():
+            self._appearance_swatch_refresh = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", _on_close_appearance)
+
+        for i, (key, label) in enumerate([
+            ("bg",         "Background"),
+            ("grid_color", "Grid lines"),
+            ("text_color", "Text / axis"),
+        ]):
+            row = tk.Frame(custom_frame, bg=COLOR_BG)
+            row.pack(fill=tk.X, pady=3)
+            tk.Label(row, text=label, bg=COLOR_BG, fg=COLOR_TEXT,
+                     font=("Segoe UI", 9), width=14, anchor="w"
+                     ).pack(side=tk.LEFT)
+            sw = tk.Label(row, bg=self.grid_theme[key], width=4, height=1,
+                          relief="flat", bd=1,
+                          highlightbackground=COLOR_BORDER, highlightthickness=1,
+                          cursor="hand2")
+            sw.pack(side=tk.LEFT, padx=(0, 8))
+            sw.bind("<Button-1>", lambda e, k=key, l=label: pick_color(k, l))
+            swatches[key] = sw
+            ttk.Button(row, text="Pick...",
+                       command=lambda k=key, l=label: pick_color(k, l)
+                       ).pack(side=tk.LEFT)
+
+        # =====================
+        # Sección 3: Phosphor intensity grading (v1.27)
+        # =====================
+        ttk.Separator(content, orient="horizontal").pack(fill=tk.X, padx=14, pady=10)
+
+        tk.Label(content, text="Phosphor (intensity grading)",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(anchor="w", padx=14, pady=(4, 4))
+
+        tk.Label(content,
+                 text=("Emulates a CRT phosphor: trace alpha varies with "
+                       "|dV/dt|. Flat segments stay bright, fast edges fade. "
+                       "Disables the fast-redraw path while on, so it is "
+                       "slightly heavier on the CPU."),
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 8), justify="left", wraplength=400
+                 ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        phos_frame = tk.Frame(content, bg=COLOR_BG)
+        phos_frame.pack(fill=tk.X, padx=14, pady=(0, 4))
+
+        # Toggle enable — la variable ya está enlazada con el trace que
+        # persiste a config.json y fuerza redraw, así que solo packeamos
+        # un Checkbutton normal.
+        phos_check = ttk.Checkbutton(
+            phos_frame, text="Enable phosphor mode",
+            variable=self.phosphor_enabled,
+        )
+        phos_check.pack(anchor="w", pady=(0, 6))
+        try:
+            Tooltip(phos_check,
+                    "Toggle the CRT-style intensity grading on the plot.\n"
+                    "Persisted across sessions.")
+        except Exception:
+            pass
+
+        # Slider de intensidad. tk.Scale opera sobre DoubleVar; el rango
+        # interno es 0..100 (entero, más cómodo para el usuario), pero
+        # mapeamos a 0..1 que es lo que consume el render.
+        # Para no acoplar la lógica de mapping con el trace de persistencia
+        # usamos una StringVar "display" intermedia + un wrapper.
+        sl_row = tk.Frame(phos_frame, bg=COLOR_BG)
+        sl_row.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(sl_row, text="Intensity:",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9), width=10, anchor="w"
+                 ).pack(side=tk.LEFT)
+
+        pct_var = tk.IntVar(value=int(round(self.phosphor_intensity.get() * 100)))
+        pct_label = tk.Label(sl_row, text=f"{pct_var.get():3d}%",
+                             bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                             font=("Segoe UI", 9), width=5, anchor="e")
+
+        def _on_pct_change(_v=None):
+            pct = int(pct_var.get())
+            pct_label.config(text=f"{pct:3d}%")
+            self.phosphor_intensity.set(pct / 100.0)
+
+        scale = tk.Scale(
+            sl_row, from_=0, to=100, orient=tk.HORIZONTAL,
+            variable=pct_var, command=_on_pct_change,
+            showvalue=False, length=240,
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            troughcolor=COLOR_BG_ALT, activebackground=COLOR_ACCENT,
+            highlightthickness=0, bd=0,
+        )
+        scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 6))
+        pct_label.pack(side=tk.LEFT)
+        try:
+            Tooltip(scale,
+                    "0%  = no effect (uniform brightness).\n"
+                    "100% = maximum dimming on fast slopes.")
+        except Exception:
+            pass
+
+        # Close — packeado en la bottom bar fija, siempre visible
+        ttk.Button(bottom, text="Close", command=win.destroy
+                   ).pack(side=tk.RIGHT)
+        # Commands legend (v1.30): atajos de teclado en dialog informativo
+        ttk.Button(
+            bottom, text="Commands legend",
+            command=self._open_commands_legend_dialog,
+        ).pack(side=tk.LEFT)
+
+    def _open_commands_legend_dialog(self):
+        """Diálogo informativo con la lista completa de atajos de teclado.
+        Solo lectura: Close cierra."""
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Commands legend")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+        # Geometry PRIMERO, transient DESPUÉS (anti-fantasma).
+        self._center_dialog(win, 560, 680)
+        self._apply_window_chrome(win)
+        win.grab_set()
+        self._bind_escape_to_close(win)
+
+        # Header
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=40)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
+        tk.Label(
+            hdr, text="KEYBOARD SHORTCUTS",
+            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(side=tk.LEFT, padx=14, pady=10)
+
+        # Lista de (sección, [(keys, descripción), ...])
+        SECTIONS = [
+            ("Channel", [
+                ("1 – 9",         "Set active channel (1 → CH1, …)"),
+                ("Ctrl+1 – Ctrl+9", "Toggle channel visibility"),
+                ("U",             "Open unit picker for the active channel"),
+                ("G",             "Snap channel ground to the nearest grid line"),
+                ("0",             "Center the active channel on the origin"),
+            ]),
+            ("View", [
+                ("←  / →",            "Pan horizontally (0.1 div per press)"),
+                ("↑  / ↓",            "Pan the active channel vertically (0.1 div)"),
+                ("Shift+↑/↓",         "Step V/div of the active channel"),
+                ("Ctrl+Shift+↑/↓",    "Step T/div globally"),
+            ]),
+            ("Cursors", [
+                ("C",                 "Toggle cursors on/off"),
+                ("Ctrl+←/→",          "Cursor X1 (vertical left, time)"),
+                ("Ctrl+↑/↓",          "Cursor Y1 (horizontal lower, voltage)"),
+                ("Ctrl+Alt+←/→",      "Cursor X2 (vertical right)"),
+                ("Ctrl+Alt+↑/↓",      "Cursor Y2 (horizontal upper)"),
+            ]),
+            ("Session", [
+                ("Ctrl+S",        "Save session"),
+                ("Ctrl+Shift+S",  "Save session as…"),
+                ("Ctrl+O",        "Open session"),
+                ("Ctrl+Z / Y",    "Undo / redo annotation"),
+            ]),
+            ("Misc", [
+                ("Esc",           "Close the active dialog"),
+                ("Right-click plot", "Context menu (copy image, etc.)"),
+            ]),
+        ]
+
+        body = tk.Frame(win, bg=COLOR_BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(14, 6))
+
+        for section, items in SECTIONS:
+            tk.Label(
+                body, text=section.upper(),
+                bg=COLOR_BG, fg=COLOR_ACCENT,
+                font=("Segoe UI", 9, "bold"),
+            ).pack(anchor="w", pady=(8, 2))
+            for keys, desc in items:
+                row = tk.Frame(body, bg=COLOR_BG)
+                row.pack(fill=tk.X, pady=1)
+                tk.Label(
+                    row, text=keys,
+                    bg=COLOR_BG, fg=COLOR_TEXT,
+                    font=("Consolas", 10, "bold"),
+                    width=18, anchor="w",
+                ).pack(side=tk.LEFT)
+                tk.Label(
+                    row, text=desc,
+                    bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                    font=("Segoe UI", 9),
+                    anchor="w",
+                ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Nota inferior
+        tk.Label(
+            body,
+            text=("Shortcuts are ignored while typing in any text field "
+                  "(V/div, names, MATH, etc.)."),
+            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            font=("Segoe UI", 8, "italic"),
+            wraplength=500, justify="left",
+        ).pack(anchor="w", pady=(14, 0))
+
+        # Close
+        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=12)
+        ttk.Button(bottom, text="Close", style="Accent.TButton",
+                   command=win.destroy).pack(side=tk.RIGHT)
+
+    def _make_resizable_dialog(self, win, preferred_w, preferred_h, min_w=None, min_h=None):
+        """Hace que una ventana se comporte bien en cualquier monitor:
+        - resizable
+        - minsize razonable
+        - tamaño preferido pero nunca más grande que ~90% de la pantalla
+          primaria (como heurística de "no es absurdamente grande")
+        - centrada sobre la root usando _center_dialog para que en multi-
+          monitor el diálogo aparezca en el monitor donde está la app.
+
+        Nota multimonitor: winfo_screenwidth/height devuelve SIEMPRE la
+        pantalla primaria, por eso solo lo usamos como techo del tamaño
+        y NO para clampear coordenadas — el clamp con la pantalla primaria
+        empujaba los diálogos de vuelta al primario cuando la app estaba
+        en un monitor secundario.
+        """
+        try:
+            self.root.update_idletasks()
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            w = min(preferred_w, int(sw * 0.9))
+            h = min(preferred_h, int(sh * 0.9))
+            win.minsize(min_w or min(preferred_w, 320),
+                        min_h or min(preferred_h, 220))
+            win.resizable(True, True)
+            # Delegamos el posicionamiento al helper que sí maneja bien
+            # multi-monitor (toma coords absolutas de la root).
+            self._center_dialog(win, w, h)
+        except Exception:
+            pass
+
+    def _make_scrollable_dialog(self, win):
+        """Convierte una ventana Toplevel en un layout de dos zonas:
+
+          ┌──────────────────────────────┐
+          │  Scrollable content area     │
+          │  (auto-scroll si no cabe)    │
+          │                              │
+          ├──────────────────────────────┤
+          │  Fixed bottom bar            │  ← siempre visible
+          └──────────────────────────────┘
+
+        Devuelve `(content, bottom)`. El llamante debe:
+          - packear sus widgets de contenido en `content` (NO en win).
+          - packear sus botones de acción (Close, OK, ...) en `bottom`.
+
+        Detalles:
+        - `content` es un Frame dentro de un Canvas con Scrollbar. Si el
+          contenido cabe, la scrollbar se oculta visualmente (sigue ocupando
+          un ancho mínimo, pero sin barra).
+        - Soporta scroll con rueda del ratón en todo el área de `content`.
+        - Es theme-aware: usa los colores actuales.
+
+        Patrón para usarlo:
+            content, bottom = self._make_scrollable_dialog(win)
+            tk.Label(content, text="...").pack(...)
+            ttk.Button(bottom, text="Close", command=win.destroy).pack(...)
+        """
+        # IMPORTANTE: packear la bottom_bar PRIMERO con side=tk.BOTTOM.
+        # Si la packeáramos al final, Tk la pondría arriba (orden de
+        # llamada manda, no el atributo side, cuando hay TOP+BOTTOM).
+        # v1.30: separar la línea divisoria de los botones (pady arriba).
+        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(12, 10))
+
+        # Separador visual entre contenido y bottom bar
+        sep = ttk.Separator(win, orient="horizontal")
+        sep.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(4, 0))
+
+        # Canvas scroll
+        canvas = tk.Canvas(win, bg=COLOR_BG,
+                           highlightthickness=0, bd=0)
+        vbar = ttk.Scrollbar(win, orient="vertical",
+                             command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Frame interior donde irá el contenido real
+        content = tk.Frame(canvas, bg=COLOR_BG)
+        content_window = canvas.create_window((0, 0), window=content,
+                                              anchor="nw")
+
+        def _on_content_configure(_e):
+            # Cuando cambia el tamaño del contenido, actualizar la región
+            # scrollable del canvas para que la scrollbar lo refleje.
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        content.bind("<Configure>", _on_content_configure)
+
+        def _on_canvas_configure(e):
+            # Estirar el contenido al ancho del canvas (que va creciendo si
+            # el usuario agranda la ventana). Sin esto los widgets quedan a la
+            # izquierda con espacio sobrante a la derecha.
+            canvas.itemconfigure(content_window, width=e.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Scroll con rueda del ratón. Se enlaza sobre el canvas Y sobre los
+        # hijos del content para que funcione independientemente de dónde
+        # esté el cursor dentro de la ventana.
+        def _on_mousewheel(event):
+            # event.delta: Windows/Mac = ±120 múltiplos; Linux botones 4/5
+            if event.num == 5 or event.delta < 0:
+                canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:
+                canvas.yview_scroll(-1, "units")
+        # Bind global a la ventana mientras esté activa
+        win.bind_all("<MouseWheel>", _on_mousewheel, add="+")
+        win.bind_all("<Button-4>",   _on_mousewheel, add="+")  # Linux
+        win.bind_all("<Button-5>",   _on_mousewheel, add="+")  # Linux
+
+        # Limpiar binds al cerrar (si no, otros Toplevels herederían el scroll)
+        def _on_close(*_):
+            try:
+                win.unbind_all("<MouseWheel>")
+                win.unbind_all("<Button-4>")
+                win.unbind_all("<Button-5>")
+            except Exception:
+                pass
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+
+        return content, bottom
+
+    def _add_hover_shadow(self, widget, normal_border=None, hover_border=None,
+                          normal_bg=None, hover_bg=None):
+        """Añade efecto sombra/glow al pasar el ratón. Los colores son opcionales;
+        si no se pasan, usa los defaults del tema ACTUAL.
+
+        IMPORTANTE: los handlers leen las constantes COLOR_* en CADA evento,
+        no en el momento de crear el widget. Si los capturáramos en el closure
+        en el momento de construcción, al cambiar de tema en runtime el
+        botón volvería al color del tema VIEJO en cada <Leave>, quedando un
+        "hover persistente" inconsistente con el resto de la UI.
+
+        Los argumentos opcionales (cuando alguien quiere un color fijo,
+        ej. hover_border=COLOR_DANGER para el botón Clear de anotaciones)
+        SÍ se capturan en el closure: son colores semánticos específicos
+        que no dependen del tema.
+        """
+
+        def on_enter(_e):
+            try:
+                hb = hover_border or COLOR_ACCENT
+                hbg = hover_bg or COLOR_BG_HOVER
+                widget.config(highlightbackground=hb, bg=hbg)
+            except tk.TclError:
+                pass
+
+        def on_leave(_e):
+            try:
+                nb = normal_border or COLOR_BORDER
+                nbg = normal_bg or COLOR_BG_ALT
+                widget.config(highlightbackground=nb, bg=nbg)
+            except tk.TclError:
+                pass
+
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
+
+    # =============================
+    # Annotations
+    # =============================
+    # ---- Undo/redo helpers ----
+    def _push_undo_annotation(self, kind, items):
+        """Registra una acción reversible en el stack. Cualquier acción nueva
+        invalida el redo stack (rama del futuro abandonada).
+
+        kind:  "add" o "remove"
+        items: lista de (index, annotation_dict) en orden ASCENDENTE de index.
+        """
+        if not items:
+            return
+        self._undo_stack.append({"kind": kind, "items": list(items)})
+        if len(self._undo_stack) > self.UNDO_STACK_LIMIT:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        # Cualquier acción de anotación (add o remove) modifica la sesión.
+        self._mark_dirty()
+
+    def _undo_annotation_action(self):
+        """Deshace la última acción del stack. Llamado por Ctrl+Z."""
+        if not self._undo_stack:
+            self._show_toast("Nothing to undo")
+            return
+        action = self._undo_stack.pop()
+        kind = action["kind"]
+        items = action["items"]
+        if kind == "add":
+            # Estos índices fueron añadidos: quitarlos. En orden descendente
+            # para que los índices no se descuadren entre pops.
+            for idx, _ann in sorted(items, key=lambda p: -p[0]):
+                if 0 <= idx < len(self.annotations):
+                    self.annotations.pop(idx)
+        else:  # "remove"
+            # Re-insertar en orden ascendente
+            for idx, ann in sorted(items, key=lambda p: p[0]):
+                if idx <= len(self.annotations):
+                    self.annotations.insert(idx, ann)
+                else:
+                    self.annotations.append(ann)
+        # La acción inversa va al redo stack
+        self._redo_stack.append(action)
+        self.update_plot()
+        self._show_toast(f"Undo: {kind} ({len(items)})")
+        self._mark_dirty()
+
+    def _redo_annotation_action(self):
+        """Rehace la última acción deshecha. Llamado por Ctrl+Y / Ctrl+Shift+Z."""
+        if not self._redo_stack:
+            self._show_toast("Nothing to redo")
+            return
+        action = self._redo_stack.pop()
+        kind = action["kind"]
+        items = action["items"]
+        if kind == "add":
+            # Re-añadir en orden ascendente
+            for idx, ann in sorted(items, key=lambda p: p[0]):
+                if idx <= len(self.annotations):
+                    self.annotations.insert(idx, ann)
+                else:
+                    self.annotations.append(ann)
+        else:  # "remove"
+            for idx, _ann in sorted(items, key=lambda p: -p[0]):
+                if 0 <= idx < len(self.annotations):
+                    self.annotations.pop(idx)
+        self._undo_stack.append(action)
+        self.update_plot()
+        self._show_toast(f"Redo: {kind} ({len(items)})")
+        self._mark_dirty()
+
+    def open_annotation_toolbar(self):
+        """Muestra (o trae al frente) la toolbar flotante de annotations."""
+        if self._annotation_toolbar is not None and self._annotation_toolbar.winfo_exists():
+            self._annotation_toolbar.lift()
+            return
+
+        tb = tk.Toplevel(self.root)
+        tb.withdraw()  # anti-flash
+        tb.title("Annotations")
+        tb.configure(bg=COLOR_BG_ALT)
+        tb.transient(self.root)
+        tb.resizable(False, False)
+        # Colocarla arriba-centro del plot
+        self.root.update_idletasks()
+        rx = self.root.winfo_rootx()
+        ry = self.root.winfo_rooty()
+        rw = self.root.winfo_width()
+        tb.geometry(f"+{rx + rw//2 - 180}+{ry + 60}")
+
+        # Borde accent
+        inner = tk.Frame(tb, bg=COLOR_BG_ALT)
+        inner.pack(padx=2, pady=2)
+
+        # Botones de modo
+        mode_btns = {}
+
+        def set_mode(m):
+            # Toggle: clic al mismo botón deselecciona
+            new = None if self.annotation_mode == m else m
+            self.annotation_mode = new
+            for name, b in mode_btns.items():
+                if name == new:
+                    b.config(bg=COLOR_ACCENT, fg="#000000")
+                else:
+                    b.config(bg=COLOR_BG_ALT, fg=COLOR_TEXT)
+
+        def make_mode_btn(parent, text, mode, tooltip):
+            b = tk.Button(
+                parent, text=text,
+                bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                activebackground=COLOR_BG_HOVER,
+                bd=1, relief="flat",
+                font=("Segoe UI", 11, "bold"),
+                padx=8, pady=4,
+                highlightbackground=COLOR_BORDER,
+                highlightthickness=1,
+                command=lambda: set_mode(mode),
+            )
+            b.pack(side=tk.LEFT, padx=2, pady=4)
+            # Hover (solo si no está seleccionado)
+            def make_hover(bb, mm):
+                def enter(_e):
+                    if self.annotation_mode != mm:
+                        bb.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+                def leave(_e):
+                    if self.annotation_mode != mm:
+                        bb.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+                return enter, leave
+            e, l = make_hover(b, mode)
+            b.bind("<Enter>", e)
+            b.bind("<Leave>", l)
+            mode_btns[mode] = b
+            if tooltip:
+                Tooltip(b, tooltip)
+            return b
+
+        row1 = tk.Frame(inner, bg=COLOR_BG_ALT)
+        row1.pack(fill=tk.X, padx=4, pady=(4, 0))
+        make_mode_btn(row1, "✏ Draw",  "draw",
+                      "Freehand draw\nClick and drag on the plot to draw strokes")
+        make_mode_btn(row1, "📝 Text", "text",
+                      "Place text annotation\nClick on the plot, type in the dialog")
+        make_mode_btn(row1, "🧹 Erase","erase",
+                      "Erase mode\nClick on a stroke or text to delete it")
+
+        def clear_all():
+            if not self.annotations:
+                return
+            if self._confirm("Clear all annotations?", "Delete all annotations?"):
+                # Registrar como "remove" de todas, con sus índices originales.
+                items = [(i, a) for i, a in enumerate(self.annotations)]
+                self._push_undo_annotation("remove", items)
+                self.annotations = []
+                self.update_plot()
+
+        clear_btn = tk.Button(
+            row1, text="🗑 Clear",
+            bg=COLOR_BG_ALT, fg=COLOR_DANGER,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 10, "bold"),
+            padx=8, pady=4,
+            highlightbackground=COLOR_BORDER,
+            highlightthickness=1,
+            command=clear_all,
+        )
+        clear_btn.pack(side=tk.LEFT, padx=(10, 2), pady=4)
+        self._add_hover_shadow(clear_btn, hover_border=COLOR_DANGER)
+        Tooltip(clear_btn,
+                "Delete ALL annotations\n"
+                "This action can be undone with Ctrl+Z")
+
+        # Segunda fila: color + width + close
+        row2 = tk.Frame(inner, bg=COLOR_BG_ALT)
+        row2.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+        tk.Label(row2, text="Color:", bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 2))
+        color_sw = tk.Label(row2, bg=self.annotation_color, width=3, height=1,
+                            relief="flat", bd=1,
+                            highlightbackground=COLOR_BORDER, highlightthickness=1,
+                            cursor="hand2")
+        color_sw.pack(side=tk.LEFT, padx=(0, 8))
+
+        def pick_color(_e=None):
+            from tkinter import colorchooser
+            c = colorchooser.askcolor(self.annotation_color, parent=tb,
+                                      title="Annotation color")
+            if c and c[1]:
+                self.annotation_color = c[1]
+                color_sw.config(bg=self.annotation_color)
+        color_sw.bind("<Button-1>", pick_color)
+
+        tk.Label(row2, text="Width:", bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 2))
+        width_btns = {}
+        def set_width(w):
+            self.annotation_width = w
+            for ww, bb in width_btns.items():
+                bb.config(bg=COLOR_ACCENT if ww == w else COLOR_BG_ALT,
+                          fg="#000000" if ww == w else COLOR_TEXT)
+        for w in (1, 2, 3, 5):
+            b = tk.Button(
+                row2, text=str(w),
+                bg=COLOR_ACCENT if w == self.annotation_width else COLOR_BG_ALT,
+                fg="#000000" if w == self.annotation_width else COLOR_TEXT,
+                bd=1, relief="flat",
+                font=("Segoe UI", 9, "bold"),
+                padx=6, pady=2,
+                highlightbackground=COLOR_BORDER, highlightthickness=1,
+                command=lambda ww=w: set_width(ww),
+            )
+            b.pack(side=tk.LEFT, padx=1)
+            width_btns[w] = b
+            # Hover solo si no está seleccionado
+            def make_hover(bb, ww):
+                def enter(_e):
+                    if self.annotation_width != ww:
+                        bb.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+                def leave(_e):
+                    if self.annotation_width != ww:
+                        bb.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+                return enter, leave
+            e, l = make_hover(b, w)
+            b.bind("<Enter>", e)
+            b.bind("<Leave>", l)
+
+        def close_toolbar():
+            self.annotation_mode = None
+            self._current_stroke = None
+            self._annotation_toolbar = None
+            tb.destroy()
+
+        # Sin botón ✕ propio: la ventana ya tiene su X en la barra de
+        # título (WM_DELETE_WINDOW) y Escape para cerrar — duplicar el
+        # botón solo añadía ruido visual.
+        tb.protocol("WM_DELETE_WINDOW", close_toolbar)
+        self._bind_escape_to_close(tb, on_close=close_toolbar)
+        # Anti-flash: re-mostrar tras procesar layout pendiente.
+        try:
+            tb.after_idle(lambda: (tb.update_idletasks(), tb.deiconify()))
+        except Exception:
+            try:
+                tb.deiconify()
+            except Exception:
+                pass
+        self._annotation_toolbar = tb
+
+    def _confirm(self, title, message):
+        """Diálogo Yes/No simple reutilizable."""
+        result = {"ok": False}
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title(title)
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 320, 130)
+        win.transient(self.root)
+        win.grab_set()
+        tk.Label(win, text=message, bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10), wraplength=280, justify="left"
+                 ).pack(padx=14, pady=(18, 10))
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+        def yes():
+            result["ok"] = True; win.destroy()
+        def no():
+            result["ok"] = False; win.destroy()
+        ttk.Button(btns, text="No", command=no).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Yes", style="Accent.TButton",
+                   command=yes).pack(side=tk.RIGHT, padx=(0, 6))
+        self.root.wait_window(win)
+        return result["ok"]
+
+    # ---- Gestión de puntos data/pantalla ----
+    def _data_point_from_event(self, event):
+        """Convierte event (xdata/ydata) a coords del axes (time_real, y_screen).
+
+        OJO con el nombre: event.ydata es la coordenada Y del eje matplotlib
+        ("y_screen"), NO el voltaje real de ninguna traza. Las trazas se
+        dibujan transformando v_real → y_screen mediante la escala del canal
+        activo (ver _full_redraw_plot). Para que las anotaciones sigan a una
+        traza de forma coherente al cambiar el canal activo (que reescala
+        todo el eje Y), los handlers de creación deben transformar este
+        y_screen a v_real con _annot_v_real_from_screen() antes de guardar.
+        """
+        if event.xdata is None or event.ydata is None:
+            return None
+        t_real = self.t_offset.get() + event.xdata
+        return (t_real, event.ydata)
+
+    # ---- Anotaciones: transformación entre v_real y y_screen ----
+    # Las anotaciones se anclan al canal con el que se crearon (su "ch_idx").
+    # Internamente almacenan el voltaje REAL del canal, no la y_screen. Así,
+    # al cambiar el canal activo (que reescala el eje Y mediante v_div_active),
+    # la anotación se re-mapea a la y_screen correcta y permanece visible y
+    # alineada con su traza. Antes, almacenar y_screen "crudo" causaba que
+    # la anotación desapareciera o se descentrara cuando canales con distinto
+    # v_div se alternaban como activos.
+    def _annot_v_real_from_screen(self, y_screen):
+        """y_screen (coord del eje) → voltaje real del canal activo actual."""
+        if not self.channels:
+            return y_screen
+        active = self.channels[self.active_channel_idx]
+        v_div_active = self.v_div.get()
+        if v_div_active <= 0 or active.get("v_div", 0) <= 0:
+            return y_screen
+        divs = y_screen / v_div_active
+        return divs * active["v_div"] + active.get("v_offset", 0.0)
+
+    def _annot_screen_from_v_real(self, v_real, ch_idx):
+        """v_real (referido al canal ch_idx) → y_screen del axes actual.
+        Fallback: si ch_idx no es válido, asume formato legacy y devuelve
+        v_real tal cual (que en sesiones antiguas era y_screen directo)."""
+        if not (isinstance(ch_idx, int) and 0 <= ch_idx < len(self.channels)):
+            return v_real
+        ch = self.channels[ch_idx]
+        if ch.get("v_div", 0) <= 0:
+            return v_real
+        v_div_active = self.v_div.get()
+        return (v_real - ch.get("v_offset", 0.0)) / ch["v_div"] * v_div_active
+
+    def _is_annotation_active(self):
+        return self.annotation_mode in ("draw", "text", "erase")
+
+    # ---- Handlers de evento ----
+    def _on_annotation_press(self, event):
+        """Llamado desde on_mouse_press si annotation está activa. Devuelve
+        True si consumió el evento."""
+        if not self._is_annotation_active() or event.inaxes != self.ax:
+            return False
+        if event.button != 1:
+            return False
+
+        p_screen = self._data_point_from_event(event)
+        if p_screen is None:
+            return False
+
+        # Para CREATE (draw/text): convertir y_screen → v_real del canal
+        # activo. Para ERASE: dejar la y_screen tal cual (la comparación
+        # se hace en coords del axes actual; _erase_at transforma las
+        # anotaciones almacenadas a y_screen para comparar).
+        t_real, y_screen = p_screen
+        ch_idx_now = self.active_channel_idx
+
+        if self.annotation_mode == "draw":
+            p_real = (t_real, self._annot_v_real_from_screen(y_screen))
+            self._current_stroke = {
+                "type": "stroke",
+                "color": self.annotation_color,
+                "width": self.annotation_width,
+                "points": [p_real],
+                "ch_idx": ch_idx_now,
+            }
+            return True
+
+        if self.annotation_mode == "text":
+            p_real = (t_real, self._annot_v_real_from_screen(y_screen))
+            self._prompt_text_annotation(p_real, ch_idx=ch_idx_now)
+            return True
+
+        if self.annotation_mode == "erase":
+            self._erase_at(p_screen, event)
+            return True
+
+        return False
+
+    def _on_annotation_move(self, event):
+        """Llamado desde on_mouse_move. True si consume."""
+        if self._current_stroke is None:
+            return False
+        if event.inaxes != self.ax or event.xdata is None:
+            return False
+        p_screen = self._data_point_from_event(event)
+        if p_screen is None:
+            return False
+        t_real, y_screen = p_screen
+        p_real = (t_real, self._annot_v_real_from_screen(y_screen))
+        self._current_stroke["points"].append(p_real)
+        self.update_plot()
+        return True
+
+    def _on_annotation_release(self, event):
+        """Llamado desde on_mouse_release. True si consume."""
+        if self._current_stroke is None:
+            return False
+        # Solo guardar si tiene al menos 2 puntos
+        if len(self._current_stroke["points"]) >= 2:
+            new_idx = len(self.annotations)
+            self.annotations.append(self._current_stroke)
+            self._push_undo_annotation("add", [(new_idx, self._current_stroke)])
+        self._current_stroke = None
+        self.update_plot()
+        return True
+
+    def _prompt_text_annotation(self, pos, ch_idx=None):
+        """Ventana para introducir el texto de la annotation (Consolas, tamaño elegible).
+
+        `pos` es (t_real, v_real) — el segundo elemento es voltaje real del
+        canal `ch_idx`, NO y_screen. Ver _annot_v_real_from_screen().
+        """
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Annotation text")
+        win.configure(bg=COLOR_BG)
+        win.resizable(True, True)
+        win.minsize(420, 280)
+        # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
+        self._center_dialog(win, 480, 320)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="Annotation text:",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold")
+                 ).pack(anchor="w", padx=14, pady=(14, 4))
+
+        # Selector de tamaño
+        size_row = tk.Frame(win, bg=COLOR_BG)
+        size_row.pack(fill=tk.X, padx=14, pady=(0, 6))
+        tk.Label(size_row, text="Size:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 6))
+
+        SIZES = [10, 12, 14, 18, 24, 32, 48]
+        size_var = tk.IntVar(value=14)
+
+        # Preview del texto al cambiar tamaño
+        def on_size_change():
+            s = size_var.get()
+            txt.config(font=("Consolas", s))
+
+        size_btns = {}
+        def set_size(s):
+            size_var.set(s)
+            on_size_change()
+            for ss, bb in size_btns.items():
+                if ss == s:
+                    bb.config(bg=COLOR_ACCENT, fg="#000000")
+                else:
+                    bb.config(bg=COLOR_BG_ALT, fg=COLOR_TEXT)
+
+        for s in SIZES:
+            b = tk.Button(
+                size_row, text=str(s),
+                bg=COLOR_ACCENT if s == size_var.get() else COLOR_BG_ALT,
+                fg="#000000" if s == size_var.get() else COLOR_TEXT,
+                bd=1, relief="flat",
+                font=("Segoe UI", 9, "bold"),
+                padx=6, pady=2,
+                highlightbackground=COLOR_BORDER, highlightthickness=1,
+                command=lambda ss=s: set_size(ss),
+            )
+            b.pack(side=tk.LEFT, padx=1)
+            size_btns[s] = b
+            # Hover
+            def make_hover(bb, ss):
+                def enter(_e):
+                    if size_var.get() != ss:
+                        bb.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+                def leave(_e):
+                    if size_var.get() != ss:
+                        bb.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+                return enter, leave
+            e, l = make_hover(b, s)
+            b.bind("<Enter>", e)
+            b.bind("<Leave>", l)
+
+        # IMPORTANTE: empaquetar los botones ANTES que el Text para que
+        # reserven su espacio abajo aunque el texto crezca.
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=10)
+
+        txt = tk.Text(win, height=5, font=("Consolas", 14),
+                      bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                      insertbackground=COLOR_TEXT,
+                      wrap="word")
+        txt.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
+        txt.focus_set()
+
+        def on_ok():
+            content = txt.get("1.0", "end-1c").strip()
+            if content:
+                new_ann = {
+                    "type": "text",
+                    "color": self.annotation_color,
+                    "pos": pos,
+                    "content": content,
+                    "size": int(size_var.get()),
+                }
+                # Anclar la anotación al canal con el que se creó. None se
+                # interpreta como "formato legacy" en el draw (Y como
+                # y_screen directo), aceptable como fallback.
+                if ch_idx is not None:
+                    new_ann["ch_idx"] = ch_idx
+                new_idx = len(self.annotations)
+                self.annotations.append(new_ann)
+                self._push_undo_annotation("add", [(new_idx, new_ann)])
+                self.update_plot()
+            win.destroy()
+
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="OK", style="Accent.TButton",
+                   command=on_ok).pack(side=tk.RIGHT, padx=(0, 6))
+        txt.bind("<Control-Return>", lambda e: on_ok())
+
+    def _erase_at(self, pos, event):
+        """Borra la annotation más cercana al punto de clic.
+
+        `pos` es (t_real, y_screen) — el segundo elemento es coord del
+        axes (no v_real). La comparación se hace en y_screen: para cada
+        anotación almacenada como (t_real, v_real) la transformamos a
+        y_screen vía _annot_screen_from_v_real(v_real, ch_idx) antes de
+        medir la distancia visual al clic.
+        """
+        if not self.annotations:
+            return
+        # Threshold en píxeles para detectar proximidad
+        # Convierto 10 px a distancia en data coords
+        try:
+            inv = self.ax.transData.inverted()
+            p0 = inv.transform((event.x, event.y))
+            p1 = inv.transform((event.x + 10, event.y + 10))
+            # Escala aprox en cada eje
+            dx_thr = abs(p1[0] - p0[0])
+            dy_thr = abs(p1[1] - p0[1])
+        except Exception:
+            return
+
+        t_click, y_click_screen = pos
+
+        def _pt_y_screen(pt, a_ch_idx):
+            # Anotaciones con ch_idx (formato nuevo): transformar v_real a
+            # y_screen del axes actual. Sin ch_idx (legacy): el valor ya
+            # estaba almacenado como y_screen directo, devolvemos pt[1].
+            if isinstance(a_ch_idx, int) and 0 <= a_ch_idx < len(self.channels):
+                return self._annot_screen_from_v_real(pt[1], a_ch_idx)
+            return pt[1]
+
+        best_i = None
+        best_d = float("inf")
+        for i, a in enumerate(self.annotations):
+            a_ch_idx = a.get("ch_idx")
+            if a["type"] == "stroke":
+                for pt in a["points"]:
+                    pt_y = _pt_y_screen(pt, a_ch_idx)
+                    dt = (pt[0] - t_click) / max(dx_thr, 1e-12)
+                    dv = (pt_y - y_click_screen) / max(dy_thr, 1e-12)
+                    d = dt*dt + dv*dv
+                    if d < best_d:
+                        best_d = d
+                        best_i = i
+            else:  # text
+                pt = a["pos"]
+                pt_y = _pt_y_screen(pt, a_ch_idx)
+                dt = (pt[0] - t_click) / max(dx_thr, 1e-12)
+                dv = (pt_y - y_click_screen) / max(dy_thr, 1e-12)
+                d = dt*dt + dv*dv
+                if d < best_d:
+                    best_d = d
+                    best_i = i
+
+        # Umbral: dentro de ~15 px del clic
+        if best_i is not None and best_d < 2.25:
+            removed_ann = self.annotations.pop(best_i)
+            self._push_undo_annotation("remove", [(best_i, removed_ann)])
+            self.update_plot()
+
+    def _draw_annotations(self):
+        """Dibuja todas las annotations en el plot actual. Ignora las que
+        están fuera de la ventana temporal visible (optimización).
+
+        Limpia artists previos antes de redibujar — necesario en fast path
+        donde no se hace ax.clear() entre frames.
+        """
+        # Limpiar artists previos
+        for a in getattr(self, "_annotation_artists", []):
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._annotation_artists = []
+
+        if not self.annotations and self._current_stroke is None:
+            return
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+
+        def _y_screen(v_real, a_ch_idx):
+            # Si la anotación tiene ch_idx válido (formato nuevo), v_real es
+            # voltaje real del canal a_ch_idx y hay que transformarlo a la
+            # y_screen actual usando el v_div_active vigente. Sin ch_idx
+            # (legacy de sesiones v1.23 o anteriores), v_real era ya un
+            # y_screen "crudo" — se devuelve tal cual.
+            if isinstance(a_ch_idx, int) and 0 <= a_ch_idx < len(self.channels):
+                return self._annot_screen_from_v_real(v_real, a_ch_idx)
+            return v_real
+
+        def draw_one(a):
+            a_ch_idx = a.get("ch_idx")
+            if a["type"] == "stroke":
+                pts = a["points"]
+                if len(pts) < 2:
+                    return
+                xs = [p[0] - t_start for p in pts]
+                ys = [_y_screen(p[1], a_ch_idx) for p in pts]
+                # Filtrado grueso: si todo el stroke está fuera, saltar
+                if max(xs) < 0 or min(xs) > window:
+                    return
+                lines = self.ax.plot(xs, ys, color=a["color"],
+                             linewidth=a.get("width", 2),
+                             solid_capstyle="round",
+                             solid_joinstyle="round",
+                             zorder=5)
+                if lines:
+                    self._annotation_artists.append(lines[0])
+            else:  # text
+                t, v_real = a["pos"]
+                if not (t_start <= t <= t_end):
+                    return
+                y = _y_screen(v_real, a_ch_idx)
+                txt = self.ax.text(t - t_start, y, a["content"],
+                             color=a["color"], fontsize=a.get("size", 10),
+                             fontfamily="Consolas",
+                             verticalalignment="center",
+                             zorder=5)
+                self._annotation_artists.append(txt)
+
+        for a in self.annotations:
+            draw_one(a)
+        if self._current_stroke is not None:
+            draw_one(self._current_stroke)
+
+    # =============================
+    # Trigger
+    # =============================
+    def _compute_trigger_events(self):
+        """Recorre la señal actual y genera self.trigger_events según la
+        configuración. Eventos son tiempos reales (en segundos absolutos)."""
+        self.trigger_events = []
+        cfg = self.trigger_config
+        if not cfg["enabled"] or self.time is None or not self.channels:
+            return
+        src_idx = cfg["source"]
+        if not (0 <= src_idx < len(self.channels)):
+            return
+        v = self.channels[src_idx]["voltage"]
+        t = self.time
+        if len(v) < 2:
+            return
+
+        if cfg["type"] == "Edge":
+            lvl = float(cfg["level"])
+            edge = "rising" if cfg["slope"] == "Rising" else "falling"
+            crossings = _find_crossings(t, v, lvl, edge=edge)
+            for c in crossings:
+                self.trigger_events.append({
+                    "t_trigger": float(c),
+                    "t_start":   float(c),
+                    "t_end":     None,
+                })
+            return
+
+        if cfg["type"] == "Width":
+            lvl = float(cfg["level"])
+            if cfg["polarity"] == "Positive":
+                # Pulso positivo: rising -> falling
+                rises = _find_crossings(t, v, lvl, edge="rising")
+                falls = _find_crossings(t, v, lvl, edge="falling")
+                pulses = []
+                for r in rises:
+                    nxt = falls[falls > r]
+                    if len(nxt):
+                        pulses.append((r, nxt[0]))
+            else:
+                # Pulso negativo: falling -> rising
+                rises = _find_crossings(t, v, lvl, edge="rising")
+                falls = _find_crossings(t, v, lvl, edge="falling")
+                pulses = []
+                for f in falls:
+                    nxt = rises[rises > f]
+                    if len(nxt):
+                        pulses.append((f, nxt[0]))
+
+            w1 = float(cfg["width1"])
+            w2 = float(cfg["width2"])
+            cond = cfg["condition"]
+            TOL = max(w1 * 0.01, 1e-12)   # 1% para igualdad
+
+            for (ts, te) in pulses:
+                w = te - ts
+                ok = False
+                if cond == "Width >":       ok = w > w1
+                elif cond == "Width <":     ok = w < w1
+                elif cond == "Width =":     ok = abs(w - w1) <= TOL
+                elif cond == "Width ≠":     ok = abs(w - w1) > TOL
+                elif cond == "Inside":      ok = w1 <= w <= w2
+                elif cond == "Outside":     ok = w < w1 or w > w2
+                if ok:
+                    self.trigger_events.append({
+                        "t_trigger": float(ts),
+                        "t_start":   float(ts),
+                        "t_end":     float(te),
+                    })
+
+    def _refresh_trigger(self):
+        """Recalcula y redibuja. Actualiza también la ventana si está abierta."""
+        self._compute_trigger_events()
+        # Ajustar índice actual si cambió la lista
+        if self.trigger_events:
+            if self.trigger_current_idx < 0 or self.trigger_current_idx >= len(self.trigger_events):
+                self.trigger_current_idx = 0
+        else:
+            self.trigger_current_idx = -1
+        self._update_trigger_count_label()
+        self.update_plot()
+        # Cualquier cambio de trigger (enable, src, type, level, etc.) pasa
+        # por aquí — un único punto para marcar dirty.
+        self._mark_dirty()
+
+    def _update_trigger_count_label(self):
+        """Actualiza el label de la ventana (si está abierta)."""
+        if self._trigger_window is None:
+            return
+        try:
+            lbl = self._trigger_window._count_label
+            n = len(self.trigger_events)
+            if n == 0:
+                lbl.config(text="0 trigger events found", fg=COLOR_DANGER)
+            else:
+                idx_str = (f"{self.trigger_current_idx + 1}/{n}"
+                           if self.trigger_current_idx >= 0 else f"—/{n}")
+                lbl.config(text=f"{n} trigger events found   ({idx_str})",
+                           fg=COLOR_ACCENT)
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _trigger_goto(self, delta):
+        """Mueve el índice y centra la ventana visible en ese evento."""
+        if not self.trigger_events:
+            return
+        n = len(self.trigger_events)
+        self.trigger_current_idx = (self.trigger_current_idx + delta) % n
+        ev = self.trigger_events[self.trigger_current_idx]
+        t_ev = ev["t_trigger"]
+        window = self.t_div.get() * H_DIVS
+        # Centrar el evento en la ventana visible
+        new_offset = max(0.0, t_ev - window / 2.0)
+        if self.t_total is not None:
+            new_offset = min(new_offset, max(0.0, self.t_total - window))
+        self.t_offset.set(new_offset)
+        self._update_trigger_count_label()
+        self.update_plot()
+
+    def _draw_trigger_markers(self):
+        """Dibuja markers en la ventana temporal visible.
+
+        Limpia artists previos antes de redibujar — necesario en fast path
+        donde no se hace ax.clear() entre frames.
+        """
+        # Limpiar previos
+        for a in getattr(self, "_trigger_marker_artists", []):
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._trigger_marker_artists = []
+
+        if not self.trigger_events or not self.trigger_config["show_markers"]:
+            return
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+        v_range = self.v_div.get() * V_DIVS
+
+        cur = self.trigger_current_idx
+        for i, ev in enumerate(self.trigger_events):
+            t_ev = ev["t_trigger"]
+            # Filtrar: ignorar los que queden fuera de la ventana visible
+            if not (t_start <= t_ev <= t_end) and not (
+                ev["t_end"] is not None
+                and ev["t_start"] <= t_end and ev["t_end"] >= t_start
+            ):
+                continue
+
+            is_current = (i == cur)
+            color = "#ffeb3b"
+            lw = 1.8 if is_current else 1.0
+            alpha = 1.0 if is_current else 0.7
+
+            # Para Width: sombreado del pulso
+            if ev["t_end"] is not None:
+                x1 = max(ev["t_start"] - t_start, 0)
+                x2 = min(ev["t_end"] - t_start, window)
+                span = self.ax.axvspan(x1, x2, color=color,
+                                alpha=0.12 if is_current else 0.06,
+                                zorder=1)
+                self._trigger_marker_artists.append(span)
+
+            # Línea vertical en el instante de trigger
+            if t_start <= t_ev <= t_end:
+                x = t_ev - t_start
+                ln = self.ax.axvline(x, color=color, linewidth=lw, alpha=alpha,
+                                linestyle=(0, (4, 3)), zorder=4)
+                self._trigger_marker_artists.append(ln)
+                # Marker "T" arriba
+                txt = self.ax.text(x, v_range / 2 * 0.95, "T",
+                             color=color,
+                             fontsize=10 if is_current else 8,
+                             fontweight="bold",
+                             ha="center", va="top",
+                             zorder=6)
+                self._trigger_marker_artists.append(txt)
+
+    def open_trigger_window(self):
+        """Ventana de configuración del trigger (viva)."""
+        if self._trigger_window is not None and self._trigger_window.winfo_exists():
+            self._trigger_window.lift()
+            return
+        if self.time is None or not self.channels:
+            self._show_toast("Load a CSV first")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Trigger")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO (centra), chrome (transient) DESPUÉS. Si
+        # transient se aplica antes de tener geometry, Tk en Windows
+        # hace un deiconify transitorio que se percibe como fantasma.
+        self._make_resizable_dialog(win, 420, 540)
+        self._apply_window_chrome(win)
+
+        # Bottom bar reservada PRIMERO (ver Math): asegura que los botones
+        # Close/Clear queden siempre visibles aunque la ventana se reduzca.
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+
+        # ---- Enable + source ----
+        header = tk.Frame(win, bg=COLOR_BG)
+        header.pack(fill=tk.X, padx=14, pady=(14, 6))
+
+        enable_var = tk.BooleanVar(value=self.trigger_config["enabled"])
+        # find_btn se define más abajo (en la zona de botones inferiores) y
+        # lo referenciamos desde on_enable para habilitarlo/deshabilitarlo.
+        # Usamos una "celda" mutable (lista) para captura por closure ya que
+        # find_btn aún no existe cuando definimos on_enable.
+        _find_btn_ref = []
+
+        def on_enable():
+            is_on = bool(enable_var.get())
+            self.trigger_config["enabled"] = is_on
+            # Habilitar/deshabilitar el botón Find acorde al estado
+            if _find_btn_ref:
+                try:
+                    _find_btn_ref[0].config(
+                        state=("normal" if is_on else "disabled"))
+                except Exception:
+                    pass
+            # Si se desactiva, limpiar los eventos y el plot; si se activa,
+            # NO disparar búsqueda — el usuario lo hará con Find. Así puede
+            # ajustar todos los parámetros antes de evaluar.
+            if not is_on:
+                self.trigger_events = []
+                self.trigger_current_idx = -1
+                self._update_trigger_count_label()
+                self.update_plot()
+
+        ttk.Checkbutton(header, text="Enable trigger",
+                        variable=enable_var, command=on_enable
+                        ).pack(side=tk.LEFT)
+
+        # Source
+        src_row = tk.Frame(win, bg=COLOR_BG)
+        src_row.pack(fill=tk.X, padx=14, pady=(4, 6))
+        tk.Label(src_row, text="Source:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        ch_names = [ch["name"] for ch in self.channels]
+        src_idx = self.trigger_config["source"]
+        if not (0 <= src_idx < len(ch_names)):
+            src_idx = 0
+        src_var = tk.StringVar(value=ch_names[src_idx])
+        src_combo = ttk.Combobox(src_row, textvariable=src_var,
+                                 values=ch_names, state="readonly", width=18)
+        src_combo.pack(side=tk.LEFT)
+
+        def on_src_change(_e=None):
+            n = src_var.get()
+            for i, ch in enumerate(self.channels):
+                if ch["name"] == n:
+                    self.trigger_config["source"] = i
+                    break
+            self._refresh_trigger()
+        src_combo.bind("<<ComboboxSelected>>", on_src_change)
+
+        # Type
+        type_row = tk.Frame(win, bg=COLOR_BG)
+        type_row.pack(fill=tk.X, padx=14, pady=(4, 6))
+        tk.Label(type_row, text="Type:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        type_var = tk.StringVar(value=self.trigger_config["type"])
+        type_combo = ttk.Combobox(type_row, textvariable=type_var,
+                                  values=["Edge", "Width"],
+                                  state="readonly", width=12)
+        type_combo.pack(side=tk.LEFT)
+
+        # ---- Edge frame ----
+        edge_frame = tk.LabelFrame(win, text=" Edge ", bg=COLOR_BG,
+                                   fg=COLOR_ACCENT, bd=1,
+                                   font=("Segoe UI", 9, "bold"))
+        slope_var = tk.StringVar(value=self.trigger_config["slope"])
+        slope_row = tk.Frame(edge_frame, bg=COLOR_BG)
+        slope_row.pack(fill=tk.X, padx=8, pady=(4, 4))
+        tk.Label(slope_row, text="Slope:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Radiobutton(slope_row, text="Rising", variable=slope_var,
+                        value="Rising").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(slope_row, text="Falling", variable=slope_var,
+                        value="Falling").pack(side=tk.LEFT)
+
+        edge_level_row = tk.Frame(edge_frame, bg=COLOR_BG)
+        edge_level_row.pack(fill=tk.X, padx=8, pady=(2, 6))
+        tk.Label(edge_level_row, text="Level (V):", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        edge_level_var = tk.StringVar(value=f"{self.trigger_config['level']:g}")
+        edge_level_entry = ttk.Entry(edge_level_row, textvariable=edge_level_var,
+                                     width=12)
+        edge_level_entry.pack(side=tk.LEFT)
+
+        # ---- Width frame ----
+        width_frame = tk.LabelFrame(win, text=" Width ", bg=COLOR_BG,
+                                    fg=COLOR_ACCENT, bd=1,
+                                    font=("Segoe UI", 9, "bold"))
+
+        polarity_var = tk.StringVar(value=self.trigger_config["polarity"])
+        pol_row = tk.Frame(width_frame, bg=COLOR_BG)
+        pol_row.pack(fill=tk.X, padx=8, pady=(4, 4))
+        tk.Label(pol_row, text="Polarity:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Radiobutton(pol_row, text="Positive", variable=polarity_var,
+                        value="Positive").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(pol_row, text="Negative", variable=polarity_var,
+                        value="Negative").pack(side=tk.LEFT)
+
+        cond_row = tk.Frame(width_frame, bg=COLOR_BG)
+        cond_row.pack(fill=tk.X, padx=8, pady=(2, 4))
+        tk.Label(cond_row, text="Condition:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        cond_var = tk.StringVar(value=self.trigger_config["condition"])
+        cond_combo = ttk.Combobox(cond_row, textvariable=cond_var,
+                                  values=["Width >", "Width <", "Width =",
+                                          "Width ≠", "Inside", "Outside"],
+                                  state="readonly", width=12)
+        cond_combo.pack(side=tk.LEFT)
+
+        w1_row = tk.Frame(width_frame, bg=COLOR_BG)
+        w1_row.pack(fill=tk.X, padx=8, pady=(2, 2))
+        tk.Label(w1_row, text="Width 1 (s):", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        w1_var = tk.StringVar(value=f"{self.trigger_config['width1']:g}")
+        w1_entry = ttk.Entry(w1_row, textvariable=w1_var, width=12)
+        w1_entry.pack(side=tk.LEFT)
+
+        w2_row = tk.Frame(width_frame, bg=COLOR_BG)
+        w2_row.pack(fill=tk.X, padx=8, pady=(2, 2))
+        tk.Label(w2_row, text="Width 2 (s):", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        w2_var = tk.StringVar(value=f"{self.trigger_config['width2']:g}")
+        w2_entry = ttk.Entry(w2_row, textvariable=w2_var, width=12)
+        w2_entry.pack(side=tk.LEFT)
+
+        w_level_row = tk.Frame(width_frame, bg=COLOR_BG)
+        w_level_row.pack(fill=tk.X, padx=8, pady=(2, 6))
+        tk.Label(w_level_row, text="Level (V):", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        w_level_var = tk.StringVar(value=f"{self.trigger_config['level']:g}")
+        w_level_entry = ttk.Entry(w_level_row, textvariable=w_level_var,
+                                  width=12)
+        w_level_entry.pack(side=tk.LEFT)
+
+        # Empaquetar: mostrar/ocultar según type
+        def refresh_type_visibility():
+            tp = type_var.get()
+            if tp == "Edge":
+                edge_frame.pack(fill=tk.X, padx=14, pady=(6, 4))
+                width_frame.pack_forget()
+            else:
+                width_frame.pack(fill=tk.X, padx=14, pady=(6, 4))
+                edge_frame.pack_forget()
+            # Width 2 solo para Inside/Outside
+            if tp == "Width" and cond_var.get() in ("Inside", "Outside"):
+                w2_row.pack(fill=tk.X, padx=8, pady=(2, 2),
+                            before=w_level_row)
+            else:
+                w2_row.pack_forget()
+
+        def on_type_change(_e=None):
+            self.trigger_config["type"] = type_var.get()
+            refresh_type_visibility()
+            self._refresh_trigger()
+        type_combo.bind("<<ComboboxSelected>>", on_type_change)
+
+        def on_cond_change(_e=None):
+            self.trigger_config["condition"] = cond_var.get()
+            refresh_type_visibility()
+            self._refresh_trigger()
+        cond_combo.bind("<<ComboboxSelected>>", on_cond_change)
+
+        # --- Bindings de cambio para los valores ---
+        def on_slope_change(*_):
+            self.trigger_config["slope"] = slope_var.get()
+            self._refresh_trigger()
+        slope_var.trace_add("write", on_slope_change)
+
+        def on_polarity_change(*_):
+            self.trigger_config["polarity"] = polarity_var.get()
+            self._refresh_trigger()
+        polarity_var.trace_add("write", on_polarity_change)
+
+        def commit_numeric(var, key):
+            try:
+                self.trigger_config[key] = float(var.get())
+                self._refresh_trigger()
+            except ValueError:
+                pass
+
+        for ent, var, key in [
+            (edge_level_entry, edge_level_var, "level"),
+            (w_level_entry,    w_level_var,    "level"),
+            (w1_entry,         w1_var,         "width1"),
+            (w2_entry,         w2_var,         "width2"),
+        ]:
+            ent.bind("<Return>",   lambda e, v=var, k=key: commit_numeric(v, k))
+            ent.bind("<FocusOut>", lambda e, v=var, k=key: commit_numeric(v, k))
+
+        refresh_type_visibility()
+
+        # ---- Resultados ----
+        results_frame = tk.Frame(win, bg=COLOR_BG)
+        results_frame.pack(fill=tk.X, padx=14, pady=(10, 4))
+
+        count_label = tk.Label(results_frame, text="0 trigger events found",
+                               bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                               font=("Segoe UI", 10, "bold"))
+        count_label.pack(side=tk.LEFT)
+        win._count_label = count_label
+
+        nav_row = tk.Frame(win, bg=COLOR_BG)
+        nav_row.pack(fill=tk.X, padx=14, pady=(2, 6))
+
+        def prev_ev():
+            self._trigger_goto(-1)
+        def next_ev():
+            self._trigger_goto(+1)
+
+        prev_btn = tk.Button(
+            nav_row, text="◀  Prev",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 10, "bold"),
+            padx=10, pady=4,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=prev_ev,
+        )
+        prev_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._add_hover_shadow(prev_btn)
+
+        next_btn = tk.Button(
+            nav_row, text="Next  ▶",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 10, "bold"),
+            padx=10, pady=4,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=next_ev,
+        )
+        next_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._add_hover_shadow(next_btn)
+
+        # Show markers
+        markers_var = tk.BooleanVar(value=self.trigger_config["show_markers"])
+        def on_markers():
+            self.trigger_config["show_markers"] = bool(markers_var.get())
+            self.update_plot()
+            self._mark_dirty()
+        ttk.Checkbutton(win, text="Show markers on plot",
+                        variable=markers_var, command=on_markers
+                        ).pack(anchor="w", padx=14, pady=(6, 2))
+
+        # ---- Botones (btns ya fue packeado al principio) ----
+        def do_clear():
+            self.trigger_config["enabled"] = False
+            enable_var.set(False)
+            self.trigger_events = []
+            self.trigger_current_idx = -1
+            self._update_trigger_count_label()
+            self.update_plot()
+            # Find sigue al estado del checkbox
+            try:
+                find_btn.config(state="disabled")
+            except Exception:
+                pass
+
+        def on_close():
+            self._trigger_window = None
+            win.destroy()
+
+        def do_find():
+            """Ejecuta la búsqueda con los criterios actuales. Solo se
+            permite con el checkbox 'Enable trigger' activo (el propio
+            botón está deshabilitado en caso contrario, pero defendemos)."""
+            if not self.trigger_config.get("enabled"):
+                return
+            self._refresh_trigger()
+
+        ttk.Button(btns, text="Close", command=on_close).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Clear", command=do_clear
+                   ).pack(side=tk.RIGHT, padx=(0, 6))
+        find_btn = ttk.Button(btns, text="Find",
+                              style="Accent.TButton",
+                              command=do_find)
+        find_btn.pack(side=tk.RIGHT, padx=(0, 6))
+        Tooltip(find_btn,
+                "Run the trigger search with the current parameters.\n"
+                "Only enabled while 'Enable trigger' is checked.")
+        # Registrar para que on_enable pueda manipular el estado
+        _find_btn_ref.append(find_btn)
+        # Estado inicial coherente con el checkbox
+        find_btn.config(state=("normal" if enable_var.get() else "disabled"))
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+        self._bind_escape_to_close(win, on_close=on_close)
+        self._trigger_window = win
+
+        # Compute inicial
+        self._refresh_trigger()
+
+    # =============================
+    # XY mode
+    # =============================
+    def _draw_xy(self):
+        """Dibuja el plot XY en self.ax. Limpia y configura el grid como
+        cartesiano estándar. No dibuja cursores ni annotations."""
+        cfg = self.xy_config
+        self.ax.clear()
+        # ax.clear() borra los Line2D del time-domain plot pero el diccionario
+        # _channel_lines (uid → artist) sigue apuntando a artists muertos. Si
+        # no lo vaciamos y tampoco invalidamos el fingerprint, al salir del
+        # modo XY el fast path intenta hacer set_data() sobre artists que ya
+        # no están en el ax y el plot se queda en blanco hasta el siguiente
+        # cambio estructural. Reseteamos ambos para forzar full redraw al
+        # volver al modo time-domain.
+        self._channel_lines = {}
+        self._last_structure_fingerprint = None
+        self.ax.set_facecolor(self.grid_theme["bg"])
+        self.fig.patch.set_facecolor(self.grid_theme["bg"])
+
+        if self.time is None or not self.channels:
+            self.canvas.draw()
+            return
+
+        nch = len(self.channels)
+        xi = max(0, min(cfg["x_idx"], nch - 1))
+        yi = max(0, min(cfg["y_idx"], nch - 1))
+        ch_x = self.channels[xi]
+        ch_y = self.channels[yi]
+
+        # Seleccionar rango temporal
+        if cfg["window"] == "Visible range":
+            t_start = self.t_offset.get()
+            window = self.t_div.get() * H_DIVS
+            mask = (self.time >= t_start) & (self.time <= t_start + window)
+            vx = ch_x["voltage"][mask]
+            vy = ch_y["voltage"][mask]
+        else:
+            vx = ch_x["voltage"]
+            vy = ch_y["voltage"]
+
+        if len(vx) == 0 or len(vy) == 0:
+            self.canvas.draw()
+            return
+
+        # Estilo
+        style = cfg.get("style", "Line")
+        if style == "Dots":
+            self.ax.plot(vx, vy, linestyle="none", marker=".",
+                         markersize=2, color=ch_y["color"], alpha=0.85)
+        elif style == "Line + Dots":
+            self.ax.plot(vx, vy, linestyle="-", marker=".",
+                         linewidth=1.0, markersize=3,
+                         color=ch_y["color"], alpha=0.9)
+        else:
+            self.ax.plot(vx, vy, linestyle="-",
+                         linewidth=1.0, color=ch_y["color"])
+
+        # Encuadre tight con pequeño margen
+        def _tight(arr):
+            lo = float(np.min(arr))
+            hi = float(np.max(arr))
+            if lo == hi:
+                lo -= 1.0; hi += 1.0
+            span = hi - lo
+            return lo - span * 0.05, hi + span * 0.05
+
+        xlo, xhi = _tight(vx)
+        ylo, yhi = _tight(vy)
+        self.ax.set_xlim(xlo, xhi)
+        self.ax.set_ylim(ylo, yhi)
+
+        # Grid
+        self.ax.grid(True, which="both",
+                     color=self.grid_theme["grid_color"],
+                     linewidth=0.6, alpha=0.6)
+
+        # Labels con color del canal y unidad
+        self.ax.set_xlabel(f"{ch_x['name']} (V)", color=ch_x["color"],
+                           fontsize=10, fontweight="bold")
+        self.ax.set_ylabel(f"{ch_y['name']} (V)", color=ch_y["color"],
+                           fontsize=10, fontweight="bold")
+
+        # Spines y ticks
+        for spine in self.ax.spines.values():
+            spine.set_color(self.grid_theme["grid_color"])
+            spine.set_linewidth(1.2)
+        self.ax.tick_params(axis="x", colors=self.grid_theme["text_color"])
+        self.ax.tick_params(axis="y", colors=self.grid_theme["text_color"])
+
+        # Título informativo arriba-derecha
+        self.ax.text(
+            0.98, 0.98,
+            f"XY  ·  X: {ch_x['name']}   Y: {ch_y['name']}   ·   {len(vx)} pts",
+            transform=self.ax.transAxes,
+            ha="right", va="top",
+            color=self.grid_theme["text_color"], fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3",
+                      facecolor=self.grid_theme["bg"],
+                      edgecolor=self.grid_theme["grid_color"],
+                      alpha=0.8)
+        )
+
+        self.canvas.draw()
+
+    def open_xy_window(self):
+        """Ventana de configuración del modo XY."""
+        if self._xy_window is not None and self._xy_window.winfo_exists():
+            self._xy_window.lift()
+            return
+        if self.time is None or len(self.channels) < 2:
+            self._show_toast("XY needs at least 2 channels")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("XY mode")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 340, 280)
+        self._apply_window_chrome(win)
+
+        # Enable
+        enable_var = tk.BooleanVar(value=self.xy_config["enabled"])
+        def on_enable():
+            self.xy_config["enabled"] = bool(enable_var.get())
+            self.update_plot()
+            self._mark_dirty()
+        ttk.Checkbutton(win, text="Enable XY mode",
+                        variable=enable_var, command=on_enable
+                        ).pack(anchor="w", padx=14, pady=(14, 10))
+
+        ch_names = [ch["name"] for ch in self.channels]
+
+        def add_combo_row(label, key, default):
+            row = tk.Frame(win, bg=COLOR_BG)
+            row.pack(fill=tk.X, padx=14, pady=(2, 4))
+            tk.Label(row, text=label, bg=COLOR_BG, fg=COLOR_TEXT,
+                     font=("Segoe UI", 9), width=10, anchor="w"
+                     ).pack(side=tk.LEFT)
+            var = tk.StringVar(value=ch_names[default])
+            combo = ttk.Combobox(row, textvariable=var,
+                                 values=ch_names, state="readonly", width=16)
+            combo.pack(side=tk.LEFT)
+
+            def on_change(_e=None):
+                n = var.get()
+                for i, ch in enumerate(self.channels):
+                    if ch["name"] == n:
+                        self.xy_config[key] = i
+                        break
+                if self.xy_config["enabled"]:
+                    self.update_plot()
+                self._mark_dirty()
+            combo.bind("<<ComboboxSelected>>", on_change)
+            return var
+
+        # Asegurar índices válidos
+        xi = max(0, min(self.xy_config["x_idx"], len(ch_names) - 1))
+        yi = max(0, min(self.xy_config["y_idx"], len(ch_names) - 1))
+        add_combo_row("X axis:", "x_idx", xi)
+        add_combo_row("Y axis:", "y_idx", yi)
+
+        # Style
+        style_row = tk.Frame(win, bg=COLOR_BG)
+        style_row.pack(fill=tk.X, padx=14, pady=(6, 4))
+        tk.Label(style_row, text="Style:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9), width=10, anchor="w"
+                 ).pack(side=tk.LEFT)
+        style_var = tk.StringVar(value=self.xy_config["style"])
+        style_combo = ttk.Combobox(style_row, textvariable=style_var,
+                                   values=["Line", "Dots", "Line + Dots"],
+                                   state="readonly", width=16)
+        style_combo.pack(side=tk.LEFT)
+        def on_style(_e=None):
+            self.xy_config["style"] = style_var.get()
+            if self.xy_config["enabled"]:
+                self.update_plot()
+            self._mark_dirty()
+        style_combo.bind("<<ComboboxSelected>>", on_style)
+
+        # Window
+        win_row = tk.Frame(win, bg=COLOR_BG)
+        win_row.pack(fill=tk.X, padx=14, pady=(6, 4))
+        tk.Label(win_row, text="Window:", bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9), width=10, anchor="w"
+                 ).pack(side=tk.LEFT)
+        win_var = tk.StringVar(value=self.xy_config["window"])
+        win_combo = ttk.Combobox(win_row, textvariable=win_var,
+                                 values=["Visible range", "Full capture"],
+                                 state="readonly", width=16)
+        win_combo.pack(side=tk.LEFT)
+        def on_win(_e=None):
+            self.xy_config["window"] = win_var.get()
+            if self.xy_config["enabled"]:
+                self.update_plot()
+            self._mark_dirty()
+        win_combo.bind("<<ComboboxSelected>>", on_win)
+
+        # Close
+        def on_close():
+            self._xy_window = None
+            win.destroy()
+
+        ttk.Button(win, text="Close", command=on_close
+                   ).pack(side=tk.BOTTOM, pady=14)
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+        self._xy_window = win
+
+    # =============================
+    # Minimap
+    # =============================
+    def _redraw_minimap(self):
+        """Redibuja el minimap: traza(s) decimadas + rectángulo de ventana visible."""
+        c = self.minimap_canvas
+        try:
+            w = c.winfo_width()
+            h = c.winfo_height()
+        except tk.TclError:
+            return
+        if w <= 1 or h <= 1:
+            return
+        c.delete("all")
+
+        # En modo XY el minimap no tiene sentido: ocultar contenido
+        if self.xy_config.get("enabled"):
+            c.create_text(w / 2, h / 2, text="XY mode — minimap disabled",
+                          fill=COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
+            return
+
+        if self.time is None or not self.channels or self.t_total <= 0:
+            c.create_text(w / 2, h / 2, text="No data",
+                          fill=COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
+            return
+
+        # Decimación a ancho del canvas
+        N = max(1, int(w))
+        n_samples = len(self.time)
+        if n_samples > N:
+            step = n_samples // N
+            idxs = np.arange(0, n_samples, step)
+        else:
+            idxs = np.arange(n_samples)
+        t_vis = self.time[idxs]
+
+        # Encuadre vertical: NORMALIZAR cada canal a su propio rango para que
+        # señales de amplitudes muy distintas (5V vs 800V) se vean igual de
+        # bien. Cada canal ocupa toda la altura del minimap.
+        margin_y = 4
+        def map_x(t):
+            return (t / self.t_total) * (w - 2) + 1
+
+        # Dibujar canales: primero los no activos (gris), luego el activo en su color
+        order = [i for i in range(len(self.channels)) if i != self.active_channel_idx]
+        order.append(self.active_channel_idx)
+        for i in order:
+            ch = self.channels[i]
+            if not ch["visible"].get():
+                continue
+            v = ch["voltage"][idxs]
+            v_lo = float(np.min(v))
+            v_hi = float(np.max(v))
+            if v_hi == v_lo:
+                v_hi = v_lo + 1.0
+            is_active = (i == self.active_channel_idx)
+            color = ch["color"] if is_active else "#666666"
+            width = 1.6 if is_active else 1.0
+            # Cada canal se normaliza a [0..1] y ocupa toda la altura
+            pts = []
+            for k in range(len(v)):
+                norm = (v[k] - v_lo) / (v_hi - v_lo)
+                y = h - margin_y - norm * (h - 2 * margin_y)
+                pts.append(map_x(t_vis[k]))
+                pts.append(y)
+            if len(pts) >= 4:
+                c.create_line(*pts, fill=color, width=width, smooth=False)
+
+        # Rectángulo de ventana visible: solo cuando hay zoom (ventana
+        # visible es menor que la traza total).
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        if window < self.t_total * 0.999:
+            x1 = map_x(t_start)
+            x2 = map_x(min(t_start + window, self.t_total))
+            c.create_rectangle(x1, 1, x2, h - 1,
+                               outline=COLOR_ACCENT, width=1.5,
+                               fill=COLOR_ACCENT, stipple="gray25")
+
+    def _minimap_click_to_time(self, x_pixel):
+        """Convierte coordenada X del canvas a tiempo absoluto."""
+        try:
+            w = self.minimap_canvas.winfo_width()
+        except tk.TclError:
+            return 0.0
+        if w <= 2 or self.t_total <= 0:
+            return 0.0
+        frac = (x_pixel - 1) / (w - 2)
+        frac = max(0.0, min(1.0, frac))
+        return frac * self.t_total
+
+    def _minimap_rect_bounds_px(self):
+        """Devuelve (x1, x2) en pixels del rectángulo visible actual."""
+        try:
+            w = self.minimap_canvas.winfo_width()
+        except tk.TclError:
+            return (0, 0)
+        if self.t_total <= 0:
+            return (0, 0)
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        x1 = t_start / self.t_total * (w - 2) + 1
+        x2 = min(t_start + window, self.t_total) / self.t_total * (w - 2) + 1
+        return (x1, x2)
+
+    def _on_minimap_press(self, event):
+        if self.time is None or self.xy_config.get("enabled"):
+            return
+        x1, x2 = self._minimap_rect_bounds_px()
+        # Si clicaste DENTRO del rectángulo: preparar drag (pan)
+        if x1 <= event.x <= x2:
+            self._minimap_dragging = True
+            t_click = self._minimap_click_to_time(event.x)
+            self._minimap_drag_offset = t_click - self.t_offset.get()
+        else:
+            # Clic fuera: centrar ventana en ese punto
+            self._minimap_dragging = False
+            window = self.t_div.get() * H_DIVS
+            t_click = self._minimap_click_to_time(event.x)
+            new_offset = max(0.0, min(t_click - window / 2.0,
+                                      self.t_total - window))
+            self.t_offset.set(new_offset)
+            try:
+                self.h_slider.set(new_offset)
+            except Exception:
+                pass
+            self.update_plot()
+
+    def _on_minimap_drag(self, event):
+        if not self._minimap_dragging or self.time is None:
+            return
+        t_at_cursor = self._minimap_click_to_time(event.x)
+        new_offset = t_at_cursor - self._minimap_drag_offset
+        window = self.t_div.get() * H_DIVS
+        new_offset = max(0.0, min(new_offset, self.t_total - window))
+        self.t_offset.set(new_offset)
+        try:
+            self.h_slider.set(new_offset)
+        except Exception:
+            pass
+        self.update_plot()
+
+    def _on_minimap_release(self, event):
+        self._minimap_dragging = False
+
+    def _on_minimap_wheel(self, event):
+        """Windows/Mac: event.delta ±120 por tick."""
+        direction = "down" if event.delta > 0 else "up"  # rueda arriba = zoom in (t_div ↓)
+        self._step_t_div(direction)
+
+    def _on_minimap_wheel_linux(self, event, sign):
+        """Linux: Button-4 = scroll up, Button-5 = scroll down."""
+        direction = "down" if sign > 0 else "up"
+        self._step_t_div(direction)
+
+    def _open_save_image_dialog(self):
+        """Ventana fija con opciones (cursores / measurements / escala Y)
+        y luego guarda."""
+        if self.time is None or not self.channels:
+            self._show_toast("Nothing to save (no data loaded)")
+            return
+
+        cursors_available = (
+            self._cursors_vertical_active() or self._cursors_horizontal_active()
+        )
+        meas_available = bool(self.active_measurements)
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Save image")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 360, 260)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(
+            win, text="Image options",
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(padx=12, pady=(14, 8), anchor="w")
+
+        var_cursors = tk.BooleanVar(value=cursors_available)
+        var_meas    = tk.BooleanVar(value=meas_available)
+
+        cb_cursors = ttk.Checkbutton(
+            win, text="Include cursors" + ("" if cursors_available else "  (none active)"),
+            variable=var_cursors
+        )
+        cb_cursors.pack(anchor="w", padx=18, pady=2)
+        if not cursors_available:
+            cb_cursors.state(["disabled"])
+
+        cb_meas = ttk.Checkbutton(
+            win, text="Include measurements" + ("" if meas_available else "  (none)"),
+            variable=var_meas
+        )
+        cb_meas.pack(anchor="w", padx=18, pady=2)
+        if not meas_available:
+            cb_meas.state(["disabled"])
+
+        # Annotations
+        annot_available = bool(self.annotations)
+        var_annot = tk.BooleanVar(value=annot_available)
+        cb_annot = ttk.Checkbutton(
+            win, text="Include annotations" + ("" if annot_available else "  (none)"),
+            variable=var_annot
+        )
+        cb_annot.pack(anchor="w", padx=18, pady=2)
+        if not annot_available:
+            cb_annot.state(["disabled"])
+
+        # Selector de canal para escala vertical
+        tk.Label(
+            win, text="Show Y-scale ticks for channel:",
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 9)
+        ).pack(anchor="w", padx=18, pady=(10, 2))
+
+        NONE_LABEL = "(none — generic grid)"
+        choices = [NONE_LABEL] + [ch["name"] for ch in self.channels]
+        var_yscale = tk.StringVar(value=NONE_LABEL)
+        combo = ttk.Combobox(
+            win, textvariable=var_yscale,
+            values=choices, state="readonly"
+        )
+        combo.pack(fill=tk.X, padx=18, pady=(0, 6))
+
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+
+        def on_cancel():
+            win.destroy()
+
+        def on_save():
+            include_cursors = bool(var_cursors.get()) and cursors_available
+            include_meas    = bool(var_meas.get()) and meas_available
+            include_annot   = bool(var_annot.get()) and annot_available
+            sel = var_yscale.get()
+            if sel == NONE_LABEL:
+                yscale_ch_idx = None
+            else:
+                # nombres pueden repetirse tras rename: buscamos el primero
+                yscale_ch_idx = next(
+                    (i for i, ch in enumerate(self.channels) if ch["name"] == sel),
+                    None
+                )
+            win.destroy()
+            self._save_image_as(include_cursors, include_meas, yscale_ch_idx, include_annot)
+
+        ttk.Button(btns, text="Cancel", command=on_cancel).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Save...", style="Accent.TButton",
+                   command=on_save).pack(side=tk.RIGHT, padx=(0, 6))
+
+    def _save_image_as(self, include_cursors, include_meas, yscale_ch_idx=None,
+                       include_annot=False):
+        """Pide ruta y construye una figura clara (fondo blanco, grid negro)
+        con los canales, leyenda de escalas y opcionalmente cursores/medidas."""
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Save oscilloscope image",
+            defaultextension=".png",
+            filetypes=[("PNG image", "*.png"),
+                       ("JPEG image", "*.jpg;*.jpeg"),
+                       ("PDF", "*.pdf"),
+                       ("SVG", "*.svg")],
+        )
+        if not path:
+            return
+
+        try:
+            fig = self._build_export_figure(include_cursors, include_meas, yscale_ch_idx,
+                                            include_annot)
+            fig.savefig(path, dpi=150, facecolor="white", bbox_inches="tight")
+            plt.close(fig)
+            self._show_toast(f"Saved: {path.split('/')[-1].split(chr(92))[-1]}")
+        except Exception as e:
+            self._show_toast(f"Save failed: {e}", duration_ms=2500)
+
+    def _build_export_figure(self, include_cursors, include_meas, yscale_ch_idx=None,
+                             include_annot=False):
+        """Construye una figura matplotlib con look 'paper': fondo blanco,
+        grid negro, canales con sus colores, leyenda de escalas, flechitas
+        de cada canal y opcionalmente ticks Y en unidades reales del canal
+        seleccionado."""
+        from matplotlib.figure import Figure
+
+        fig = Figure(figsize=(12, 7), facecolor="white")
+        ax = fig.add_subplot(111)
+        ax.set_facecolor("white")
+
+        t_div = self.t_div.get()
+        v_div_active = self.v_div.get()
+        t_start = self.t_offset.get()
+        window = t_div * H_DIVS
+        t_end = t_start + window
+        mask = (self.time >= t_start) & (self.time <= t_end)
+
+        # Ejes: centramos en 0, mismas divisiones que en pantalla
+        v_range = V_DIVS * v_div_active
+        ax.set_xlim(0, window)
+        ax.set_ylim(-v_range / 2, v_range / 2)
+
+        # Grid negro con líneas finas
+        ax.grid(True, which="both", color="#000000", alpha=0.25,
+                linewidth=0.6, linestyle="-")
+
+        # Ticks en divisiones
+        xticks = np.linspace(0, window, H_DIVS + 1)
+        yticks = np.linspace(-v_range / 2, v_range / 2, V_DIVS + 1)
+        ax.set_xticks(xticks)
+        ax.set_yticks(yticks)
+        # Etiquetas de tiempo REAL: posición del tick (x) + offset del
+        # viewport (t_start) + origen del CSV (time_origin).
+        t_o = self._t_display_origin()
+        ax.set_xticklabels([format_si(t_start + x + t_o, "s", sig_figs=3)
+                            for x in xticks],
+                           fontsize=8, color="black", rotation=0)
+
+        # Ticks Y: si hay canal elegido, valores reales en "V" de ese canal
+        if yscale_ch_idx is not None and 0 <= yscale_ch_idx < len(self.channels):
+            sel = self.channels[yscale_ch_idx]
+            # y_screen = (v - offset_sel) / v_div_sel · v_div_active
+            # → v_real = y_screen / v_div_active · v_div_sel + offset_sel
+            yreal = yticks / v_div_active * sel["v_div"] + sel["v_offset"]
+            y_unit = sel.get("unit", DEFAULT_UNIT)
+            ax.set_yticklabels(
+                [format_si(v, y_unit, sig_figs=3) for v in yreal],
+                fontsize=8, color=sel["color"]
+            )
+        else:
+            ax.set_yticklabels([""] * len(yticks))
+        for spine in ax.spines.values():
+            spine.set_color("black")
+            spine.set_linewidth(1.0)
+
+        # Dibujar canales + flechita de 0V con el nombre
+        legend_lines = []
+        order = [i for i in range(len(self.channels)) if i != self.active_channel_idx]
+        order.append(self.active_channel_idx)
+        t_range = window
+        v_range_half = v_range / 2
+        for i in order:
+            ch = self.channels[i]
+            if not ch["visible"].get():
+                continue
+            v = ch["voltage"][mask]
+            divs = (v - ch["v_offset"]) / ch["v_div"]
+            y_plot = divs * v_div_active
+            is_active = (i == self.active_channel_idx)
+            ax.plot(self.time[mask] - t_start, y_plot,
+                    color=ch["color"],
+                    linewidth=1.2 if is_active else 1.0)
+            legend_lines.append(
+                f"{ch['name']}: {format_si(ch['v_div'], ch.get('unit', DEFAULT_UNIT))}/div"
+            )
+
+            # Flechita indicando 0V del canal, a la izquierda del eje
+            y_gnd = (-ch["v_offset"] / ch["v_div"]) * v_div_active
+            if -v_range_half <= y_gnd <= v_range_half:
+                ax.annotate(
+                    f"▶ {ch['name']}",
+                    xy=(0, y_gnd),
+                    xytext=(-t_range * 0.015, y_gnd),
+                    ha="right", va="center",
+                    color=ch["color"],
+                    fontsize=9,
+                    fontweight="bold" if is_active else "normal",
+                    annotation_clip=False,
+                )
+
+        # Título/escalas arriba
+        title = f"T/div: {format_si(t_div, 's')}   |   "
+        title += "   ".join(legend_lines) if legend_lines else "(no visible channels)"
+        ax.set_title(title, fontsize=10, color="black", loc="left", pad=10)
+
+        # Cursores
+        if include_cursors:
+            if self._cursors_vertical_active():
+                for x in self.cursor_x:
+                    if t_start <= x <= t_end:
+                        ax.axvline(x - t_start, color="#444444",
+                                   linestyle=(0, (5, 5)), linewidth=1.0)
+                if len(self.cursor_x) == 2:
+                    dt = abs(self.cursor_x[1] - self.cursor_x[0])
+                    freq_txt = format_si(1.0 / dt, "Hz") if dt > 0 else "—"
+                    ax.text(0.01, -0.12,
+                            f"Δt = {format_si(dt, 's')}    1/Δt = {freq_txt}",
+                            transform=ax.transAxes, fontsize=9, color="black")
+
+            if self._cursors_horizontal_active():
+                for y in self.cursor_y:
+                    ax.axhline(y, color="#444444",
+                               linestyle=(0, (5, 5)), linewidth=1.0)
+                if len(self.cursor_y) == 2:
+                    dv = abs(self.cursor_y[1] - self.cursor_y[0])
+                    ax.text(0.35, -0.12,
+                            f"ΔV = {format_si(dv, self._active_unit())}",
+                            transform=ax.transAxes, fontsize=9, color="black")
+
+        # Measurements: tabla compacta debajo
+        if include_meas and self.active_measurements:
+            results = self.compute_measurements()
+            lines = []
+            for m in results:
+                name_ch = m.get("channel_name", "?")
+                val = m.get("value")
+                unit = m.get("unit", "")
+                if val is None:
+                    val_str = "—"
+                elif unit:
+                    val_str = format_si(val, unit)
+                else:
+                    val_str = f"{val:.4g}"
+                lines.append(f"{name_ch} · {m.get('name', '?')}: {val_str}")
+            if lines:
+                txt = "   |   ".join(lines)
+                fig.text(0.5, 0.01, txt, ha="center", fontsize=8, color="black")
+
+        # Annotations (strokes + texto)
+        if include_annot and self.annotations:
+            for a in self.annotations:
+                if a["type"] == "stroke":
+                    pts = a["points"]
+                    if len(pts) < 2:
+                        continue
+                    xs = [p[0] - t_start for p in pts]
+                    ys = [p[1] for p in pts]
+                    if max(xs) < 0 or min(xs) > window:
+                        continue
+                    ax.plot(xs, ys, color=a["color"],
+                            linewidth=a.get("width", 2),
+                            solid_capstyle="round",
+                            solid_joinstyle="round",
+                            zorder=5)
+                else:  # text
+                    t, v = a["pos"]
+                    if not (t_start <= t <= t_end):
+                        continue
+                    ax.text(t - t_start, v, a["content"],
+                            color=a["color"], fontsize=a.get("size", 10),
+                            fontfamily="Consolas",
+                            verticalalignment="center",
+                            zorder=5)
+
+        fig.tight_layout(rect=(0, 0.04 if include_meas else 0, 1, 1))
+        return fig
+
+    def _copy_plot_to_clipboard(self):
+        """Copia la imagen actual del plot al portapapeles como DIB
+        (CF_DIB). Solo Windows; en otras plataformas avisa con un toast.
+
+        Sin Pillow: monta la cabecera BITMAPINFOHEADER a mano y mueve
+        los pixels BGRA al clipboard via ctypes. Top-down (biHeight
+        negativo) para no tener que voltear filas.
+
+        Ojo: si SetClipboardData tiene éxito Windows toma posesión del
+        handle de GlobalAlloc — NO se libera. Si falla cualquier paso
+        previo, sí hay que GlobalFree para no leakear."""
+        if not sys.platform.startswith("win"):
+            self._show_toast("Clipboard image only on Windows")
+            return
+        if self.time is None or not self.channels:
+            self._show_toast("Nothing to copy (no data loaded)")
+            return
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except Exception as e:
+            self._show_toast(f"Clipboard unavailable: {e}", duration_ms=2200)
+            return
+
+        try:
+            self.canvas.draw()
+            w, h = self.canvas.get_width_height()
+            rgba = np.asarray(self.canvas.buffer_rgba())
+            # GDI espera BGRA en 32-bit BI_RGB.
+            bgra = np.ascontiguousarray(rgba[:, :, [2, 1, 0, 3]]).tobytes()
+        except Exception as e:
+            self._show_toast(f"Render failed: {e}", duration_ms=2200)
+            return
+
+        DIB_HEADER_SIZE = 40
+        BI_RGB = 0
+        GMEM_MOVEABLE = 0x0002
+        CF_DIB = 8
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize",          ctypes.c_uint32),
+                ("biWidth",         ctypes.c_int32),
+                ("biHeight",        ctypes.c_int32),
+                ("biPlanes",        ctypes.c_uint16),
+                ("biBitCount",      ctypes.c_uint16),
+                ("biCompression",   ctypes.c_uint32),
+                ("biSizeImage",     ctypes.c_uint32),
+                ("biXPelsPerMeter", ctypes.c_int32),
+                ("biYPelsPerMeter", ctypes.c_int32),
+                ("biClrUsed",       ctypes.c_uint32),
+                ("biClrImportant",  ctypes.c_uint32),
+            ]
+
+        hdr = BITMAPINFOHEADER()
+        hdr.biSize = DIB_HEADER_SIZE
+        hdr.biWidth = w
+        hdr.biHeight = -h            # top-down
+        hdr.biPlanes = 1
+        hdr.biBitCount = 32
+        hdr.biCompression = BI_RGB
+        hdr.biSizeImage = w * h * 4
+
+        total_size = DIB_HEADER_SIZE + hdr.biSizeImage
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+
+        h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, total_size)
+        if not h_mem:
+            self._show_toast("Clipboard alloc failed", duration_ms=2200)
+            return
+
+        try:
+            ptr = kernel32.GlobalLock(h_mem)
+            if not ptr:
+                kernel32.GlobalFree(h_mem)
+                self._show_toast("Clipboard lock failed", duration_ms=2200)
+                return
+            ctypes.memmove(ptr, ctypes.byref(hdr), DIB_HEADER_SIZE)
+            ctypes.memmove(ptr + DIB_HEADER_SIZE, bgra, hdr.biSizeImage)
+            kernel32.GlobalUnlock(h_mem)
+
+            if not user32.OpenClipboard(None):
+                kernel32.GlobalFree(h_mem)
+                self._show_toast("Clipboard busy", duration_ms=2200)
+                return
+            try:
+                user32.EmptyClipboard()
+                if not user32.SetClipboardData(CF_DIB, h_mem):
+                    kernel32.GlobalFree(h_mem)
+                    user32.CloseClipboard()
+                    self._show_toast("Clipboard write failed", duration_ms=2200)
+                    return
+                # Éxito: Windows posee el handle, NO liberar.
+                h_mem = None
+            finally:
+                user32.CloseClipboard()
+            self._show_toast("Copied to clipboard", duration_ms=1200)
+        except Exception as e:
+            if h_mem:
+                try:
+                    kernel32.GlobalFree(h_mem)
+                except Exception:
+                    pass
+            self._show_toast(f"Clipboard error: {e}", duration_ms=2200)
+
+    def _show_plot_context_menu(self, event):
+        """Menú contextual al hacer click derecho sobre el plot."""
+        # Coordenadas en pantalla (absolutas)
+        try:
+            x_root = self.root.winfo_pointerx()
+            y_root = self.root.winfo_pointery()
+        except Exception:
+            return
+
+        menu = tk.Menu(
+            self.root, tearoff=0,
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_ACCENT, activeforeground="#000000",
+            bd=0,
+        )
+        menu.add_command(
+            label="Save image as...",
+            command=self._open_save_image_dialog,
+        )
+        if sys.platform.startswith("win"):
+            menu.add_command(
+                label="Copy image to clipboard",
+                command=self._copy_plot_to_clipboard,
+            )
+        try:
+            menu.tk_popup(x_root, y_root)
+        finally:
+            menu.grab_release()
+
+
+
+    def _bind_escape_to_close(self, win, on_close=None):
+        """Hace que ESC cierre la ventana. Si se pasa `on_close`, se llama
+        en lugar de win.destroy() (útil cuando hay limpieza pendiente como
+        liberar el singleton). Bind solo al Toplevel en cuestión — no
+        contamina otros widgets."""
+        def _handler(_e=None):
+            if on_close is not None:
+                try:
+                    on_close()
+                    return
+                except Exception:
+                    pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        try:
+            win.bind("<Escape>", _handler)
+        except Exception:
+            pass
+
+    def _t_display_origin(self):
+        """Devuelve el offset de tiempo a sumar a las coordenadas internas
+        para producir las etiquetas visibles del eje X y cursores.
+
+        Si time_show_absolute=True (default): devuelve self.time_origin →
+        los ticks muestran tiempos absolutos del CSV original (con pre-trigger
+        si lo había, igual que un osciloscopio físico).
+
+        Si False: devuelve 0.0 → el primer punto del CSV es t=0.
+
+        Llama a este helper SIEMPRE en lugar de leer self.time_origin
+        directamente para que el toggle de Appearance afecte de forma
+        consistente.
+        """
+        try:
+            return self.time_origin if self.time_show_absolute.get() else 0.0
+        except Exception:
+            return self.time_origin
+
+    def _apply_window_chrome(self, win):
+        """Aplica a una ventana Toplevel el mismo icono que la ventana raíz
+        y la marca como transitoria de la principal.
+
+        Efectos:
+          - Icono de la barra de título igual al de la app (no la pluma de Tk).
+          - En Windows, la ventana NO aparece como entrada separada en la
+            taskbar — queda agrupada con la principal (mismo comportamiento
+            que diálogos modales). Esto se consigue con transient(root):
+            Tk lo traduce a WS_EX_TOOLWINDOW en Windows.
+          - Mitiga el "flash" de ventana pequeña antes de que la UI termine
+            de construirse: la ventana se oculta (withdraw) al entrar y
+            se re-muestra (deiconify) en after_idle, cuando ya hay
+            geometry/pack aplicados. El withdraw también permite al WM
+            recolocar la ventana en su geometría final al deiconify.
+
+        Todas las ventanas secundarias (FFT, Eye, Decoder, Meas, Trigger,
+        XY, Annotations, About, etc.) deberían llamar a este helper justo
+        después de crear el Toplevel.
+
+        Tolerante a fallos: si el icono no se puede aplicar (por ejemplo,
+        falta el .ico en runtime), continúa sin error.
+        """
+        # PASO 1: ocultar la ventana antes de tocarla. Si el caller ya hizo
+        # withdraw inline tras crear el Toplevel, este es redundante (no daña).
+        try:
+            win.withdraw()
+        except Exception:
+            pass
+
+        # Aplicar icono. Usa _resource_path para localizar el asset tanto
+        # en modo desarrollo como empaquetado con PyInstaller.
+        try:
+            win.iconbitmap(_resource_path("assets/icon.ico"))
+        except Exception:
+            pass
+        try:
+            win.transient(self.root)
+        except Exception:
+            pass
+
+        # PASO 2: re-mostrar después de que el event loop haya procesado
+        # geometry/pack. update_idletasks fuerza el cómputo del layout
+        # antes del deiconify para que la ventana nazca ya con su tamaño
+        # y posición finales — el WM la posiciona al deiconify.
+        def _show_when_ready():
+            try:
+                win.update_idletasks()
+                win.deiconify()
+            except Exception:
+                pass
+        try:
+            win.after_idle(_show_when_ready)
+        except Exception:
+            try:
+                win.deiconify()
+            except Exception:
+                pass
+
+    def _center_dialog(self, win, w, h):
+        """Posiciona y dimensiona el Toplevel `win` (w×h) centrado sobre
+        la ventana principal. Si la principal aún no tiene dimensiones
+        válidas (arranque, withdrawn), centra en pantalla primaria.
+
+        Llamar a este método EN LUGAR de `win.geometry("WxH")` cuando
+        quieras que el diálogo aparezca en una posición predecible —
+        importante para diálogos que se abren tras una acción del usuario
+        (selección de archivo, confirmaciones), porque sin esto Windows
+        decide y suele dejar la ventana en algún lugar inesperado.
+
+        El cálculo usa winfo_rootx/y de la principal (coordenadas
+        absolutas de pantalla, no del WM), así funciona aunque la
+        principal esté en un monitor secundario.
+
+        Anti-flash: oculta la ventana (withdraw) al entrar y la re-
+        muestra (deiconify) en after_idle, cuando la geometría ya está
+        aplicada. Sin esto, Windows alcanzaba a pintar el Toplevel en
+        posición/tamaño default antes de que geometry surtiera efecto."""
+        try:
+            win.withdraw()
+        except Exception:
+            pass
+        try:
+            self.root.update_idletasks()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+        except Exception:
+            rw = rh = 0
+            rx = ry = 0
+
+        if rw <= 1 or rh <= 1:
+            # Fallback: pantalla primaria
+            try:
+                scr_w = win.winfo_screenwidth()
+                scr_h = win.winfo_screenheight()
+            except Exception:
+                scr_w, scr_h = 1920, 1080
+            x = (scr_w - w) // 2
+            y = (scr_h - h) // 2
+        else:
+            x = rx + (rw - w) // 2
+            y = ry + (rh - h) // 2
+
+        # Clampear el tamaño al área disponible de la pantalla primaria.
+        # Sin esto, una ventana pedida más alta que la pantalla (p. ej.
+        # Decoder 960 px en un portátil 1366×768) sale con su parte
+        # inferior fuera del workspace y los botones del fondo no se ven.
+        # 0.92 deja margen para taskbar + chrome del WM.
+        try:
+            scr_w_max = int(win.winfo_screenwidth() * 0.96)
+            scr_h_max = int(win.winfo_screenheight() * 0.92)
+            if w > scr_w_max:
+                w = scr_w_max
+            if h > scr_h_max:
+                h = scr_h_max
+        except Exception:
+            pass
+
+        # Clampear a coordenadas positivas (un valor negativo se traduce
+        # a una posición relativa al borde derecho/inferior en Tk, lo cual
+        # no es lo que queremos aquí).
+        x = max(0, x)
+        y = max(0, y)
+        # Recalcular x/y por si el tamaño se clampeó (mantener centrado)
+        if rw > 1 and rh > 1:
+            x = max(0, rx + (rw - w) // 2)
+            y = max(0, ry + (rh - h) // 2)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Re-mostrar después de que el layout esté procesado. Si el caller
+        # llama a _apply_window_chrome después, su after_idle deiconify
+        # también se ejecutará (idempotente).
+        def _show_when_ready():
+            try:
+                win.update_idletasks()
+                win.deiconify()
+            except Exception:
+                pass
+        try:
+            win.after_idle(_show_when_ready)
+        except Exception:
+            try:
+                win.deiconify()
+            except Exception:
+                pass
+
+    def _show_toast(self, text, duration_ms=2000):
+        """Popup mínimo que aparece arriba-centro con fade-in/fade-out y
+        desaparece.
+
+        Duración: 2000 ms (similar a Android Toast.LENGTH_SHORT). De ese
+        total: ~200 ms fade-in + ~1600 ms estable + ~200 ms fade-out.
+
+        El fade se hace ajustando attributes("-alpha", ...) que en Windows,
+        macOS y la mayoría de WMs de Linux funciona. Si el WM no lo soporta,
+        el alpha se ignora silenciosamente y el toast aparece/desaparece
+        sin transición (degradación elegante).
+        """
+        toast = tk.Toplevel(self.root)
+        toast.overrideredirect(True)
+        toast.configure(bg=COLOR_ACCENT)
+        toast.attributes("-topmost", True)
+
+        inner = tk.Frame(toast, bg=COLOR_BG_ALT, padx=16, pady=8)
+        inner.pack(padx=2, pady=2)
+        tk.Label(
+            inner, text=text,
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack()
+
+        # Centrar arriba
+        self.root.update_idletasks()
+        toast.update_idletasks()
+        tw = toast.winfo_reqwidth()
+        th = toast.winfo_reqheight()
+        rx = self.root.winfo_rootx()
+        ry = self.root.winfo_rooty()
+        rw = self.root.winfo_width()
+        x = rx + (rw - tw) // 2
+        y = ry + 40
+        toast.geometry(f"+{x}+{y}")
+
+        # Iniciar invisible y hacer fade-in.
+        try:
+            toast.attributes("-alpha", 0.0)
+        except Exception:
+            # Si el WM no soporta alpha, salimos del modo fade y mostramos
+            # con el comportamiento clásico (aparición instantánea).
+            toast.after(duration_ms, toast.destroy)
+            return
+
+        # Parámetros de animación. Total ≈ duration_ms.
+        # fade_in_ms + steady_ms + fade_out_ms = duration_ms
+        fade_in_ms  = 200
+        fade_out_ms = 200
+        steady_ms   = max(0, duration_ms - fade_in_ms - fade_out_ms)
+        steps       = 12   # nº de pasos por fase de fade (suave a 60 FPS)
+        step_in_ms  = max(1, fade_in_ms // steps)
+        step_out_ms = max(1, fade_out_ms // steps)
+
+        def _fade_in(i=0):
+            if not toast.winfo_exists():
+                return
+            alpha = i / steps
+            try:
+                toast.attributes("-alpha", alpha)
+            except Exception:
+                pass
+            if i < steps:
+                toast.after(step_in_ms, lambda: _fade_in(i + 1))
+            else:
+                # Mantener al 100% durante steady_ms, luego fade-out
+                toast.after(steady_ms, _fade_out)
+
+        def _fade_out(i=0):
+            if not toast.winfo_exists():
+                return
+            alpha = 1.0 - (i / steps)
+            try:
+                toast.attributes("-alpha", alpha)
+            except Exception:
+                pass
+            if i < steps:
+                toast.after(step_out_ms, lambda: _fade_out(i + 1))
+            else:
+                try:
+                    toast.destroy()
+                except Exception:
+                    pass
+
+        _fade_in(0)
+
+
+    def _schedule_update_plot(self):
+        """Coalesce múltiples peticiones de redraw en una sola.
+
+        Si ya hay un redraw planificado, no hacemos nada (el pendiente
+        se encargará). Si no, programamos uno con Tk .after().
+        Esto convierte una ráfaga de 100 eventos de mouse en 1-3 frames
+        reales, aliviando matplotlib enormemente.
+        """
+        if self._redraw_pending:
+            return
+        self._redraw_pending = True
+        self.root.after(self._redraw_interval_ms, self._do_scheduled_update)
+
+    def _do_scheduled_update(self):
+        self._redraw_pending = False
+        self.update_plot()
+
+    def _open_session_menu(self):
+        """Muestra un menú contextual bajo el botón Session con Save/Load."""
+        menu = tk.Menu(
+            self.root, tearoff=0,
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_ACCENT, activeforeground="#000000",
+            bd=0,
+        )
+        menu.add_command(label="Save             Ctrl+S",
+                         command=self.save_session)
+        menu.add_command(label="Save as...       Ctrl+Shift+S",
+                         command=self.save_session_as)
+        menu.add_separator()
+        menu.add_command(label="Load session...  Ctrl+O",
+                         command=self.load_session)
+        try:
+            btn = self._session_btn
+            x = btn.winfo_rootx()
+            y = btn.winfo_rooty() + btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _toggle_render_mode(self):
+        """Alterna entre 'Detail' (sin decimation) y 'Fast' (min/max decim)."""
+        new_mode = "Fast" if self.render_mode.get() == "Detail" else "Detail"
+        self.render_mode.set(new_mode)
+        self._update_render_mode_btn_visual()
+        self._show_toast(f"Render: {new_mode}")
+        # Redibujar con el modo nuevo
+        self.update_plot()
+
+    def _update_render_mode_btn_visual(self):
+        """Refresca el look del boton segun el modo actual.
+        Detail -> borde acento azul, texto acento.
+        Fast   -> fondo acento, texto negro (activo)."""
+        if not hasattr(self, "_render_mode_btn") or self._render_mode_btn is None:
+            return
+        mode = self.render_mode.get()
+        if mode == "Fast":
+            self._render_mode_btn.config(
+                text="Fast",
+                bg=COLOR_ACCENT, fg="#000000",
+                activebackground="#6ccfff",
+                activeforeground="#000000",
+                highlightbackground=COLOR_ACCENT,
+            )
+        else:
+            self._render_mode_btn.config(
+                text="Detail",
+                bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                activebackground=COLOR_BG_HOVER,
+                activeforeground=COLOR_ACCENT,
+                highlightbackground=COLOR_ACCENT,
+            )
+
+    # =============================================================
+    # SESIONES: helpers de estado (Untitled / dirty / título) — v1.25
+    # =============================================================
+    def _session_display_name(self):
+        """Nombre legible de la sesión actual para el título.
+
+        - Si hay session_path, devuelve el basename sin extensión .ocv.
+        - Si no, devuelve 'Untitled'.
+        """
+        import os
+        if self.session_path:
+            base = os.path.basename(self.session_path)
+            stem, _ext = os.path.splitext(base)
+            return stem or base
+        return "Untitled"
+
+    def _update_title(self):
+        """Reconstruye el título de la ventana principal a partir del estado
+        de sesión. Formato:
+            "<*><nombre> — Oscilloscope CSV Viewer"
+        El asterisco solo aparece si hay cambios sin guardar.
+        """
+        try:
+            mark = "*" if self.session_dirty else ""
+            self.root.title(
+                f"{mark}{self._session_display_name()} — Oscilloscope CSV Viewer"
+            )
+        except Exception:
+            # Si la root no existe o ha sido destruida, no es crítico.
+            pass
+
+    def _mark_dirty(self):
+        """Marca la sesión como modificada. Idempotente: si ya estaba dirty
+        no toca nada (evita refrescar el título en cada tick de un slider).
+        """
+        if self._suppress_dirty:
+            return
+        if self.session_dirty:
+            return
+        self.session_dirty = True
+        self._update_title()
+
+    def _clear_dirty(self):
+        """Quita el flag dirty y refresca el título."""
+        if self.session_dirty:
+            self.session_dirty = False
+            self._update_title()
+        else:
+            # aún así puede haber cambiado el nombre (Save As)
+            self._update_title()
+
+    def _prompt_save_if_dirty(self, context="closing"):
+        """Si hay cambios sin guardar pregunta al usuario qué hacer.
+
+        Devuelve True si la operación que provocó la llamada puede continuar
+        (Save OK / Discard), False si el usuario cancela (Cancel o Save falló).
+        Si no hay datos cargados o no hay nada dirty, devuelve True directamente.
+        """
+        if not self.session_dirty:
+            return True
+        choice = self._ask_save_changes_dialog(context)
+        if choice == "cancel":
+            return False
+        if choice == "save":
+            # El usuario quiere guardar. Si falla (cancela el filedialog en
+            # Untitled, o error de IO), abortamos la operación.
+            ok = self.save_session()
+            return bool(ok)
+        # "discard" → continuar perdiendo los cambios.
+        return True
+
+    def _ask_save_changes_dialog(self, context):
+        """Diálogo modal con chrome del tema actual: Save / Don't save / Cancel.
+
+        Devuelve "save", "discard" o "cancel". Sustituye al messagebox.
+        askyesnocancel nativo (que rompía la coherencia visual del resto de
+        la app y no respondía al tema).
+
+        Atajos: Enter = Save (acción primaria), Escape = Cancel.
+        """
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Unsaved changes")
+        win.configure(bg=COLOR_BG)
+        self._center_dialog(win, 460, 220)
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        try:
+            self._apply_window_chrome(win)
+        except Exception:
+            pass
+
+        result = {"choice": "cancel"}  # default si cierran con la X del WM
+
+        # Header del estilo del resto de diálogos (Trigger, XY, Load CSV…).
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="UNSAVED CHANGES",
+                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 font=("Segoe UI", 11, "bold")
+                 ).pack(side=tk.LEFT, padx=14, pady=10)
+
+        # Cuerpo: nombre de la sesión + acción que iba a pasar.
+        body = tk.Frame(win, bg=COLOR_BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=(14, 6))
+        tk.Label(body,
+                 text=f"You have unsaved changes in '{self._session_display_name()}'.",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10, "bold"),
+                 wraplength=420, justify="left", anchor="w"
+                 ).pack(fill=tk.X)
+        tk.Label(body,
+                 text=f"Save before {context}?",
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9),
+                 wraplength=420, justify="left", anchor="w"
+                 ).pack(fill=tk.X, pady=(4, 0))
+
+        # Botones: misma fila, alineados a la derecha, Save destacado.
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(fill=tk.X, padx=14, pady=(8, 12))
+
+        def pick(choice):
+            result["choice"] = choice
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        save_btn = ttk.Button(btns, text="Save",
+                              style="Accent.TButton",
+                              command=lambda: pick("save"))
+        save_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        discard_btn = ttk.Button(btns, text="Don't save",
+                                 command=lambda: pick("discard"))
+        discard_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        cancel_btn = ttk.Button(btns, text="Cancel",
+                                command=lambda: pick("cancel"))
+        cancel_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        # Atajos: Enter = Save (acción primaria), Escape = Cancel.
+        win.bind("<Return>",  lambda _e: pick("save"))
+        win.bind("<Escape>",  lambda _e: pick("cancel"))
+        # El WM-close se considera Cancel (no destruye datos por descuido).
+        win.protocol("WM_DELETE_WINDOW", lambda: pick("cancel"))
+
+        save_btn.focus_set()
+        win.wait_window()
+        return result["choice"]
+
+    # =============================================================
+    # SESIONES: guardar/cargar estado de la aplicación a .ocv
+    # =============================================================
+    # Un "session file" es un JSON con toda la configuración que el
+    # usuario ha dejado montada: canales (nombres, colores, offsets,
+    # v/div, visibilidad), MATH, cursores, trigger, XY, tema de grid,
+    # annotations, medidas activas, Y el contenido del CSV embebido.
+    #
+    # Embeber el CSV hace el .ocv autocontenido (portabilidad total: el
+    # usuario puede mandar el .ocv a otra máquina sin tener que enviar
+    # el CSV por separado). Coste: el .ocv pesa más que el CSV original
+    # (overhead JSON: comillas, escapes, indentación).
+    #
+    # Versión del formato:
+    #   1 = .oscsession con csv_path externo (v1.22 y anteriores, OBSOLETO).
+    #   2 = .ocv con csv_content embebido (v1.23+). Ruptura limpia: las
+    #       sesiones v1 NO se cargan en v1.23.
+    SESSION_VERSION = 2
+
+    def save_session(self):
+        """Guarda la sesión en su path actual. Si todavía es Untitled
+        (no hay session_path), delega en save_session_as.
+
+        Devuelve True si se guardó con éxito, False si el usuario canceló
+        el filedialog o si hubo un error de IO. El valor de retorno lo usa
+        _prompt_save_if_dirty para decidir si la operación que disparó el
+        prompt puede continuar.
+        """
+        if not self.channels:
+            self._show_toast("Nothing to save")
+            return False
+        if not self.session_path:
+            return self.save_session_as()
+        return self._write_session_to(self.session_path)
+
+    def save_session_as(self):
+        """Pregunta path con un filedialog y guarda allí. Actualiza
+        session_path al nuevo path en caso de éxito (Save posterior irá
+        directo sin diálogo).
+        """
+        import os
+        from tkinter import filedialog
+
+        if not self.channels:
+            self._show_toast("Nothing to save")
+            return False
+
+        # Nombre inicial: si ya tenemos session_path, su basename.
+        # Si no, intentamos con el nombre del CSV; si no, session.ocv.
+        if self.session_path:
+            default = os.path.basename(self.session_path)
+        elif self.current_filename:
+            default = os.path.splitext(self.current_filename)[0] + ".ocv"
+        else:
+            default = "session.ocv"
+
+        # initialdir: misma carpeta que el path actual si existe, si no
+        # la del CSV cargado. Si nada, deja que el SO decida.
+        initial_dir = None
+        if self.session_path:
+            initial_dir = os.path.dirname(self.session_path) or None
+        elif self.current_filepath:
+            initial_dir = os.path.dirname(self.current_filepath) or None
+
+        kwargs = dict(
+            defaultextension=".ocv",
+            initialfile=default,
+            filetypes=[
+                ("Oscilloscope CSV Viewer Session", "*.ocv"),
+                ("All files", "*.*"),
+            ],
+            title="Save session as...",
+        )
+        if initial_dir:
+            kwargs["initialdir"] = initial_dir
+        path = filedialog.asksaveasfilename(**kwargs)
+        if not path:
+            return False
+
+        return self._write_session_to(path)
+
+    def _write_session_to(self, path):
+        """Escribe el payload de sesión a `path`. Actualiza session_path,
+        limpia dirty y refresca el título. Devuelve True/False.
+        """
+        import json
+        from tkinter import messagebox
+        try:
+            payload = self._build_session_dict()
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            self.session_path = path
+            self._clear_dirty()  # también refresca el título con el nuevo nombre
+            self._show_toast("Session saved")
+            return True
+        except Exception as e:
+            messagebox.showerror(
+                "Save session failed",
+                f"Could not save session:\n\n{e}",
+            )
+            return False
+
+    def load_session(self):
+        """Abre diálogo y carga una sesión .ocv (JSON con CSV embebido)."""
+        import json, os, tempfile
+        from tkinter import filedialog, messagebox
+
+        # Si hay cambios sin guardar en la sesión actual, ofrece guardarlos
+        # antes de descartarlos para abrir otra. El usuario puede cancelar.
+        if not self._prompt_save_if_dirty(context="loading another session"):
+            return
+
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Oscilloscope CSV Viewer Session", "*.ocv"),
+                ("All files", "*.*"),
+            ],
+            title="Load session",
+        )
+        if not path:
+            return
+
+        # --- 1) Leer y parsear JSON ---
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except FileNotFoundError:
+            messagebox.showerror("Load session", "Session file not found.")
+            return
+        except json.JSONDecodeError as e:
+            messagebox.showerror(
+                "Load session",
+                f"The session file is corrupted or not valid JSON:\n\n{e}",
+            )
+            return
+        except Exception as e:
+            messagebox.showerror("Load session", f"Could not read file:\n\n{e}")
+            return
+
+        # --- 2) Validar versión/formato mínimo ---
+        if not isinstance(payload, dict) or "version" not in payload:
+            messagebox.showerror(
+                "Load session",
+                "This does not look like a valid .ocv session file.",
+            )
+            return
+        ver = payload.get("version", 0)
+        # Ruptura limpia: el formato v1 (.oscsession) ya no se carga.
+        if ver < self.SESSION_VERSION:
+            messagebox.showerror(
+                "Load session",
+                f"This session uses the legacy v{ver} format (.oscsession) "
+                f"which is no longer supported.\n\n"
+                f"Sessions must be re-created with the current version of "
+                f"the app.",
+            )
+            return
+        if ver > self.SESSION_VERSION:
+            if not messagebox.askyesno(
+                "Load session",
+                "This session was saved with a newer version of the app.\n"
+                "Try to load it anyway?",
+            ):
+                return
+
+        # --- 3) Recuperar el CSV embebido ---
+        csv_content = payload.get("csv_content")
+        csv_name    = payload.get("csv_name") or "embedded.csv"
+        if not isinstance(csv_content, str) or not csv_content:
+            messagebox.showerror(
+                "Load session",
+                "The session does not contain embedded CSV data.",
+            )
+            return
+
+        # Escribir el contenido a un fichero temporal para reusar el camino
+        # estándar de carga (_read_csv_smart espera un path). Lo borramos en
+        # el finalize del callback. Si tempfile falla, abortamos.
+        try:
+            suffix = os.path.splitext(csv_name)[1] or ".csv"
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=suffix, delete=False)
+            tmp.write(csv_content)
+            tmp.close()
+            tmp_path = tmp.name
+        except Exception as e:
+            messagebox.showerror(
+                "Load session",
+                f"Could not extract embedded CSV:\n\n{e}",
+            )
+            return
+
+        # Callback encadenado: aplicar sesión Y limpiar el temp.
+        # Importante: durante toda la fase de carga suprimimos _mark_dirty
+        # para que los writes a tk.Vars que hace _apply_session no marquen
+        # la sesión recién cargada como modificada.
+        def _after_load():
+            self._suppress_dirty = True
+            try:
+                try:
+                    self._apply_session(payload)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+                    # Restaurar el nombre original "visible" del CSV
+                    # (en la UI queremos que figure como el CSV embebido,
+                    # no como el path temp del sistema).
+                    try:
+                        self.current_filename = csv_name
+                        self.current_filepath = None
+                        # Cachear el CSV embebido: el temp ya se borró, y
+                        # un próximo save sin esto generaría csv_content="".
+                        self._embedded_csv_content = csv_content
+                    except Exception:
+                        pass
+                    # Sesión cargada con éxito: pasa a ser la sesión activa
+                    # con su path y sin cambios pendientes.
+                    self.session_path = path
+            finally:
+                self._suppress_dirty = False
+                self._clear_dirty()
+
+        # Si el load_csv interno marca dirty por trazas/hooks, también lo
+        # suprimimos durante esa fase.
+        self._suppress_dirty = True
+        try:
+            self._load_csv_from_path(tmp_path, on_loaded=_after_load)
+        finally:
+            # _load_csv_from_path es síncrono en este flujo (no usa after),
+            # así que ya hemos vuelto. Si en algún momento se vuelve async,
+            # _after_load se encarga de re-suprimir.
+            self._suppress_dirty = False
+
+    def _build_session_dict(self):
+        """Serializa el estado relevante a un dict JSON-compatible."""
+        # Canales: separamos "reales" de MATH. Para reales guardamos solo
+        # metadatos (los voltajes vienen del CSV al recargar). Para MATH
+        # guardamos la expresión, que se re-evalúa contra los canales nuevos.
+        channels_out = []
+        for i, ch in enumerate(self.channels):
+            entry = {
+                "idx":      i,
+                "name":     ch.get("name"),
+                "color":    ch.get("color"),
+                "visible":  bool(ch["visible"].get()) if "visible" in ch else True,
+                "v_div":    float(ch.get("v_div", 1.0)),
+                "v_offset": float(ch.get("v_offset", 0.0)),
+                "unit":     ch.get("unit", DEFAULT_UNIT),  # v1.29
+                "is_math":  "math" in ch,
+            }
+            if "math" in ch:
+                entry["math_expr"] = ch["math"].get("expr", "")
+            channels_out.append(entry)
+
+        # Annotations: stroke listas de (t, v); text tiene pos + content
+        annotations_out = []
+        for a in self.annotations:
+            try:
+                if a.get("type") == "stroke":
+                    annotations_out.append({
+                        "type":   "stroke",
+                        "color":  a.get("color"),
+                        "width":  a.get("width"),
+                        "points": [list(p) for p in a.get("points", [])],
+                        # ch_idx: canal con el que se creó la anotación; el
+                        # voltaje en points[*][1] se referencia a la escala
+                        # de ESTE canal, no del canal activo en el momento
+                        # de cargar la sesión. Ver _annot_screen_from_v_real.
+                        "ch_idx": a.get("ch_idx"),
+                    })
+                elif a.get("type") == "text":
+                    annotations_out.append({
+                        "type":    "text",
+                        "color":   a.get("color"),
+                        "size":    a.get("size"),
+                        "pos":     list(a.get("pos", (0, 0))),
+                        "content": a.get("content", ""),
+                        "ch_idx":  a.get("ch_idx"),
+                    })
+            except Exception:
+                # annotación corrupta en memoria → la saltamos
+                continue
+
+        # Leer el CSV original como texto para embeberlo. Si no se puede
+        # (CSV borrado entre carga y save), guardamos cadena vacía y al
+        # cargar la sesión se notificará el error.
+        csv_content = ""
+        if self.current_filepath:
+            try:
+                with open(self.current_filepath, "r",
+                          encoding="utf-8", errors="replace") as _f:
+                    csv_content = _f.read()
+            except Exception:
+                csv_content = ""
+        # Fallback: si la sesión actual vino de un .ocv (current_filepath
+        # quedó en None tras borrar el temp), usar el cache embebido.
+        # Sin esto, re-guardar una sesión recién cargada producía un .ocv
+        # con csv_content="" y al re-abrir saltaba el error de "no
+        # embedded CSV data".
+        if not csv_content and self._embedded_csv_content:
+            csv_content = self._embedded_csv_content
+
+        return {
+            "version":       self.SESSION_VERSION,
+            "app":           "OscilloscopeCSVViewer",
+            "csv_name":      self.current_filename,
+            "csv_content":   csv_content,
+            "active_idx":    self.active_channel_idx,
+            "render_mode":   self.render_mode.get(),
+            "t_div":         float(self.t_div.get()),
+            "v_div":         float(self.v_div.get()),
+            "t_offset":      float(self.t_offset.get()),
+            "v_offset":      float(self.v_offset.get()),
+            "fine_mode":     bool(self.fine_mode.get()),
+            "time_origin":   float(self.time_origin),
+            "channels":      channels_out,
+            "cursors": {
+                "enabled": bool(self.cursors_enabled.get()),
+                "mode":    self.cursor_mode.get(),
+                "x":       [float(x) for x in self.cursor_x],
+                "y":       [float(y) for y in self.cursor_y],
+            },
+            "trigger":       dict(self.trigger_config),
+            "xy":            dict(self.xy_config),
+            # v1.29: app_theme y grid_theme NO se persisten en sesión
+            # (preferencias personales, guardadas en user_config).
+            # Sesiones viejas que los traen se ignoran en _apply_session.
+            "annotations":   annotations_out,
+            "measurements":  [
+                {"channel_idx": m.get("channel_idx"), "name": m.get("name"),
+                 "channel_idx2": m.get("channel_idx2")}
+                for m in self.active_measurements
+            ],
+        }
+
+    def _apply_session(self, payload):
+        """Aplica los campos de una sesión DESPUÉS de cargar el CSV.
+
+        Es tolerante a diferencias: si el CSV nuevo tiene distinto número
+        de canales, aplicamos lo que podamos y saltamos el resto.
+        """
+        from tkinter import messagebox
+
+        # --- Canales reales: aplicar nombre/color/visible/v_div/v_offset ---
+        saved_channels = payload.get("channels", [])
+        # Separar reales y math (los math van tras el load_csv sin MATH)
+        real_saved = [c for c in saved_channels if not c.get("is_math")]
+        math_saved = [c for c in saved_channels if c.get("is_math")]
+
+        mismatched_count = False
+        for i, saved in enumerate(real_saved):
+            if i >= len(self.channels):
+                mismatched_count = True
+                break
+            ch = self.channels[i]
+            try:
+                if saved.get("name"):    ch["name"]  = saved["name"]
+                if saved.get("color"):   ch["color"] = saved["color"]
+                if "v_div" in saved:     ch["v_div"]    = float(saved["v_div"])
+                if "v_offset" in saved:  ch["v_offset"] = float(saved["v_offset"])
+                # v1.29: unit por canal. Sesiones viejas sin "unit" → "V".
+                if "unit" in saved and saved["unit"] in CHANNEL_UNITS:
+                    ch["unit"] = saved["unit"]
+                if "visible" in saved and "visible" in ch:
+                    ch["visible"].set(bool(saved["visible"]))
+            except Exception:
+                continue
+
+        if len(real_saved) > len(self.channels):
+            mismatched_count = True
+
+        # --- Recrear MATH channels ---
+        math_errors = []
+        for m in math_saved:
+            expr = m.get("math_expr", "").strip()
+            name = m.get("name") or "M"
+            if not expr:
+                continue
+            try:
+                ast = math_parse(expr)
+                ast_resolved = self._resolve_refs(ast)
+                # v1.29: la unit del MATH guardada se aplica al crear.
+                saved_unit = m.get("unit") if m.get("unit") in CHANNEL_UNITS else DEFAULT_UNIT
+                self._create_math_channel(expr, ast_resolved, name, unit=saved_unit)
+                # Aplicar color guardado al canal recién creado
+                if m.get("color") and self.channels:
+                    self.channels[-1]["color"] = m["color"]
+            except Exception as e:
+                math_errors.append(f"{name}: {e}")
+
+        # --- Vista (t_div, offset, etc.) ---
+        try:
+            if "t_div" in payload:    self.t_div.set(float(payload["t_div"]))
+            if "v_div" in payload:    self.v_div.set(float(payload["v_div"]))
+            if "t_offset" in payload: self.t_offset.set(float(payload["t_offset"]))
+            if "v_offset" in payload: self.v_offset.set(float(payload["v_offset"]))
+            if "fine_mode" in payload:
+                self.fine_mode.set(bool(payload["fine_mode"]))
+        except Exception:
+            pass
+
+        # --- Canal activo (si índice válido) ---
+        try:
+            idx = int(payload.get("active_idx", 0))
+            if 0 <= idx < len(self.channels):
+                self.active_channel_idx = idx
+                self._sync_active_channel_vars()
+        except Exception:
+            pass
+
+        # --- Render mode ---
+        rm = payload.get("render_mode")
+        if rm in ("Detail", "Fast"):
+            self.render_mode.set(rm)
+            self._update_render_mode_btn_visual()
+
+        # --- Cursores ---
+        cur = payload.get("cursors", {}) or {}
+        try:
+            self.cursors_enabled.set(bool(cur.get("enabled", False)))
+            if cur.get("mode"):
+                self.cursor_mode.set(cur["mode"])
+            if isinstance(cur.get("x"), list) and len(cur["x"]) == 2:
+                self.cursor_x = [float(cur["x"][0]), float(cur["x"][1])]
+            if isinstance(cur.get("y"), list) and len(cur["y"]) == 2:
+                self.cursor_y = [float(cur["y"][0]), float(cur["y"][1])]
+            self.on_cursors_toggle()
+        except Exception:
+            pass
+
+        # --- Trigger ---
+        trig = payload.get("trigger")
+        if isinstance(trig, dict):
+            # Copiamos solo claves conocidas por si el formato evoluciona
+            for k, v in trig.items():
+                if k in self.trigger_config:
+                    self.trigger_config[k] = v
+            try:
+                self._compute_trigger_events()
+            except Exception:
+                pass
+
+        # --- XY ---
+        xy = payload.get("xy")
+        if isinstance(xy, dict):
+            for k, v in xy.items():
+                if k in self.xy_config:
+                    self.xy_config[k] = v
+
+        # --- App theme: v1.29 ya NO se carga desde sesión (preferencia
+        # personal en user_config). Sesiones viejas con "app_theme" se
+        # ignoran silenciosamente — el tema actual se mantiene.
+
+        # --- Grid theme: v1.29 ya NO se carga desde sesión (preferencia
+        # personal en user_config). Sesiones viejas con "grid_theme" se
+        # ignoran silenciosamente.
+
+        # --- Annotations (ojo: pueden venir con coords en datos; recrear) ---
+        # Cargar una sesión reemplaza completamente el estado: el historial
+        # de undo de la sesión anterior deja de tener sentido.
+        self._undo_stack = []
+        self._redo_stack = []
+        try:
+            self.annotations = []
+            for a in payload.get("annotations", []):
+                if not isinstance(a, dict):
+                    continue
+                if a.get("type") == "stroke":
+                    entry = {
+                        "type":   "stroke",
+                        "color":  a.get("color", "#ffff00"),
+                        "width":  int(a.get("width", 2)),
+                        "points": [tuple(p) for p in a.get("points", []) if len(p) == 2],
+                    }
+                    # ch_idx opcional: sesiones v1.23 y anteriores no lo
+                    # traen → la anotación se trata como legacy en draw
+                    # (y_screen directo, sin transformar).
+                    if isinstance(a.get("ch_idx"), int):
+                        entry["ch_idx"] = a["ch_idx"]
+                    self.annotations.append(entry)
+                elif a.get("type") == "text":
+                    entry = {
+                        "type":    "text",
+                        "color":   a.get("color", "#ffff00"),
+                        "size":    int(a.get("size", 10)),
+                        "pos":     tuple(a.get("pos", (0, 0))),
+                        "content": str(a.get("content", "")),
+                    }
+                    if isinstance(a.get("ch_idx"), int):
+                        entry["ch_idx"] = a["ch_idx"]
+                    self.annotations.append(entry)
+        except Exception:
+            self.annotations = []
+
+        # --- Measurements ---
+        try:
+            self.active_measurements = []
+            for m in payload.get("measurements", []):
+                if not isinstance(m, dict):
+                    continue
+                ci = m.get("channel_idx")
+                nm = m.get("name")
+                if ci is None or nm is None:
+                    continue
+                if not (0 <= int(ci) < len(self.channels)):
+                    continue
+                entry = {"channel_idx": int(ci), "name": str(nm)}
+                ci2 = m.get("channel_idx2")
+                if ci2 is not None and 0 <= int(ci2) < len(self.channels):
+                    entry["channel_idx2"] = int(ci2)
+                self.active_measurements.append(entry)
+            self._rebuild_measurements_panel()
+        except Exception:
+            pass
+
+        # --- Refresco total ---
+        try:
+            self._rebuild_channels_panel()
+        except Exception:
+            pass
+        self.update_plot()
+
+        # --- Informe de avisos al usuario ---
+        warnings_msgs = []
+        if mismatched_count:
+            warnings_msgs.append(
+                "The CSV has a different number of channels than the session.\n"
+                "Applied what could be matched."
+            )
+        if math_errors:
+            warnings_msgs.append(
+                "Some MATH channels could not be recreated:\n  - "
+                + "\n  - ".join(math_errors)
+            )
+        if warnings_msgs:
+            messagebox.showwarning("Session loaded with warnings",
+                                    "\n\n".join(warnings_msgs))
+        else:
+            self._show_toast("Session loaded")
+
+    def _load_csv_from_path(self, filename, on_loaded=None):
+        """Variante de load_csv que recibe la ruta directamente y ejecuta
+        un callback cuando los canales ya están cargados. Se usa para
+        restaurar sesiones.
+        """
+        from tkinter import messagebox
+        overlay = self._show_loading_overlay("Loading CSV...")
+        self.root.update_idletasks()
+
+        import threading
+        result = {}
+
+        def worker():
+            try:
+                result["parsed"] = _read_csv_smart(filename)
+            except Exception as e:
+                result["error"] = str(e)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        def check_done():
+            if t.is_alive():
+                self.root.after(80, check_done)
+                return
+            if "error" in result:
+                self._hide_loading_overlay(overlay)
+                messagebox.showerror("Load session",
+                                     f"Could not read CSV:\n\n{result['error']}")
+                return
+            parsed = result["parsed"]
+            time = parsed["time"]
+            columns = parsed["columns"]
+            col_names = parsed["col_names"]
+            if not columns:
+                self._hide_loading_overlay(overlay)
+                messagebox.showerror("Load session",
+                                     "The referenced CSV has no data channels.")
+                return
+            import os
+            self.current_filename = os.path.basename(filename)
+            self.current_filepath = os.path.abspath(filename)
+            # CSV real de disco → invalidar cache embebido previo.
+            self._embedded_csv_content = None
+            self.current_brand = parsed.get("brand")
+
+            def do_load():
+                self._load_channels(time, columns, col_names)
+                # Dejamos un tick para que _load_channels acabe el auto_fit
+                self.root.after(50, lambda: self._hide_loading_overlay(overlay))
+                if on_loaded is not None:
+                    # Aplicar sesión tras otro tick para que el plot ya esté listo
+                    self.root.after(80, on_loaded)
+            self.root.after(50, do_load)
+
+        self.root.after(80, check_done)
+
+
+
+
+
+    # -----------------------------
+    def build_plot(self, frame):
+        self.fig, self.ax = plt.subplots(figsize=(9, 5))
+
+        # time_div_label se crea dinámicamente en configure_grid()
+        # para que pueda usar coordenadas de datos (1 división de ancho).
+        self.time_div_label = None
+
+        # =====================================================
+        # Artists persistentes para render incremental.
+        # =====================================================
+        # En vez de hacer ax.clear() + ax.plot() en cada frame (caro), creamos
+        # los Line2D una sola vez por canal y reutilizamos con set_data().
+        # Esto es decisivo cuando se hace pan con muchos puntos.
+        #
+        # Diccionarios indexados por algún ID estable:
+        #   _channel_lines:    ch_uid -> Line2D  (un Line2D por canal visible)
+        #   _cursor_v_lines:   [axvline0, axvline1] persistentes (visible toggle)
+        #   _cursor_h_lines:   [axhline0, axhline1]
+        #   _hashmark_artists: lista de Line2D de las hash marks centrales
+        #   _gnd_marker_artists: lista de artists del marcador GND por canal
+        #   _cursor_v_marker:  marcador (x) + texto del cursor vertical sobre la traza
+        #
+        # Fingerprint del estado "estructural": si cambia, full rebuild;
+        # si no, fast path.
+        self._channel_lines = {}
+        self._cursor_v_lines = [None, None]
+        self._cursor_h_lines = [None, None]
+        self._hashmark_artists = []
+        self._gnd_marker_artists = []
+        # Estos los gestiona _draw_vertical_cursor_marker:
+        self._cursor_v_marker_artists = []
+        # Annotations y trigger markers — limpiados en sus respectivos draws
+        self._annotation_artists = []
+        self._trigger_marker_artists = []
+        # Protocol decoder overlay (cajas bajo la traza)
+        self._protocol_artists = []
+        self._protocol_frames = []
+        self._protocol_channel_idx = None
+        self._last_structure_fingerprint = None
+
+        self.cursors_info_label = self.fig.text(
+            0.02, 0.02,              # esquina inferior izquierda de la FIGURA
+            "",
+            ha="left",
+            va="bottom",
+            fontsize=10,
+            color="white",
+            bbox=dict(
+                facecolor="black",
+                edgecolor="#888888",
+                alpha=0.9,
+                boxstyle="round,pad=0.3"
+            )
+        )
+        
+        
+        self.meas_info_label = self.fig.text(
+            0.02, 0.06,
+            "",
+            ha="left",
+            va="bottom",
+            fontsize=10,
+            color="white",
+            bbox=dict(
+                facecolor="black",
+                edgecolor="#888888",
+                alpha=0.9,
+                boxstyle="round,pad=0.3"
+            )
+        )
+
+        # Label discreto del nombre del fichero abierto (esquina inferior derecha)
+        self.filename_label = self.fig.text(
+            0.985, 0.012,
+            "",
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color="#6a6a6a",      # gris oscuro discreto
+            family="monospace",
+        )
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.configure_grid()
+        
+        self.canvas.mpl_connect("button_press_event", self.on_mouse_press)
+        self.canvas.mpl_connect("button_release_event", self.on_mouse_release)
+        self.canvas.mpl_connect("motion_notify_event", self.on_mouse_move)
+
+        # Rueda del ratón sobre el plot:
+        #   - Shift + rueda → pan horizontal (avanzar/retroceder en el tiempo)
+        #   - Ctrl  + rueda → zoom horizontal (cambia T/div, igual que la
+        #     rueda sobre el minimap pero sin tener que mover el cursor).
+        #   - Sin modificador → reservado para futuro. Por ahora no
+        #     hace nada para no sorprender al usuario.
+        # Usamos el tk widget directamente porque mpl_connect("scroll_event")
+        # no expone los modificadores Shift/Ctrl de forma fiable en todos los SO.
+        tk_canvas = self.canvas.get_tk_widget()
+        tk_canvas.bind("<Shift-MouseWheel>", self._on_plot_shift_wheel)   # Win/Mac
+        tk_canvas.bind("<Shift-Button-4>",   self._on_plot_shift_wheel)   # Linux up
+        tk_canvas.bind("<Shift-Button-5>",   self._on_plot_shift_wheel)   # Linux down
+        tk_canvas.bind("<Control-MouseWheel>", self._on_plot_ctrl_wheel)  # Win/Mac
+        tk_canvas.bind("<Control-Button-4>",   self._on_plot_ctrl_wheel)  # Linux up
+        tk_canvas.bind("<Control-Button-5>",   self._on_plot_ctrl_wheel)  # Linux down
+
+        
+        
+    
+
+    def _cursors_vertical_active(self):
+        """True si los cursores verticales (de tiempo) deben pintarse."""
+        if not self.cursors_enabled.get():
+            return False
+        m = self.cursor_mode.get()
+        return m in ("Vertical", "Horizontal + Vertical")
+
+    def _cursors_horizontal_active(self):
+        """True si los cursores horizontales (de voltaje) deben pintarse."""
+        if not self.cursors_enabled.get():
+            return False
+        m = self.cursor_mode.get()
+        return m in ("Horizontal", "Horizontal + Vertical")
+
+
+    def update_cursors_info_label(self):
+        v_on = self._cursors_vertical_active()
+        h_on = self._cursors_horizontal_active()
+
+        if not (v_on or h_on):
+            self.cursors_info_label.set_text("")
+            return
+
+        parts = []
+
+        # Info de cursores verticales (tiempo)
+        if v_on and len(self.cursor_x) == 2:
+            t1, t2 = sorted(self.cursor_x)
+            dt = t2 - t1
+            freq_text = format_si(1.0 / dt, "Hz") if dt > 0 else "—"
+            # Sumamos time_origin a t1/t2 para mostrar tiempos REALES del
+            # CSV (consistente con las etiquetas del eje X). Δt y 1/Δt
+            # son diferencias → time_origin se cancela, no hace falta sumar.
+            t_o = self._t_display_origin()
+            parts.append(
+                f"t1: {format_si(t1 + t_o, 's')}   "
+                f"t2: {format_si(t2 + t_o, 's')}   "
+                f"Δt: {format_si(dt, 's')}   "
+                f"1/Δt: {freq_text}"
+            )
+
+        # Info de cursores horizontales (voltaje)
+        if h_on and len(self.cursor_y) == 2:
+            offset = self.v_offset.get() if self.channels else 0.0
+            v1 = self.cursor_y[0] + offset
+            v2 = self.cursor_y[1] + offset
+            dv = v2 - v1
+            prefix = ""
+            unit = DEFAULT_UNIT
+            if self.channels:
+                prefix = f"[{self.channels[self.active_channel_idx]['name']}] "
+                unit = self._active_unit()
+            parts.append(
+                f"{prefix}"
+                f"V1: {format_si(v1, unit)}   "
+                f"V2: {format_si(v2, unit)}   "
+                f"ΔV: {format_si(abs(dv), unit)}"
+            )
+
+        # Juntar con un separador visual
+        self.cursors_info_label.set_text("     |     ".join(parts))
+
+
+    def update_horizontal_cursors_info_label(self):
+        # Legacy: ya no se usa, ahora todo va en update_cursors_info_label
+        return True
+
+    
+        
+    def update_time_div_label(self):
+        """Dibuja el recuadro Time/div dentro del plot, del tamaño aprox.
+        de una división de la grilla, con esquinas redondeadas.
+
+        Se invoca tras configure_grid (que hace ax.clear) y tras update_plot.
+        """
+        text = format_si(self.t_div.get(), "s")
+
+        t_div = self.t_div.get()
+        v_div = self.v_div.get()
+        t_range = H_DIVS * t_div
+
+        # Centro de la "celda" superior derecha: centrada en la última división
+        x_center = t_range - t_div / 2.0
+
+        # Con el ylim fijo [-v_range/2, +v_range/2], el borde superior
+        # está en v_div * V_DIVS / 2.0 (no depende del offset)
+        y_top = v_div * V_DIVS / 2.0
+        # Colocar el centro vertical del texto a media división del borde superior
+        y_center = y_top - v_div * 0.5
+
+        # Eliminar el label anterior si existía (ax.clear ya lo habrá borrado,
+        # pero por si acaso queda una referencia vieja)
+        if self.time_div_label is not None:
+            try:
+                self.time_div_label.remove()
+            except Exception:
+                pass
+
+        self.time_div_label = self.ax.text(
+            x_center, y_center, text,
+            ha="center", va="center",
+            fontsize=10,
+            color="white",
+            family="monospace",
+            bbox=dict(
+                facecolor="#2a2a2a",
+                edgecolor="#888888",
+                alpha=0.92,
+                boxstyle="round,pad=0.4",
+                linewidth=0.6,
+            ),
+            zorder=10,
+        )
+
+        
+    # -----------------------------
+ 
+    def get_visible_signal(self):
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+
+        mask = (self.time >= t_start) & (self.time <= t_end)
+        t = self.time[mask] - t_start
+        v = self.voltage[mask]
+
+        return t, v
+        
+        
+
+    def compute_measurements(self):
+        """Calcula las medidas activas sobre la señal VISIBLE de cada canal.
+        Devuelve una lista de dicts:
+          [{"channel_idx": i, "channel_name": str, "color": hex,
+            "name": str, "value": float|None, "unit": str}]
+        Las medidas dual-channel (Phase) usan también 'ref_channel_idx'.
+        """
+        if not self.active_measurements or not self.channels:
+            return []
+
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+        mask = (self.time >= t_start) & (self.time <= t_end)
+        t_vis = self.time[mask] - t_start
+
+        results = []
+        for meas in self.active_measurements:
+            ch_idx = meas["channel_idx"]
+            name = meas["name"]
+            if ch_idx < 0 or ch_idx >= len(self.channels):
+                continue
+            if name not in ALL_MEASUREMENTS:
+                continue
+            ch = self.channels[ch_idx]
+            v_vis = ch["voltage"][mask]
+            unit, func = ALL_MEASUREMENTS[name]
+            # v1.29: sustituir la unidad base "V" / "V/s" por la unit real
+            # del canal. Así Peak-Peak en un canal "A" muestra "Apk-pk",
+            # etc. Las unidades estructurales (s, Hz, %, °) se mantienen.
+            ch_unit = ch.get("unit", DEFAULT_UNIT)
+            if unit == "V":
+                unit = ch_unit
+            elif unit == "V/s":
+                unit = f"{ch_unit}/s"
+
+            # Detectar dual-channel: func es una tupla ('dual', real_func)
+            is_dual = isinstance(func, tuple) and len(func) == 2 and func[0] == "dual"
+            try:
+                if is_dual:
+                    ref_idx = meas.get("ref_channel_idx")
+                    if ref_idx is None or not (0 <= ref_idx < len(self.channels)):
+                        value = None
+                    else:
+                        v_ref = self.channels[ref_idx]["voltage"][mask]
+                        value = func[1](t_vis, v_vis, v_ref)
+                else:
+                    value = func(t_vis, v_vis)
+            except Exception:
+                value = None
+
+            results.append({
+                "channel_idx":  ch_idx,
+                "channel_name": ch["name"],
+                "color":        ch["color"],
+                "name":         name,
+                "value":        value,
+                "unit":         unit,
+                "ref_channel_idx": meas.get("ref_channel_idx"),
+            })
+        return results
+
+    # Alias retrocompatible
+    def compute_basic_measurements(self):
+        return self.compute_measurements()
+
+
+    def update_measurements_label(self):
+        """Actualiza el panel derecho de medidas activas."""
+        self._rebuild_measurements_panel()
+        # El label inline inferior izquierdo ya no se usa, lo limpiamos
+        if hasattr(self, "meas_info_label"):
+            self.meas_info_label.set_text("")
+
+        
+        
+        
+    def open_meas_window(self):
+        # Singleton — ver open_xy_window. Si ya hay una ventana Meas
+        # abierta, la traemos al frente en lugar de abrir otra.
+        if getattr(self, "_meas_window", None) is not None \
+                and self._meas_window.winfo_exists():
+            self._meas_window.lift()
+            self._meas_window.focus_force()
+            return
+        if not self.channels:
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Add Measurements")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
+        # Chrome unificado (icono + transient para taskbar en Windows).
+        self._make_resizable_dialog(win, 640, 620, min_w=560, min_h=500)
+        self._apply_window_chrome(win)
+        self._meas_window = win
+        # Cuando se cierre, limpiar referencia para que la próxima vez
+        # se pueda abrir.
+        def _on_meas_close():
+            self._meas_window = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", _on_meas_close)
+        self._bind_escape_to_close(win, on_close=_on_meas_close)
+
+        # Estado local de la ventana: medida actualmente seleccionada en el preview
+        selected_name = tk.StringVar(value="Peak-Peak")
+
+        # ---- Header ----
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=40)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="ADD MEASUREMENTS",
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT, padx=14, pady=8)
+
+        # ---- Preview panel (imagen + descripción) ----
+        preview_frame = tk.Frame(win, bg=COLOR_BG_ALT, height=180)
+        preview_frame.pack(fill=tk.X, padx=10, pady=(8, 6))
+        preview_frame.pack_propagate(False)
+
+        # Canvas para la imagen mpl
+        canvas_holder = tk.Frame(preview_frame, bg="#3a3a3a", width=300, height=160)
+        canvas_holder.pack(side=tk.LEFT, padx=8, pady=8)
+        canvas_holder.pack_propagate(False)
+
+        desc_frame = tk.Frame(preview_frame, bg=COLOR_BG_ALT)
+        desc_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 8), pady=8)
+
+        title_lbl = tk.Label(
+            desc_frame, text="", bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            font=("Segoe UI", 11, "bold"), anchor="w", justify="left")
+        title_lbl.pack(anchor="w")
+
+        desc_lbl = tk.Label(
+            desc_frame, text="", bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9), anchor="nw", justify="left",
+            wraplength=280)
+        desc_lbl.pack(anchor="w", fill=tk.BOTH, expand=True, pady=(4, 0))
+
+        # Canvas mpl
+        preview_canvas = {"obj": None}  # holder mutable
+
+        def update_preview(name):
+            # Limpiar el canvas anterior
+            for w in canvas_holder.winfo_children():
+                w.destroy()
+            fig = make_measurement_preview(name)
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            c = FigureCanvasTkAgg(fig, master=canvas_holder)
+            c.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            c.draw()
+            preview_canvas["obj"] = c
+            title_lbl.config(text=name)
+            desc_lbl.config(text=MEASUREMENT_DESCRIPTIONS.get(name, ""))
+
+        # ---- Source + Add ----
+        source_row = tk.Frame(win, bg=COLOR_BG)
+        source_row.pack(fill=tk.X, padx=10, pady=(6, 4))
+
+        tk.Label(source_row, text="Source:",
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(4, 8))
+
+        channel_names = [ch["name"] for ch in self.channels]
+        source_var = tk.StringVar(value=channel_names[self.active_channel_idx])
+        source_combo = ttk.Combobox(
+            source_row, textvariable=source_var,
+            values=channel_names, state="readonly", width=14)
+        source_combo.pack(side=tk.LEFT)
+
+        # Combo de referencia (solo visible para medidas dual-channel)
+        ref_lbl = tk.Label(source_row, text="vs",
+                           bg=COLOR_BG, fg=COLOR_TEXT,
+                           font=("Segoe UI", 10))
+        ref_default = channel_names[1] if len(channel_names) > 1 else channel_names[0]
+        ref_var = tk.StringVar(value=ref_default)
+        ref_combo = ttk.Combobox(
+            source_row, textvariable=ref_var,
+            values=channel_names, state="readonly", width=14)
+
+        def _is_dual(name):
+            if name not in ALL_MEASUREMENTS:
+                return False
+            _, f = ALL_MEASUREMENTS[name]
+            return isinstance(f, tuple) and len(f) == 2 and f[0] == "dual"
+
+        def _refresh_dual_ui(*_):
+            if _is_dual(selected_name.get()):
+                ref_lbl.pack(side=tk.LEFT, padx=(8, 6))
+                ref_combo.pack(side=tk.LEFT)
+            else:
+                ref_lbl.pack_forget()
+                ref_combo.pack_forget()
+
+        selected_name.trace_add("write", _refresh_dual_ui)
+
+        def on_add():
+            if len(self.active_measurements) >= self.MAX_MEASUREMENTS:
+                msg_lbl.config(
+                    text=f"Max {self.MAX_MEASUREMENTS} measurements reached.",
+                    fg=COLOR_DANGER)
+                return
+            # Canal por nombre
+            src_name = source_var.get()
+            ch_idx = 0
+            for i, ch in enumerate(self.channels):
+                if ch["name"] == src_name:
+                    ch_idx = i
+                    break
+            new_meas = {
+                "channel_idx": ch_idx,
+                "name": selected_name.get(),
+            }
+            # Para medidas dual-channel, guardar el canal de referencia
+            if _is_dual(selected_name.get()):
+                ref_name = ref_var.get()
+                ref_idx = ch_idx
+                for i, ch in enumerate(self.channels):
+                    if ch["name"] == ref_name:
+                        ref_idx = i
+                        break
+                if ref_idx == ch_idx:
+                    msg_lbl.config(
+                        text="Phase needs two different channels.",
+                        fg=COLOR_DANGER)
+                    return
+                new_meas["ref_channel_idx"] = ref_idx
+            self.active_measurements.append(new_meas)
+            self.update_plot()
+            self._mark_dirty()
+            msg_lbl.config(
+                text=f"Added {selected_name.get()} on {src_name}  ({len(self.active_measurements)}/{self.MAX_MEASUREMENTS})",
+                fg=COLOR_ACCENT)
+
+        add_btn = ttk.Button(source_row, text="Add", command=on_add,
+                             style="Accent.TButton")
+        add_btn.pack(side=tk.RIGHT, padx=(4, 4))
+
+        close_btn = ttk.Button(source_row, text="Close",
+                               command=win.destroy)
+        close_btn.pack(side=tk.RIGHT, padx=(4, 4))
+
+        msg_lbl = tk.Label(source_row, text="",
+                           bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                           font=("Segoe UI", 8))
+        msg_lbl.pack(side=tk.RIGHT, padx=(10, 10))
+
+        # ---- Categorías de medidas ----
+        cats_frame = tk.Frame(win, bg=COLOR_BG)
+        cats_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(6, 10))
+
+        # Estado: solo una sección abierta a la vez (tipo accordion)
+        section_state = {"open": "AMPLITUDE MEASUREMENTS"}
+        section_grids = {}   # title -> grid Frame (el contenido que se oculta)
+        section_carets = {}  # title -> Label con ▼/▶
+
+        def make_cat_section(parent, title, meas_dict):
+            # Cabecera clicable
+            hdr_f = tk.Frame(parent, bg=COLOR_BG_ALT, height=28, cursor="hand2")
+            hdr_f.pack(fill=tk.X, pady=(6, 0))
+            hdr_f.pack_propagate(False)
+
+            caret = tk.Label(hdr_f, text="▼", bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                             font=("Segoe UI", 9, "bold"))
+            caret.pack(side=tk.LEFT, padx=(10, 6), pady=4)
+            title_lbl = tk.Label(hdr_f, text=title, bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                                 font=("Segoe UI", 9, "bold"))
+            title_lbl.pack(side=tk.LEFT, pady=4)
+
+            section_carets[title] = caret
+
+            grid = tk.Frame(parent, bg=COLOR_BG)
+            # Se empaqueta solo si está abierto
+            section_grids[title] = grid
+
+            COLS = 3
+            for i, name in enumerate(meas_dict.keys()):
+                r, c = divmod(i, COLS)
+                btn = tk.Button(
+                    grid, text=name,
+                    bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                    activebackground=COLOR_BG_HOVER,
+                    activeforeground=COLOR_TEXT,
+                    bd=1, relief="flat",
+                    font=("Segoe UI", 9),
+                    padx=8, pady=6,
+                    anchor="w", width=18,
+                    highlightbackground=COLOR_BORDER,
+                    highlightthickness=1,
+                )
+                btn.grid(row=r, column=c, padx=3, pady=2, sticky="we")
+
+                # Hover "sombra": cambia el borde a accent y sube el bg
+                def on_enter(e, b=btn):
+                    # No sobrescribir si está seleccionado (borde accent gordo)
+                    cur_thick = int(b.cget("highlightthickness"))
+                    if cur_thick < 2:
+                        b.config(bg=COLOR_BG_HOVER, highlightbackground=COLOR_ACCENT)
+                def on_leave(e, b=btn):
+                    cur_thick = int(b.cget("highlightthickness"))
+                    if cur_thick < 2:
+                        b.config(bg=COLOR_BG_ALT, highlightbackground=COLOR_BORDER)
+                btn.bind("<Enter>", on_enter)
+                btn.bind("<Leave>", on_leave)
+
+                def make_handler(n, b):
+                    def _click():
+                        selected_name.set(n)
+                        update_preview(n)
+                        for child in grid.winfo_children():
+                            if isinstance(child, tk.Button):
+                                child.config(highlightbackground=COLOR_BORDER,
+                                             highlightthickness=1,
+                                             bg=COLOR_BG_ALT)
+                        b.config(highlightbackground=COLOR_ACCENT,
+                                 highlightthickness=2)
+                    return _click
+                btn.config(command=make_handler(name, btn))
+                grid.columnconfigure(c, weight=1)
+
+            # Toggle al clicar header
+            def toggle(_e=None):
+                is_open = section_state["open"] == title
+                if is_open:
+                    # Cerrar = no hacer nada (mantener una abierta)
+                    return
+                # Cerrar la actual y abrir esta
+                old = section_state["open"]
+                if old in section_grids:
+                    section_grids[old].pack_forget()
+                    section_carets[old].config(text="▶")
+                section_state["open"] = title
+                section_grids[title].pack(fill=tk.X, padx=4, pady=4,
+                                          after=section_carets[title].master)
+                section_carets[title].config(text="▼")
+            hdr_f.bind("<Button-1>", toggle)
+            caret.bind("<Button-1>", toggle)
+            title_lbl.bind("<Button-1>", toggle)
+
+        make_cat_section(cats_frame, "AMPLITUDE MEASUREMENTS", AMPLITUDE_MEASUREMENTS)
+        make_cat_section(cats_frame, "TIME MEASUREMENTS", TIME_MEASUREMENTS)
+
+        # Abrir solo la primera
+        section_grids["AMPLITUDE MEASUREMENTS"].pack(
+            fill=tk.X, padx=4, pady=4,
+            after=section_carets["AMPLITUDE MEASUREMENTS"].master
+        )
+        section_carets["TIME MEASUREMENTS"].config(text="▶")
+
+        # Inicializar preview con la medida por defecto
+        update_preview(selected_name.get())
+
+
+
+        
+    # ------------MEAS METHODS-----------------   
+    
+        
+
+    # -----------------------------
+    def configure_grid(self):
+        t_div = self.t_div.get()
+        v_div = self.v_div.get()
+        v_offset = self.v_offset.get()
+
+        t_range = H_DIVS * t_div
+        v_range = V_DIVS * v_div
+
+        self.ax.clear()
+        
+        self.ax.set_facecolor(self.grid_theme["bg"])
+        self.fig.patch.set_facecolor(self.grid_theme["bg"])
+
+        self.ax.set_xlim(0, t_range)
+        # ylim centrado en 0. El desplazamiento de cada canal se aplica al
+        # dibujar (update_plot) restando el v_offset del canal a la señal.
+        self.ax.set_ylim(-v_range / 2, v_range / 2)
+
+
+
+        xticks = np.linspace(
+            0,
+            t_range,
+            H_DIVS + 1,     # 12 divisiones → 13 líneas
+            endpoint=True
+        )
+        self.ax.set_xticks(xticks)
+        # Los xticks tienen coordenadas internas [0..t_range] (relativas al
+        # viewport). El tiempo REAL que representa cada tick es:
+        #   t_real = t_offset + x_tick + time_origin
+        # Donde time_origin es el offset original del CSV (pre-trigger
+        # negativo en capturas de scope con trigger en t=0).
+        t_off = self.t_offset.get()
+        t_o = self._t_display_origin()
+        self.ax.set_xticklabels(
+            [format_si(t_off + x + t_o, "s", sig_figs=3) for x in xticks])
+
+
+
+
+        # Ticks verticales: posiciones de pantalla en divisiones,
+        # pero etiquetados con los VALORES REALES del canal activo
+        yticks_screen = np.linspace(
+            -v_range / 2,
+             v_range / 2,
+            V_DIVS + 1,
+            endpoint=True
+        )
+        self.ax.set_yticks(yticks_screen)
+
+        # ¿Color del canal activo? Si hay canales, usamos su color
+        y_tick_color = self.grid_theme["text_color"]
+        # sig_figs=4 (no 3) para no perder el decimal en modo Fine con
+        # v_div > 100 V: con sig_figs=3 el valor 100.1 se redondea a "100"
+        # y todos los ticks aparecen como enteros aunque la escala sea fina.
+        # 4 da "100.1" y, gracias a {:.4g}, no añade ceros decorativos en
+        # valores enteros ("1 V", no "1.000 V").
+        # Snap a 0 si el valor cae por debajo de v_div*1e-9: tras escalar
+        # v_offset proporcionalmente al cambio de v_div (pivot por divisiones
+        # del grid) los residuos de coma flotante hacen que la línea "0 V"
+        # acabe siendo 1e-13 ó 1e-14, que el formateador SI muestra como
+        # "100 fV" o similar. Ese rango está varios órdenes de magnitud por
+        # debajo de cualquier medida real, así que es seguro tratarlo como 0.
+        noise_thr = v_div * 1e-9
+        def _clean(y):
+            return 0.0 if abs(y) < noise_thr else y
+        if self.channels:
+            active = self.channels[self.active_channel_idx]
+            y_tick_color = active["color"]
+            # Convertir cada posición de pantalla a valor físico del canal activo:
+            #   screen = (v_real - offset) / v_div_ch * v_div_active
+            #   v_real = screen * v_div_ch / v_div_active + offset
+            # Con el canal activo: v_div_ch == v_div_active, así que:
+            #   v_real = screen + offset
+            yticks_real = yticks_screen + active["v_offset"]
+            y_unit = self._active_unit()
+            self.ax.set_yticklabels([format_si(_clean(y), y_unit, sig_figs=4) for y in yticks_real])
+        else:
+            y_unit = self._active_unit()
+            self.ax.set_yticklabels([format_si(_clean(y), y_unit, sig_figs=4) for y in yticks_screen])
+
+
+        
+        self.ax.grid(
+            True,
+            which="both",
+            color=self.grid_theme["grid_color"],
+            linewidth=0.8
+        )
+        
+        
+        # -----------------------------
+        # Recuadro de la vista (spines)
+        # -----------------------------
+        for spine in self.ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color(self.grid_theme["grid_color"])
+            spine.set_linewidth(1.2)
+
+        
+        self.ax.tick_params(axis='x', colors=self.grid_theme["text_color"])
+        self.ax.tick_params(axis='y', colors=y_tick_color)
+
+        for label in self.ax.get_xticklabels():
+            label.set_color(self.grid_theme["text_color"])
+        for label in self.ax.get_yticklabels():
+            label.set_color(y_tick_color)
+
+        # -----------------------------
+        # Mini-marcas ("hash marks") en los ejes centrales del grid.
+        # Estilo osciloscopio real: cada división se subdivide en 5 partes
+        # (cada 0.2 divisiones) con rayitas cortas sobre la línea central
+        # horizontal (y=0) y la línea central vertical (x=t_range/2).
+        # -----------------------------
+        tick_color = self.grid_theme["text_color"]
+        t_range_val = t_range
+        v_range_val = v_range
+        x_center = t_range_val / 2.0
+
+        # Tamaño de las rayitas (más cortas: 5% de división)
+        minor_x_len = v_div * 0.05   # rayitas verticales sobre la línea horizontal
+        minor_y_len = t_div * 0.05   # rayitas horizontales sobre la línea vertical
+
+        # --- Rayitas verticales sobre la línea horizontal central (y=0) ---
+        # 5 subdivisiones por división: paso = t_div/5
+        sub_x_step = t_div / 5.0
+        x = 0.0
+        while x <= t_range_val + sub_x_step * 0.5:
+            # No dibujar encima de las divisiones principales (ya existen como grid)
+            # Dividimos en 5: las posiciones intermedias son las que valen.
+            frac = (x / t_div)
+            if abs(frac - round(frac)) > 1e-6:
+                self.ax.plot(
+                    [x, x],
+                    [-minor_x_len / 2, minor_x_len / 2],
+                    color=tick_color, linewidth=0.6, alpha=0.4,
+                    zorder=2,
+                )
+            x += sub_x_step
+
+        # --- Rayitas horizontales sobre la línea vertical central ---
+        sub_y_step = v_div / 5.0
+        y = -v_range_val / 2.0
+        while y <= v_range_val / 2.0 + sub_y_step * 0.5:
+            frac = (y / v_div)
+            if abs(frac - round(frac)) > 1e-6:
+                self.ax.plot(
+                    [x_center - minor_y_len / 2, x_center + minor_y_len / 2],
+                    [y, y],
+                    color=tick_color, linewidth=0.6, alpha=0.4,
+                    zorder=2,
+                )
+            y += sub_y_step
+
+        #self.ax.set_xlabel("Tiempo [s]")
+        #self.ax.set_ylabel("Voltaje [V]")
+        self.update_time_div_label()
+
+    # -----------------------------
+    def draw_ground_marker(self):
+        """Dibuja un indicador del nivel 0 V (GND) en el lado izquierdo del plot."""
+        v_range = self.v_div.get() * V_DIVS
+        v_offset = self.v_offset.get()
+        t_range = self.t_div.get() * H_DIVS
+
+        y_gnd = 0.0  # la posición real del 0 V
+
+        # Mostrar solo si está dentro del área visible
+        y_min = -v_range / 2 - v_offset
+        y_max =  v_range / 2 - v_offset
+
+        if y_min <= y_gnd <= y_max:
+            # Flecha / marcador a la izquierda (bastante separado del eje)
+            self.ax.annotate(
+                "▶ 0",
+                xy=(0, y_gnd),
+                xytext=(-t_range * 0.06, y_gnd),
+                ha="right",
+                va="center",
+                color="yellow",
+                fontsize=9,
+                fontweight="bold",
+                annotation_clip=False,
+            )
+            # Línea tenue horizontal marcando el 0
+            self.ax.axhline(
+                y_gnd,
+                color="yellow",
+                linewidth=0.5,
+                linestyle=(0, (1, 4)),   # punteado sutil
+                alpha=0.4
+            )
+
+    # -----------------------------
+    def is_click_on_trace(self, event):
+        """True si el click cae cerca de ALGÚN canal visible."""
+        return self.find_channel_under_click(event) is not None
+
+    def find_channel_under_click(self, event):
+        """Devuelve el índice del canal visible cuyo trazo pasa más cerca
+        del punto clicado, o None si ninguno está dentro de tolerancia.
+        Usa las coordenadas de pantalla ya reescaladas (event.ydata está
+        en 'V equivalentes del canal activo'). """
+        if self.time is None or not self.channels:
+            return None
+        if event.xdata is None or event.ydata is None:
+            return None
+
+        # Tiempo real del CSV
+        click_time = event.xdata + self.t_offset.get()
+        idx = int(np.searchsorted(self.time, click_time))
+        idx = max(0, min(idx, len(self.time) - 1))
+
+        v_div_active = self.v_div.get()
+        # Tolerancia: 0.5 divisiones (en coordenadas de pantalla)
+        tol_screen = v_div_active * 0.5
+
+        best_i = None
+        best_dist = float("inf")
+        for i, ch in enumerate(self.channels):
+            if not ch["visible"].get():
+                continue
+            # Reescalar el valor del canal a coordenadas de pantalla
+            v_raw = ch["voltage"][idx]
+            y_screen = (v_raw - ch["v_offset"]) / ch["v_div"] * v_div_active
+            dist = abs(event.ydata - y_screen)
+            if dist < tol_screen and dist < best_dist:
+                best_dist = dist
+                best_i = i
+        return best_i
+
+    # -----------------------------
+    # Máximo de canales soportados — limitado por la paleta de colores
+    # disponibles. Suma canales de datos + canales MATH.
+    MAX_TOTAL_CHANNELS = len(CHANNEL_COLORS)   # 12 (v1.26)
+
+    def load_csv(self):
+        """Punto de entrada del botón "Open CSV".
+
+        Si ya hay datos cargados, primero pregunta si el nuevo CSV
+        sustituye los datos actuales o añade canales adicionales al
+        timebase existente (interpolando si es necesario)."""
+        # Preguntar modo solo si ya hay datos cargados
+        if self.channels and len(self.time) > 1:
+            # Si ya estamos al máximo de canales, no se puede añadir.
+            # Decirlo explícitamente para que la opción Add no aparezca
+            # vacía en el diálogo.
+            free_slots = self.MAX_TOTAL_CHANNELS - len(self.channels)
+            mode = self._ask_load_mode(free_slots)
+            if mode is None:
+                return
+            if mode == "append":
+                self._load_csv_append()
+                return
+            # mode == "replace": cae al flujo legacy
+        self._load_csv_replace()
+
+    def _ask_load_mode(self, free_slots):
+        """Diálogo modal: replace / append / cancel.
+
+        Devuelve "replace", "append" o None (si cancela).
+        free_slots = número de canales que aún caben (puede ser 0)."""
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Load CSV")
+        win.configure(bg=COLOR_BG)
+        self._center_dialog(win, 420, 230)
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+
+        result = {"mode": None}
+
+        # Header
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="LOAD CSV",
+                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 font=("Segoe UI", 11, "bold")
+                 ).pack(side=tk.LEFT, padx=14, pady=10)
+
+        # Pregunta
+        tk.Label(win,
+                 text=("A CSV is already loaded. What do you want to do "
+                       "with the new file?"),
+                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 font=("Segoe UI", 9),
+                 wraplength=380, justify="left"
+                 ).pack(padx=14, pady=(14, 8), anchor="w")
+
+        # Opciones
+        opts_frame = tk.Frame(win, bg=COLOR_BG)
+        opts_frame.pack(padx=14, pady=4, fill=tk.X)
+
+        def pick(mode):
+            result["mode"] = mode
+            win.destroy()
+
+        b_replace = ttk.Button(
+            opts_frame, text="Replace current data",
+            command=lambda: pick("replace"),
+            style="Accent.TButton")
+        b_replace.pack(fill=tk.X, pady=3)
+        Tooltip(b_replace,
+                "Discard the current data and load the new file from scratch.")
+
+        b_append = ttk.Button(
+            opts_frame,
+            text=(f"Add channels to existing data  ({free_slots} free)"
+                  if free_slots > 0 else
+                  "Add channels — limit reached"),
+            command=lambda: pick("append"))
+        b_append.pack(fill=tk.X, pady=3)
+        # Desactivar si no caben más canales
+        if free_slots <= 0:
+            b_append.config(state="disabled")
+            Tooltip(b_append,
+                    f"Maximum {self.MAX_TOTAL_CHANNELS} channels reached.\n"
+                    "Replace or remove channels first.")
+        else:
+            Tooltip(b_append,
+                    "Pick channels from the new file and append them to the\n"
+                    "current view. The new channels will be resampled to\n"
+                    "the existing timebase (linear interpolation).")
+
+        ttk.Button(opts_frame, text="Cancel",
+                   command=win.destroy).pack(fill=tk.X, pady=(6, 0))
+
+        # Esperar a que se cierre
+        win.wait_window()
+        return result["mode"]
+
+    def _load_csv_replace(self):
+        """Comportamiento clásico: pick file, parse, finalize.
+        Equivalente al load_csv original."""
+        # Si hay una sesión con cambios sin guardar, ofrecer guardarla
+        # antes de descartarla. Si no hay dirty (primer load, etc.) el
+        # prompt no aparece. El usuario puede cancelar.
+        if not self._prompt_save_if_dirty(context="loading a new CSV"):
+            return
+        filename = filedialog.askopenfilename(
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if not filename:
+            return
+        self._do_csv_load(filename, append_mode=False)
+
+    def _load_csv_append(self):
+        """Modo "añadir canales": pick file, parse, abrir picker de
+        canales, interpolar y añadir al estado actual."""
+        filename = filedialog.askopenfilename(
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if not filename:
+            return
+        self._do_csv_load(filename, append_mode=True)
+
+    def _do_csv_load(self, filename, append_mode):
+        """Carga el CSV (thread + overlay) y enruta al finalize correcto
+        según append_mode."""
+        overlay = self._show_loading_overlay(
+            "Loading CSV..." if not append_mode else "Loading channels...")
+        self.root.update_idletasks()
+
+        import threading
+        result = {}
+
+        def worker():
+            try:
+                result["parsed"] = _read_csv_smart(filename)
+            except Exception as e:
+                result["error"] = str(e)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        def check_done():
+            if t.is_alive():
+                self.root.after(80, check_done)
+                return
+            if "error" in result:
+                self._hide_loading_overlay(overlay)
+                self._open_csv_import_dialog(filename, error=result["error"])
+                return
+            parsed = result["parsed"]
+            if not parsed["all_columns"]:
+                self._hide_loading_overlay(overlay)
+                self._open_csv_import_dialog(
+                    filename, error="No data channels found.")
+                return
+
+            if append_mode:
+                # En modo append no necesitamos validar la columna
+                # temporal con el mismo rigor (vamos a interpolar al
+                # timebase existente). Pero seguimos necesitándola para
+                # saber a qué tiempo corresponde cada muestra del nuevo
+                # CSV. Si el _read_csv_smart no la detectó con alta
+                # confianza, abrimos el diálogo de selección.
+                if parsed["time_confidence"] != "high":
+                    self._hide_loading_overlay(overlay)
+                    self._open_time_column_dialog_for_append(
+                        filename, parsed)
+                    return
+                self._hide_loading_overlay(overlay)
+                self._open_add_channels_dialog(filename, parsed)
+                return
+
+            # Modo replace: mismo flujo que antes
+            # Validar la columna temporal con la heurística completa.
+            # Si la confianza en la columna temporal NO es alta, o si es
+            # alta pero el dt mediano cae fuera del rango "razonable como
+            # segundos" (típico cuando vienen en µs o ns sin sufijo
+            # declarado), abrimos el diálogo de confirmación. Umbral 1.0 s
+            # generoso: capturas lentas legítimas (10s/div) lo superan
+            # solo si el dt real es >1s — caso muy raro.
+            tcol = parsed.get("time_col_index")
+            ambiguous_unit = False
+            if parsed["time_confidence"] == "high" and tcol is not None:
+                dt_med = parsed["time_scores"][tcol]["dt_median"]
+                if dt_med > 1.0:
+                    ambiguous_unit = True
+            if parsed["time_confidence"] != "high" or ambiguous_unit:
+                self._hide_loading_overlay(overlay)
+                self._open_time_column_dialog(filename, parsed)
+                return
+            # Confianza alta y unidad razonable → ir directo al load
+            self._finalize_csv_load(parsed, filename, overlay)
+
+        # Arrancar el poller (no llamar a check_done() directamente — el
+        # thread acaba de empezar y root.after garantiza que damos tiempo
+        # a que progrese).
+        self.root.after(80, check_done)
+
+
+    def _finalize_csv_load(self, parsed, filename, overlay):
+        """Camino final común para cargar el CSV una vez decidido qué columna
+        es tiempo y en qué unidad viene. Se llama tanto desde load_csv (path
+        rápido, confianza alta) como desde _open_time_column_dialog tras la
+        confirmación del usuario."""
+        import os
+        time = parsed["time"]
+        columns = parsed["columns"]
+        col_names = parsed["col_names"]
+
+        if not columns:
+            self._hide_loading_overlay(overlay)
+            from tkinter import messagebox
+            messagebox.showerror("CSV load",
+                                 "After selecting the time column, no data "
+                                 "channels remain to plot.")
+            return
+
+        self.current_filename = os.path.basename(filename)
+        self.current_filepath = os.path.abspath(filename)
+        # CSV real de disco → invalidar cache embebido previo.
+        self._embedded_csv_content = None
+        self.current_brand = parsed.get("brand")
+
+        def do_load():
+            # Suprimimos dirty durante la inicialización de canales y vista:
+            # _load_channels escribe en muchas tk.Vars que tienen trace para
+            # marcar dirty, y esas escrituras son las del bootstrap interno
+            # (no acciones del usuario), así que no queremos contarlas.
+            self._suppress_dirty = True
+            try:
+                self._load_channels(time, columns, col_names)
+                # Replace de un CSV nuevo → sesión Untitled.
+                self.session_path = None
+            finally:
+                self._suppress_dirty = False
+            # Cargar un CSV es un cambio de estado relevante: la sesión
+            # Untitled queda dirty desde el principio para que el usuario
+            # sea consciente de que cerrarla pierde la configuración aun
+            # sin haberla tocado más.
+            self.session_dirty = True
+            self._update_title()
+            self.root.after(50, lambda: self._hide_loading_overlay(overlay))
+        self.root.after(50, do_load)
+
+    # =====================================================
+    # Append-mode CSV load: añadir canales sin reemplazar
+    # =====================================================
+    def _open_time_column_dialog_for_append(self, filename, parsed):
+        """Variante simplificada del diálogo de columna de tiempo para
+        modo append. Reutilizamos la lógica de detección y delegamos
+        en el diálogo full; al confirmar, en lugar de _finalize_csv_load
+        llamamos a _open_add_channels_dialog para que el usuario elija
+        qué canales añadir.
+
+        Implementación: como _open_time_column_dialog tiene mucha UI
+        compartida, abrimos el diálogo normal pero monkey-patcheamos
+        el camino del OK. Es feo, pero evita duplicar 200 líneas de UI.
+        Una limpieza futura sería separar la UI del action handler.
+
+        Aquí simplificamos: si el usuario ya seleccionó "OK" en ese
+        diálogo, llamará a _finalize_csv_load y eso reemplaza. Para
+        evitarlo, abrimos un diálogo más sencillo aquí: tabla de
+        columnas + selector de unidad + OK que va al add picker."""
+        import os
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Confirm time column (append)")
+        win.configure(bg=COLOR_BG)
+        self._center_dialog(win, 680, 480)
+        win.transient(self.root)
+        win.grab_set()
+
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="SELECT TIME COLUMN OF NEW FILE",
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 font=("Segoe UI", 11, "bold")
+                 ).pack(side=tk.LEFT, padx=14, pady=10)
+        tk.Label(hdr, text=os.path.basename(filename),
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)
+                 ).pack(side=tk.RIGHT, padx=14, pady=10)
+
+        tk.Label(win,
+                 text=("The new file's time axis was not detected with "
+                       "high confidence. Pick the time column and its "
+                       "unit so we can resample the new channels onto "
+                       "the existing timebase."),
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9), wraplength=640, justify="left"
+                 ).pack(padx=14, pady=(10, 6), anchor="w")
+
+        # Tabla de columnas (idéntica a la del diálogo principal)
+        table_frame = ttk.Frame(win)
+        table_frame.pack(padx=14, pady=4, fill=tk.BOTH, expand=True)
+        cols = ("name", "dt_median", "score", "monotonic", "preview")
+        tree = ttk.Treeview(table_frame, columns=cols, show="headings",
+                            height=8, selectmode="browse")
+        for k, lbl, w, anchor in (
+                ("name", "Column", 140, "w"),
+                ("dt_median", "dt median", 110, "w"),
+                ("score", "Score", 70, "w"),
+                ("monotonic", "Monotonic", 80, "center"),
+                ("preview", "First 4 values", 240, "w")):
+            tree.heading(k, text=lbl)
+            tree.column(k, width=w, anchor=anchor)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                               command=tree.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scroll.set)
+
+        all_cols = parsed["all_columns"]
+        all_names = parsed["all_col_names"]
+        scores = parsed["time_scores"]
+        for j, (col, nm, sc) in enumerate(zip(all_cols, all_names, scores)):
+            preview = ", ".join(f"{col[k]:.6g}" for k in range(min(4, len(col))))
+            dt = sc["dt_median"]
+            dt_str = f"{dt:.6g}" if dt > 0 else "—"
+            tree.insert("", "end", iid=str(j),
+                        values=(nm, dt_str, f"{sc['score']:.2f}",
+                                "✓" if sc["monotonic"] else "✗",
+                                preview))
+        best_j = parsed.get("time_col_index")
+        if best_j is not None:
+            tree.selection_set(str(best_j))
+            tree.focus(str(best_j))
+
+        # Selector de unidad
+        unit_row = tk.Frame(win, bg=COLOR_BG)
+        unit_row.pack(padx=14, pady=(4, 8), anchor="w")
+        tk.Label(unit_row, text="Time unit:",
+                 bg=COLOR_BG, fg=COLOR_TEXT
+                 ).pack(side=tk.LEFT)
+        unit_var = tk.StringVar(value=self._TIME_UNIT_CHOICES[0][0])
+        unit_combo = ttk.Combobox(
+            unit_row, textvariable=unit_var,
+            values=[lbl for lbl, _ in self._TIME_UNIT_CHOICES],
+            state="readonly", width=22)
+        unit_combo.pack(side=tk.LEFT, padx=(6, 0))
+        # Sugerencia automática si la heurística lo soporta
+        dt_med = parsed.get("time_dt_median", 0.0) or 0.0
+        if dt_med > 0:
+            unit_var.set(self._guess_time_unit(dt_med))
+
+        # Botones
+        btns = ttk.Frame(win)
+        btns.pack(pady=(6, 12))
+
+        def on_ok():
+            sel = tree.selection()
+            if not sel:
+                from tkinter import messagebox
+                messagebox.showwarning("Time column",
+                                       "Select a time column.",
+                                       parent=win)
+                return
+            j = int(sel[0])
+            unit_label = unit_var.get()
+            factor = next((f for lbl, f in self._TIME_UNIT_CHOICES
+                           if lbl == unit_label), 1.0)
+            new_parsed = dict(parsed)
+            new_parsed["time"] = all_cols[j] * factor
+            new_parsed["columns"] = [all_cols[k]
+                                     for k in range(len(all_cols))
+                                     if k != j]
+            new_parsed["col_names"] = [all_names[k]
+                                       for k in range(len(all_names))
+                                       if k != j]
+            new_parsed["time_col_index"] = j
+            win.destroy()
+            self._open_add_channels_dialog(filename, new_parsed)
+
+        ttk.Button(btns, text="OK", command=on_ok,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=6)
+        # Doble clic en la fila también confirma
+        tree.bind("<Double-Button-1>", lambda e: on_ok())
+        ttk.Button(btns, text="Cancel",
+                   command=win.destroy).pack(side=tk.LEFT, padx=6)
+
+    def _open_add_channels_dialog(self, filename, parsed):
+        """Diálogo de selección de canales para modo append.
+
+        Muestra una lista con checkbox por cada canal del nuevo CSV,
+        con preview de nombre y rango de valores. Un contador en vivo
+        indica cuántos quedan por seleccionar — no se puede marcar más
+        del free_slots disponible.
+
+        Al confirmar, llama a _append_channels con las columnas
+        elegidas. La interpolación al timebase existente se hace allí."""
+        import os
+
+        free_slots = self.MAX_TOTAL_CHANNELS - len(self.channels)
+        if free_slots <= 0:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Add channels",
+                f"Channel limit ({self.MAX_TOTAL_CHANNELS}) reached.",
+                parent=self.root)
+            return
+
+        new_time = np.asarray(parsed["time"], dtype=float)
+        new_cols = parsed["columns"]
+        new_names = parsed["col_names"]
+
+        if not new_cols:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Add channels",
+                "The new file has no data channels.",
+                parent=self.root)
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Add channels")
+        win.configure(bg=COLOR_BG)
+        self._center_dialog(win, 560, 520)
+        win.transient(self.root)
+        win.grab_set()
+
+        # Header
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="ADD CHANNELS",
+                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 font=("Segoe UI", 11, "bold")
+                 ).pack(side=tk.LEFT, padx=14, pady=10)
+        tk.Label(hdr, text=os.path.basename(filename),
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)
+                 ).pack(side=tk.RIGHT, padx=14, pady=10)
+
+        # Info de timebase
+        t_cur_start = float(self.time[0]) if len(self.time) else 0.0
+        t_cur_end = float(self.time[-1]) if len(self.time) else 0.0
+        t_new_start = float(new_time[0]) if len(new_time) else 0.0
+        t_new_end = float(new_time[-1]) if len(new_time) else 0.0
+        info_text = (
+            f"Current timebase: {format_si(t_cur_start, 's')} → "
+            f"{format_si(t_cur_end, 's')}  ({len(self.time)} samples)\n"
+            f"New file timebase: {format_si(t_new_start, 's')} → "
+            f"{format_si(t_new_end, 's')}  ({len(new_time)} samples)\n"
+            f"New channels will be linearly interpolated to the "
+            f"current timebase."
+        )
+        tk.Label(win, text=info_text,
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9), justify="left"
+                 ).pack(padx=14, pady=(10, 4), anchor="w")
+
+        # Contador en vivo
+        counter_var = tk.StringVar()
+        counter_lbl = tk.Label(win, textvariable=counter_var,
+                               bg=COLOR_BG, fg=COLOR_ACCENT,
+                               font=("Segoe UI", 9, "bold"))
+        counter_lbl.pack(padx=14, pady=(4, 6), anchor="w")
+
+        # Lista de canales con checkbox
+        list_frame = ttk.Frame(win)
+        list_frame.pack(padx=14, pady=4, fill=tk.BOTH, expand=True)
+
+        # Scrollable inner frame
+        canvas = tk.Canvas(list_frame, bg=COLOR_BG, highlightthickness=0)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(list_frame, orient="vertical",
+                               command=canvas.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.configure(yscrollcommand=scroll.set)
+        inner = tk.Frame(canvas, bg=COLOR_BG)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_config(_e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_config)
+
+        def _on_canvas_config(e):
+            canvas.itemconfigure(inner_id, width=e.width)
+        canvas.bind("<Configure>", _on_canvas_config)
+
+        check_vars = []      # BooleanVar por canal
+        check_widgets = []   # widget ref para enable/disable
+
+        def update_counter_and_states():
+            picked = sum(1 for v in check_vars if v.get())
+            remaining = free_slots - picked
+            counter_var.set(
+                f"Selected: {picked}  ·  Remaining slots: {remaining}  "
+                f"·  Max for this file: {free_slots}")
+            # Deshabilitar checkboxes no marcados si ya estamos al límite
+            at_limit = (picked >= free_slots)
+            for v, w in zip(check_vars, check_widgets):
+                if at_limit and not v.get():
+                    w.config(state="disabled")
+                else:
+                    w.config(state="normal")
+
+        for i, (col, nm) in enumerate(zip(new_cols, new_names)):
+            row = tk.Frame(inner, bg=COLOR_BG)
+            row.pack(fill=tk.X, pady=2)
+            v = tk.BooleanVar(value=False)
+            # Si caben todos sin tocar limit, dejarlos default-checked
+            # hasta agotar slots. Esto es lo que el usuario probablemente
+            # quiera más a menudo.
+            if i < free_slots:
+                v.set(True)
+            cb = ttk.Checkbutton(
+                row, variable=v, text=nm,
+                command=update_counter_and_states)
+            cb.pack(side=tk.LEFT, padx=4)
+            # Stats del canal
+            try:
+                vmin = float(np.min(col))
+                vmax = float(np.max(col))
+                stats = (f"range {format_si(vmin, 'V')} → "
+                         f"{format_si(vmax, 'V')}  · {len(col)} samples")
+            except Exception:
+                stats = f"{len(col)} samples"
+            tk.Label(row, text=stats,
+                     bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                     font=("Segoe UI", 8)
+                     ).pack(side=tk.LEFT, padx=10)
+            check_vars.append(v)
+            check_widgets.append(cb)
+
+        update_counter_and_states()
+
+        # Botones
+        btns = ttk.Frame(win)
+        btns.pack(pady=(6, 12))
+
+        def on_ok():
+            selected = [i for i, v in enumerate(check_vars) if v.get()]
+            if not selected:
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "Add channels",
+                    "Select at least one channel to add.",
+                    parent=win)
+                return
+            if len(selected) > free_slots:
+                # No debería pasar (el limit ya bloquea), defensive
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Add channels",
+                    f"Selected {len(selected)} channels but only "
+                    f"{free_slots} slots free.",
+                    parent=win)
+                return
+            win.destroy()
+            overlay = self._show_loading_overlay("Appending channels...")
+            self.root.update_idletasks()
+            self.root.after(50, lambda: self._append_channels(
+                new_time, [new_cols[i] for i in selected],
+                [new_names[i] for i in selected], overlay))
+
+        ttk.Button(btns, text="Add selected", command=on_ok,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=6)
+        ttk.Button(btns, text="Cancel",
+                   command=win.destroy).pack(side=tk.LEFT, padx=6)
+
+    def _append_channels(self, new_time, new_voltages, new_names, overlay):
+        """Añade canales del CSV nuevo al estado actual.
+
+        Cada canal nuevo se interpola linealmente al timebase actual
+        (self.time). Para los instantes donde el CSV nuevo no tiene
+        cobertura (su rango no llega), se rellena con NaN — matplotlib
+        los oculta automáticamente y no contaminan medidas.
+
+        El origen temporal (self.time_origin) NO cambia. El nuevo CSV
+        se alinea como si compartiera el mismo punto cero del eje X.
+
+        Limitaciones honestas (Opción B):
+          - Si la fs del CSV nuevo es muy distinta y la señal tiene
+            componentes de alta frecuencia, la interpolación linear
+            puede introducir aliasing. Para casos críticos, lo
+            correcto sería aplicar un filtro anti-aliasing antes —
+            pero eso queda fuera del scope de este modo.
+          - Si los rangos temporales no se solapan en absoluto, el
+            canal añadido es todo NaN (visualmente vacío).
+        """
+        # Normalizar el tiempo del CSV nuevo. Lo trasladamos para que
+        # comparta el origen "0" del self.time actual (que también empieza
+        # en 0 — ver _load_channels donde se hace time = time - time[0]).
+        new_time = np.asarray(new_time, dtype=float)
+        if len(new_time) >= 1:
+            new_time = new_time - new_time[0]
+
+        n_existing = len(self.channels)
+        added = 0
+        from_outside_range = 0
+
+        for col, nm in zip(new_voltages, new_names):
+            col = np.asarray(col, dtype=float)
+            # Interpolar al timebase actual.
+            # np.interp es lineal y maneja mal los extrapolados (los
+            # clampea a los extremos). Para los puntos del self.time
+            # que caen fuera del rango del CSV nuevo, queremos NaN, no
+            # un extremo repetido. Por eso hacemos:
+            #   1) interp dentro del rango
+            #   2) máscara fuera de rango → NaN
+            if len(new_time) >= 2:
+                interp = np.interp(self.time, new_time, col)
+                mask_outside = ((self.time < new_time[0])
+                                | (self.time > new_time[-1]))
+                if np.any(mask_outside):
+                    interp[mask_outside] = np.nan
+                    from_outside_range += 1
+            else:
+                # Solo una muestra: no podemos interpolar nada útil
+                interp = np.full_like(self.time, np.nan)
+
+            color_idx = n_existing + added
+            display_name = self._clean_channel_name(nm, color_idx)
+            new_ch = {
+                "_uid":     self._next_channel_uid,
+                "name":     display_name,
+                "color":    channel_color(color_idx),
+                "voltage":  interp,
+                "visible":  tk.BooleanVar(value=True),
+                "v_div":    1.0,
+                "v_offset": 0.0,
+                "unit":     DEFAULT_UNIT,
+            }
+            self._next_channel_uid += 1
+            new_ch["visible"].trace_add(
+                "write", lambda *a: (self.update_plot(), self._mark_dirty()))
+            self.channels.append(new_ch)
+            # Auto-fit individual de este canal: ajustar v_div y v_offset
+            # para que entre bien en pantalla con los actuales.
+            try:
+                vmin = np.nanmin(interp)
+                vmax = np.nanmax(interp)
+                if np.isfinite(vmin) and np.isfinite(vmax) and vmax > vmin:
+                    span = vmax - vmin
+                    new_ch["v_div"] = max(span / (V_DIVS - 1), 1e-6)
+                    new_ch["v_offset"] = (vmin + vmax) / 2.0
+            except Exception:
+                pass
+            added += 1
+
+        # Reconstruir el panel y repintar
+        self._rebuild_channels_panel()
+        self.update_plot()
+        self._hide_loading_overlay(overlay)
+
+        # Toast informativo, con aviso si algún canal cayó fuera del rango
+        if from_outside_range > 0:
+            self._show_toast(
+                f"Added {added} channel(s) — "
+                f"{from_outside_range} partially outside timebase (NaN-padded)")
+        else:
+            self._show_toast(f"Added {added} channel(s)")
+
+
+    # Unidades de tiempo soportadas en el diálogo de confirmación.
+    # Tuplas (label_mostrado, factor_a_segundos).
+    _TIME_UNIT_CHOICES = [
+        ("seconds (s)",       1.0),
+        ("milliseconds (ms)", 1e-3),
+        ("microseconds (µs)", 1e-6),
+        ("nanoseconds (ns)",  1e-9),
+        ("minutes",           60.0),
+        ("hours",             3600.0),
+    ]
+
+    @staticmethod
+    def _guess_time_unit(dt_median):
+        """Heurística: a partir del dt mediano sugiere la unidad más
+        probable. Para un osciloscopio típico el sample time real va de ns
+        a ms; si el dt mediano del CSV cae en rango "raro" (por ejemplo
+        decenas o cientos cuando esperábamos fracciones de segundo), es
+        muy probable que la columna venga en otra unidad.
+
+        Casos típicos por rango de dt mediano:
+          - dt ≤ 1e-3       → segundos (sample period ≤ 1 ms, normal)
+          - dt 1e-3 .. 1.0  → segundos (sample period 1 ms a 1 s, dataloggers)
+          - dt 1.0 .. 100   → AMBIGUO: puede ser
+                              (a) microsegundos sin sufijo (caso muy común)
+                              (b) segundos para una captura lenta legítima
+                              → sugerimos microsegundos pero el diálogo
+                              lo pregunta sí o sí.
+          - dt 100 .. 1e5   → microsegundos casi seguro
+          - dt > 1e5        → nanosegundos
+        Devuelve el LABEL de _TIME_UNIT_CHOICES o "seconds (s)" por defecto.
+        """
+        if dt_median <= 0 or not np.isfinite(dt_median):
+            return "seconds (s)"
+        if dt_median <= 1.0:
+            return "seconds (s)"
+        if dt_median <= 100.0:
+            # Zona ambigua: sugerimos µs pero será una sugerencia, el
+            # usuario verá la preview de valores y decidirá.
+            return "microseconds (µs)"
+        if dt_median <= 1e5:
+            return "microseconds (µs)"
+        return "nanoseconds (ns)"
+
+
+    def _open_time_column_dialog(self, filename, parsed):
+        """Diálogo de confirmación cuando _read_csv_smart no está seguro
+        de cuál es la columna temporal. Muestra:
+          - lista de columnas con su nombre, dt mediano, score y monotonía
+          - radio button para elegir la columna de tiempo (o "no time column")
+          - combobox de UNIDAD de tiempo (s, ms, µs, ns, min, h) para
+            convertir a segundos al cargar
+          - nota explicativa según el confidence detectado
+
+        Pulsando OK, aplicamos la elección y caemos en _finalize_csv_load.
+        """
+        import os
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("Confirm time column")
+        win.configure(bg=COLOR_BG)
+        self._center_dialog(win, 680, 520)
+        win.transient(self.root)
+        win.grab_set()
+
+        # ---- Header ----
+        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="CONFIRM TIME COLUMN",
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 font=("Segoe UI", 11, "bold")
+                 ).pack(side=tk.LEFT, padx=14, pady=10)
+        tk.Label(hdr, text=os.path.basename(filename),
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9)
+                 ).pack(side=tk.RIGHT, padx=14, pady=10)
+
+        # ---- Explicación ----
+        conf = parsed["time_confidence"]
+        if conf == "medium":
+            explain_text = (
+                "The first column looks like time but has irregularities "
+                "(jumps, jitter). Please confirm which column is the "
+                "time axis, and which UNIT it's in. If unsure, the "
+                "best candidate is preselected below."
+            )
+        elif conf == "low":
+            explain_text = (
+                "Time-axis detection is uncertain. Please pick the "
+                "correct column manually and verify the unit. If none "
+                "of the columns is time, select 'No time column' to "
+                "use uniform sample indexing."
+            )
+        else:  # 'none'
+            explain_text = (
+                "No column looks clearly like a time axis. Pick one "
+                "manually if it exists, or use 'No time column' to "
+                "treat the data as uniformly sampled."
+            )
+        tk.Label(win, text=explain_text,
+                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 font=("Segoe UI", 9), wraplength=640, justify="left"
+                 ).pack(padx=14, pady=(10, 6), anchor="w")
+
+        # ---- Tabla de columnas ----
+        table_frame = ttk.Frame(win)
+        table_frame.pack(padx=14, pady=4, fill=tk.BOTH, expand=True)
+
+        cols = ("name", "dt_median", "score", "monotonic", "preview")
+        tree = ttk.Treeview(table_frame, columns=cols, show="headings",
+                            height=8, selectmode="browse")
+        tree.heading("name",      text="Column")
+        tree.heading("dt_median", text="dt median")
+        tree.heading("score",     text="Score")
+        tree.heading("monotonic", text="Monotonic")
+        tree.heading("preview",   text="First 4 values")
+        tree.column("name",      width=140, anchor="w")
+        tree.column("dt_median", width=110, anchor="w")
+        tree.column("score",     width=70,  anchor="w")
+        tree.column("monotonic", width=80,  anchor="center")
+        tree.column("preview",   width=240, anchor="w")
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                               command=tree.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scroll.set)
+
+        all_cols = parsed["all_columns"]
+        all_names = parsed["all_col_names"]
+        scores = parsed["time_scores"]
+
+        for j, (col, nm, sc) in enumerate(zip(all_cols, all_names, scores)):
+            preview = ", ".join(f"{col[k]:.6g}" for k in range(min(4, len(col))))
+            dt = sc["dt_median"]
+            dt_str = f"{dt:.6g}" if dt > 0 else "—"
+            tree.insert("", "end", iid=str(j),
+                        values=(nm, dt_str, f"{sc['score']:.2f}",
+                                "✓" if sc["monotonic"] else "✗",
+                                preview))
+
+        # Preseleccionar el mejor candidato (si lo hay)
+        best_j = parsed.get("time_col_index")
+        if best_j is not None:
+            tree.selection_set(str(best_j))
+            tree.focus(str(best_j))
+
+        # ---- Opción "No time column" ----
+        no_time_var = tk.BooleanVar(value=False)
+        no_time_chk = ttk.Checkbutton(
+            win, text="No time column — use uniform sample indexing "
+                     "(time = sample index in seconds)",
+            variable=no_time_var)
+        no_time_chk.pack(padx=14, pady=(6, 2), anchor="w")
+
+        # ---- Selector de unidad ----
+        unit_row = ttk.Frame(win)
+        unit_row.pack(padx=14, pady=(2, 6), fill=tk.X)
+        ttk.Label(unit_row, text="Time unit of the selected column:"
+                  ).pack(side=tk.LEFT)
+        unit_var = tk.StringVar()
+        unit_combo = ttk.Combobox(
+            unit_row, textvariable=unit_var,
+            values=[lbl for lbl, _ in self._TIME_UNIT_CHOICES],
+            state="readonly", width=22)
+        unit_combo.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Inicializar unidad sugerida según el dt del candidato
+        if best_j is not None:
+            dt_med = scores[best_j]["dt_median"]
+            unit_var.set(self._guess_time_unit(dt_med))
+        else:
+            unit_var.set("seconds (s)")
+
+        # Label que muestra dt_median ya convertido a segundos para feedback
+        feedback_lbl = tk.Label(win, text="", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                                font=("Segoe UI", 9, "italic"))
+        feedback_lbl.pack(padx=14, pady=(0, 6), anchor="w")
+
+        def update_feedback(*_):
+            sel = tree.selection()
+            if no_time_var.get() or not sel:
+                feedback_lbl.config(text="")
+                return
+            j = int(sel[0])
+            dt = scores[j]["dt_median"]
+            unit_label = unit_var.get()
+            factor = next((f for lbl, f in self._TIME_UNIT_CHOICES
+                            if lbl == unit_label), 1.0)
+            dt_s = dt * factor
+            total_s = dt_s * (len(all_cols[j]) - 1)
+            feedback_lbl.config(
+                text=f"→ After unit conversion: dt ≈ {dt_s:.6g} s, "
+                     f"total capture ≈ {total_s:.6g} s "
+                     f"({len(all_cols[j])} samples)")
+
+        tree.bind("<<TreeviewSelect>>", update_feedback)
+        unit_var.trace_add("write", update_feedback)
+        no_time_var.trace_add("write", update_feedback)
+        update_feedback()
+
+        # ---- Botones ----
+        btns = ttk.Frame(win)
+        btns.pack(pady=(6, 12))
+
+        def on_ok():
+            sel = tree.selection()
+            use_no_time = no_time_var.get()
+            if not use_no_time and not sel:
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "Time column",
+                    "Select a column or check 'No time column'.",
+                    parent=win)
+                return
+
+            # Construir la versión modificada del 'parsed' dict según la
+            # elección del usuario y caer en _finalize_csv_load.
+            new_parsed = dict(parsed)
+            new_overlay = self._show_loading_overlay("Applying selection...")
+
+            if use_no_time:
+                # No hay columna de tiempo → todas son datos. Tiempo
+                # sintético (índice de muestra en segundos).
+                new_parsed["time"] = np.arange(len(all_cols[0]),
+                                                dtype=float)
+                new_parsed["columns"] = [c for c in all_cols]
+                new_parsed["col_names"] = list(all_names)
+                new_parsed["time_col_index"] = None
+            else:
+                j = int(sel[0])
+                unit_label = unit_var.get()
+                factor = next((f for lbl, f in self._TIME_UNIT_CHOICES
+                                if lbl == unit_label), 1.0)
+                new_parsed["time"] = all_cols[j] * factor
+                new_parsed["columns"] = [all_cols[k]
+                                          for k in range(len(all_cols))
+                                          if k != j]
+                new_parsed["col_names"] = [all_names[k]
+                                            for k in range(len(all_names))
+                                            if k != j]
+                new_parsed["time_col_index"] = j
+
+            win.destroy()
+            self._finalize_csv_load(new_parsed, filename, new_overlay)
+
+        ttk.Button(btns, text="OK", command=on_ok,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=6)
+
+        # Doble clic sobre una fila del Treeview equivale a pulsar OK.
+        # Es UX estándar (el usuario ya manifestó intención al elegir)
+        # y elimina el paso extra de bajar el ratón hasta el botón.
+        # Si "No time column" está marcado y no hay selección, on_ok ya
+        # valida y muestra warning, así que es seguro siempre.
+        tree.bind("<Double-Button-1>", lambda e: on_ok())
+        ttk.Button(btns, text="Manual import…",
+                   command=lambda: (win.destroy(),
+                                    self._open_csv_import_dialog(filename))
+                   ).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btns, text="Cancel",
+                   command=win.destroy).pack(side=tk.LEFT, padx=6)
+
+
+    def _show_loading_overlay(self, text="Loading..."):
+        """Overlay inline: un Frame dentro de la ventana principal que se
+        coloca centrado con place(). No es un Toplevel, así que no abre
+        ventana nueva. Devuelve el Frame (con los mismos atributos de
+        animación que antes) para poder ocultarlo luego."""
+        # Frame contenedor, hijo directo de root
+        ov = tk.Frame(self.root, bg=COLOR_ACCENT, bd=0, highlightthickness=0)
+        inner = tk.Frame(ov, bg=COLOR_BG_ALT)
+        inner.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+
+        ov._label = tk.Label(
+            inner, text=text,
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            font=("Segoe UI", 11, "bold")
+        )
+        ov._label.pack(expand=True, padx=20, pady=(16, 4))
+
+        ov._dots_label = tk.Label(
+            inner, text="●○○○",
+            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            font=("Consolas", 14, "bold")
+        )
+        ov._dots_label.pack(pady=(0, 16))
+
+        # Centrar en la ventana principal con place relativo
+        ov.place(relx=0.5, rely=0.5, anchor="center", width=280, height=100)
+        ov.lift()
+
+        # Animación
+        ov._anim_running = True
+        ov._anim_step = 0
+
+        def animate():
+            if not ov._anim_running:
+                return
+            patterns = ["●○○○", "○●○○", "○○●○", "○○○●"]
+            try:
+                ov._dots_label.config(text=patterns[ov._anim_step % 4])
+                ov._anim_step += 1
+            except tk.TclError:
+                return
+            ov.after(120, animate)
+
+        ov.after(120, animate)
+        ov.update_idletasks()
+        return ov
+
+    def _hide_loading_overlay(self, overlay):
+        if overlay is None:
+            return
+        overlay._anim_running = False
+        try:
+            overlay.place_forget()
+            overlay.destroy()
+        except Exception:
+            pass
+
+
+    def _load_channels(self, time, voltage_columns, col_names):
+        """Sustituye todos los canales actuales por los nuevos.
+        Si había canales MATH, pregunta al usuario qué hacer con ellos."""
+        time = np.asarray(time, dtype=float)
+        # Preservar el origen real ANTES de normalizar al 0. Esto permite
+        # mostrar tiempos absolutos del CSV en las etiquetas del eje X y
+        # cursores (capturas con pre-trigger negativo no pierden contexto).
+        # Internamente la app sigue trabajando con time empezando en 0,
+        # lo que simplifica MATH, decoders, FFT, etc.
+        self.time_origin = float(time[0])
+        time = time - time[0]
+
+        # Decidir qué hacer con los MATH existentes
+        keep_math = False
+        math_snapshots = []
+        if self.math_order:
+            keep_math = self._ask_keep_math_on_new_csv()
+            if keep_math:
+                # Guardar copia de las expresiones y nombres ANTES de resetear
+                for idx in self.math_order:
+                    ch = self.channels[idx]
+                    math_snapshots.append({
+                        "name":  ch["name"],
+                        "color": ch["color"],
+                        "expr":  ch["math"]["expr"],
+                    })
+
+        self.time = time
+        self.t_total = time[-1]
+
+        # Heurística: si el CSV es enorme, arrancar en modo Fast para que
+        # pan/zoom vayan fluidos de entrada. El usuario puede volver a Detail
+        # con el toggle de la topbar cuando quiera ver fino.
+        if len(time) > 500_000 and self.render_mode.get() == "Detail":
+            self.render_mode.set("Fast")
+            self._update_render_mode_btn_visual()
+
+        # Construir lista de canales
+        self.channels = []
+        self.math_order = []
+        for i, col in enumerate(voltage_columns):
+            name = col_names[i] if i < len(col_names) else f"CH{i+1}"
+            # Limpiar nombre para que sea corto y legible
+            display_name = self._clean_channel_name(name, i)
+            self.channels.append({
+                "_uid":     self._next_channel_uid,
+                "name":     display_name,
+                "color":    channel_color(i),
+                "voltage":  np.asarray(col, dtype=float),
+                "visible":  tk.BooleanVar(value=True),
+                "v_div":    1.0,      # se ajusta en auto_fit
+                "v_offset": 0.0,      # se ajusta en auto_fit
+                "unit":     DEFAULT_UNIT,
+            })
+            self._next_channel_uid += 1
+            # Si el BooleanVar cambia → redibujar + marcar dirty
+            self.channels[-1]["visible"].trace_add(
+                "write", lambda *a: (self.update_plot(), self._mark_dirty())
+            )
+
+        self.active_channel_idx = 0
+        self._sync_active_channel_vars()
+
+        # Rellenar panel de canales
+        self._rebuild_channels_panel()
+
+        # Auto-fit completo (ajusta T/div, y V/div/offset para cada canal)
+        self.auto_fit()
+
+        # Inicializar cursores dentro de la ventana visible
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        self.cursor_x = [
+            t_start + window * 0.25,
+            t_start + window * 0.75,
+        ]
+        v_range = self.v_div.get() * V_DIVS
+        self.cursor_y = [
+            -v_range * 0.25,
+             v_range * 0.25,
+        ]
+
+        # Restaurar MATH del snapshot si el usuario lo pidió
+        if math_snapshots:
+            restored, skipped = 0, 0
+            for snap in math_snapshots:
+                try:
+                    ast = math_parse(snap["expr"])
+                    resolved = self._resolve_refs(ast)
+                    # Crear con el nombre original
+                    self._create_math_channel(snap["expr"], resolved, snap["name"])
+                    restored += 1
+                except Exception:
+                    skipped += 1
+            if skipped:
+                self._show_toast(f"MATH: {restored} restored, {skipped} skipped (missing refs)",
+                                 duration_ms=2500)
+            elif restored:
+                self._show_toast(f"MATH: {restored} restored")
+
+        # Recalcular trigger si estaba activo
+        if self.trigger_config["enabled"]:
+            self._refresh_trigger()
+
+        # Habilitar/deshabilitar el botón "Snap horizontal to t=0" según
+        # el modo Absolute esté activo (el CSV ya está cargado a estas alturas).
+        self._update_snap_t0_state()
+
+    def _ask_keep_math_on_new_csv(self):
+        """Diálogo modal: preguntar si conservar los MATH al cargar un CSV nuevo.
+        Devuelve True si el usuario quiere mantenerlos."""
+        result = {"keep": False}
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("MATH channels")
+        win.configure(bg=COLOR_BG)
+        # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
+        self._make_resizable_dialog(win, 380, 160)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(
+            win, text="Existing MATH channels",
+            bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(padx=14, pady=(14, 4), anchor="w")
+
+        tk.Label(
+            win,
+            text=f"There {'is' if len(self.math_order)==1 else 'are'} "
+                 f"{len(self.math_order)} MATH channel(s). "
+                 f"Keep and recalculate\nwith the new data, or discard?",
+            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9), justify="left"
+        ).pack(padx=14, pady=(0, 10), anchor="w")
+
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+
+        def do_keep():
+            result["keep"] = True
+            win.destroy()
+
+        def do_drop():
+            result["keep"] = False
+            win.destroy()
+
+        ttk.Button(btns, text="Discard", command=do_drop).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Keep", style="Accent.TButton",
+                   command=do_keep).pack(side=tk.RIGHT, padx=(0, 6))
+
+        self.root.wait_window(win)
+        return result["keep"]
+
+    def _clean_channel_name(self, raw, idx):
+        """Nombres tipo 'CH1 in V' o 'Volt' → 'CH1'."""
+        n = raw.strip()
+        # Si es genérico (Volt, Value…) usar CH(idx+1)
+        generic = {"volt", "voltage", "value", "v", "ch", ""}
+        if n.lower() in generic:
+            return f"CH{idx+1}"
+        # Quitar sufijos tipo " in V"
+        for suffix in [" in V", " [V]", " (V)"]:
+            if n.endswith(suffix):
+                n = n[: -len(suffix)].strip()
+        # Truncar si es muy largo
+        if len(n) > 12:
+            n = n[:12]
+        return n
+
+
+    def _sync_active_channel_vars(self):
+        """Copia v_div y v_offset del canal activo a los DoubleVar globales.
+        Así cursores, FFT, medidas y sliders siguen usando self.v_div/self.v_offset
+        sin saber nada del multi-canal."""
+        if not self.channels:
+            return
+        ch = self.channels[self.active_channel_idx]
+        self._updating_display = True
+        self.v_div.set(ch["v_div"])
+        self.v_div_display.set(format_si(ch["v_div"], self._active_unit()))
+        self._updating_display = False
+        self.v_offset.set(ch["v_offset"])
+        try:
+            # IMPORTANTE: primero reconfigurar el rango del slider al nuevo
+            # canal (v_div cambia → rango cambia). Si no, un set() con valor
+            # fuera del rango antiguo dispararía un callback con valor clampado
+            # y descuadra el canal.
+            self.configure_v_slider()
+            # Flag para que el callback del slider no re-escriba el canal
+            self._syncing_active = True
+            # Slider invertido: derecha = traza arriba = offset negativo
+            self.v_slider.set(-ch["v_offset"])
+            self._syncing_active = False
+        except Exception:
+            self._syncing_active = False
+        # Apuntar self.voltage al canal activo para que FFT/medidas funcionen
+        self.voltage = ch["voltage"]
+
+
+    def _persist_active_channel_vars(self):
+        """Vuelca self.v_div y self.v_offset al canal activo.
+        Se llama tras cambios del usuario en V/div o drag vertical."""
+        if not self.channels:
+            return
+        ch = self.channels[self.active_channel_idx]
+        ch["v_div"]    = self.v_div.get()
+        ch["v_offset"] = self.v_offset.get()
+        # No marcamos dirty aquí explícitamente: las tk.Vars v_div/v_offset
+        # tienen trace que ya lo hace. Esta función solo vuelca a dict.
+
+
+    def _hotkey_guard(self):
+        """Devuelve True si el foco está en un widget que captura texto
+        (Entry/Spinbox/Text). Los handlers de atajos globales llaman a esto
+        al principio Y si devuelve True, abortan — así escribir en V/div,
+        nombres de canal, expresiones math, etc. no dispara atajos."""
+        try:
+            w = self.root.focus_get()
+        except Exception:
+            return False
+        return isinstance(
+            w, (tk.Entry, ttk.Entry, tk.Spinbox, ttk.Spinbox, tk.Text)
+        )
+
+    def _on_active_channel_hotkey(self, idx):
+        """Atajo numérico (1-9): cambia el canal activo si hay canal en ese
+        índice. Ignora la pulsación si el foco está en un widget de texto
+        para no robar dígitos mientras se escribe."""
+        if self._hotkey_guard():
+            return
+        if not (0 <= idx < len(self.channels)):
+            return
+        # Mismo canal: no-op silencioso (evita redraw + dirty espurio).
+        if idx == self.active_channel_idx:
+            return
+        self.set_active_channel(idx)
+        try:
+            ch_name = self.channels[idx].get("name", f"CH{idx + 1}")
+            self._show_toast(f"Active: {ch_name}", duration_ms=900)
+        except Exception:
+            pass
+
+    # =====================
+    # Atajos globales v1.30 — handlers
+    # =====================
+    def _hotkey_toggle_cursors(self):
+        """C: toggle cursores horizontales+verticales del canal activo."""
+        if self._hotkey_guard():
+            return
+        try:
+            self.cursors_enabled.set(not bool(self.cursors_enabled.get()))
+            self.on_cursors_toggle()
+            self._show_toast(
+                f"Cursors: {'on' if self.cursors_enabled.get() else 'off'}",
+                duration_ms=800,
+            )
+        except Exception:
+            pass
+
+    def _hotkey_open_unit_picker(self):
+        """U: abrir el picker de unidad del canal activo."""
+        if self._hotkey_guard():
+            return
+        if not self.channels:
+            return
+        try:
+            self._open_unit_picker_dialog(self.active_channel_idx)
+        except Exception:
+            pass
+
+    def _hotkey_snap_gnd(self):
+        """G: snap del 0V del canal activo a la división vertical más cercana."""
+        if self._hotkey_guard():
+            return
+        if not self.channels:
+            return
+        try:
+            self._snap_channel_gnd_to_grid(self.active_channel_idx)
+        except Exception:
+            pass
+
+    def _hotkey_center_channel(self):
+        """0: centrar el canal activo en el origen (v_offset = 0)."""
+        if self._hotkey_guard():
+            return
+        if not self.channels:
+            return
+        try:
+            ch = self.channels[self.active_channel_idx]
+            ch["v_offset"] = 0.0
+            self.v_offset.set(0.0)
+            try:
+                self.v_slider.set(0.0)
+            except Exception:
+                pass
+            self.update_plot()
+        except Exception:
+            pass
+
+    def _hotkey_toggle_channel_visibility(self, idx):
+        """Ctrl+1..9: toggle visibilidad del canal en el índice dado."""
+        if self._hotkey_guard():
+            return
+        if not (0 <= idx < len(self.channels)):
+            return
+        try:
+            var = self.channels[idx].get("visible")
+            if var is not None:
+                var.set(not bool(var.get()))
+                # var.trace dispara update_plot + dirty.
+                self._show_toast(
+                    f"{self.channels[idx].get('name', f'CH{idx+1}')}: "
+                    f"{'on' if var.get() else 'off'}",
+                    duration_ms=700,
+                )
+        except Exception:
+            pass
+
+    def _hotkey_pan_v(self, direction):
+        """Flecha arr/abj: mueve el canal activo verticalmente 0.1 div.
+        direction = +1 (arriba) o -1 (abajo).
+        Convención: flecha arriba → traza sube → v_offset disminuye
+        (porque y_screen = (v_real - v_offset)/v_div, subir v_offset
+        baja la traza)."""
+        if self._hotkey_guard():
+            return
+        if not self.channels:
+            return
+        try:
+            ch = self.channels[self.active_channel_idx]
+            step = ch["v_div"] * 0.1 * direction
+            ch["v_offset"] -= step
+            self.v_offset.set(ch["v_offset"])
+            try:
+                self.v_slider.set(-ch["v_offset"])
+            except Exception:
+                pass
+            self.update_plot()
+        except Exception:
+            pass
+
+    def _hotkey_pan_h(self, direction):
+        """Flecha izq/der: mueve t_offset global 0.1 div de tiempo.
+        direction = -1 (izq) o +1 (der)."""
+        if self._hotkey_guard():
+            return
+        try:
+            step = self.t_div.get() * 0.1 * direction
+            self.t_offset.set(self.t_offset.get() + step)
+            try:
+                self.h_slider.set(self.t_offset.get())
+            except Exception:
+                pass
+            self.update_plot()
+        except Exception:
+            pass
+
+    def _hotkey_step_v_div(self, direction):
+        """Shift+arr/abj: paso discreto de V/div del canal activo.
+        direction = -1 (más zoom, V/div más pequeño) o +1 (menos zoom)."""
+        if self._hotkey_guard():
+            return
+        if not self.channels:
+            return
+        try:
+            current = self.v_div.get()
+            if self.fine_mode.get():
+                # En fine mode: paso de 0.1
+                step = 0.1 * (-direction)
+                new_val = max(0.1, round(current + step, 2))
+            else:
+                # Buscar el siguiente valor discreto en V_DIV_VALUES
+                idx = min(range(len(V_DIV_VALUES)),
+                          key=lambda i: abs(V_DIV_VALUES[i] - current))
+                new_idx = max(0, min(len(V_DIV_VALUES) - 1, idx + direction))
+                new_val = V_DIV_VALUES[new_idx]
+            if abs(new_val - current) < 1e-15:
+                return
+            self.v_div.set(new_val)
+            self._updating_display = True
+            self.v_div_display.set(format_si(new_val, self._active_unit()))
+            self._updating_display = False
+            self.on_v_div_change()
+        except Exception:
+            pass
+
+    def _hotkey_move_cursor(self, axis, idx, direction):
+        """Mueve un cursor por teclado.
+        axis = 'x' (tiempo) o 'y' (voltaje del canal activo).
+        idx = 0 (cursor 1) o 1 (cursor 2).
+        direction = -1 / +1.
+        Step = 0.05 div (más fino que el pan general de 0.1).
+        Si los cursores están deshabilitados, los activa antes de mover."""
+        if self._hotkey_guard():
+            return
+        if not self.channels:
+            return
+        try:
+            # Auto-activar cursores si están off (mejor UX: el usuario que
+            # pulsa el atajo claramente quiere usarlos).
+            if not bool(self.cursors_enabled.get()):
+                self.cursors_enabled.set(True)
+                self.on_cursors_toggle()
+            if axis == "x":
+                if idx >= len(self.cursor_x):
+                    return
+                step = self.t_div.get() * 0.05 * direction
+                self.cursor_x[idx] = float(self.cursor_x[idx]) + step
+            else:  # axis == "y"
+                if idx >= len(self.cursor_y):
+                    return
+                # Step en voltaje del canal activo (el cursor Y es relativo
+                # a la escala del activo, igual que el drag con el ratón).
+                ch = self.channels[self.active_channel_idx]
+                step = ch["v_div"] * 0.05 * direction
+                self.cursor_y[idx] = float(self.cursor_y[idx]) + step
+            self.update_plot()
+            self._mark_dirty()
+        except Exception:
+            pass
+
+    def _hotkey_step_t_div(self, direction):
+        """Ctrl+arr/abj: paso discreto de T/div global.
+        direction = -1 (más zoom, ms→µs) o +1 (menos zoom)."""
+        if self._hotkey_guard():
+            return
+        try:
+            current = self.t_div.get()
+            # Buscar el vecino canónico en TIME_DIV_VALUES.
+            if direction > 0:
+                target = next((v for v in TIME_DIV_VALUES if v > current * 1.0001),
+                              TIME_DIV_VALUES[-1])
+            else:
+                target = next((v for v in reversed(TIME_DIV_VALUES)
+                               if v < current * 0.9999), TIME_DIV_VALUES[0])
+            if abs(target - current) < 1e-15:
+                return
+            self._updating_display = True
+            self.t_div_display.set(format_si(target, "s"))
+            self._updating_display = False
+            self.t_div.set(target)
+            self.on_time_div_change()
+        except Exception:
+            pass
+
+    def set_active_channel(self, idx):
+        """Cambia el canal activo. Persiste lo anterior y sincroniza lo nuevo.
+        Refresca el sidebar para que el negrita del canal activo siga al
+        cambio (sin esto, los atajos 1-9 movían los controles pero el
+        sidebar quedaba con el resaltado del canal anterior)."""
+        if not (0 <= idx < len(self.channels)):
+            return
+        self._persist_active_channel_vars()
+        self.active_channel_idx = idx
+        self._sync_active_channel_vars()
+        try:
+            self._rebuild_channels_panel()
+        except Exception:
+            pass
+        self.update_plot()
+        self._mark_dirty()
+
+
+    def _open_csv_import_dialog(self, filename, error=""):
+        """Fallback: preview de las primeras líneas del fichero y permitir
+        al usuario indicar manualmente 'saltar N líneas' y columnas."""
+        try:
+            with open(filename, "r", encoding="utf-8", errors="replace") as f:
+                raw = f.readlines()[:40]
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Error", f"Cannot read file:\n{e}")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.withdraw()  # anti-flash
+        win.title("CSV Import — manual fallback")
+        win.configure(bg=COLOR_BG)
+        self._center_dialog(win, 800, 600)
+        win.transient(self.root)
+
+        if error:
+            tk.Label(
+                win, text=f"Auto-detection failed: {error}",
+                fg=COLOR_DANGER, bg=COLOR_BG,
+                font=("Segoe UI", 9, "italic"),
+                wraplength=760, justify="left",
+            ).pack(padx=12, pady=(10, 4), anchor="w")
+
+        tk.Label(
+            win, text="Preview (first 40 lines):",
+            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+        ).pack(padx=12, pady=(6, 2), anchor="w")
+
+        # Text widget con las primeras líneas, números de línea
+        txt_frame = ttk.Frame(win)
+        txt_frame.pack(padx=12, pady=4, fill=tk.BOTH, expand=True)
+        text = tk.Text(
+            txt_frame,
+            font=("Consolas", 9),
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
+            height=15,
+            wrap="none",
+        )
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(txt_frame, orient="vertical", command=text.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        text.configure(yscrollcommand=scroll.set)
+        for i, line in enumerate(raw):
+            text.insert("end", f"{i:3d} | {line.rstrip()}\n")
+        text.config(state="disabled")
+
+        # Controles
+        ctrl = ttk.Frame(win)
+        ctrl.pack(padx=12, pady=8, fill=tk.X)
+
+        ttk.Label(ctrl, text="Skip rows:").pack(side=tk.LEFT)
+        skip_var = tk.IntVar(value=0)
+        ttk.Spinbox(ctrl, from_=0, to=500, width=6, textvariable=skip_var).pack(side=tk.LEFT, padx=(4, 12))
+
+        ttk.Label(ctrl, text="Separator:").pack(side=tk.LEFT)
+        sep_var = tk.StringVar(value=",")
+        ttk.Combobox(ctrl, textvariable=sep_var,
+                     values=[",", ";", "\\t"], width=6,
+                     state="readonly").pack(side=tk.LEFT, padx=(4, 12))
+
+        ttk.Label(ctrl, text="Time col:").pack(side=tk.LEFT)
+        tcol = tk.IntVar(value=0)
+        ttk.Spinbox(ctrl, from_=0, to=20, width=4, textvariable=tcol).pack(side=tk.LEFT, padx=(4, 12))
+
+        ttk.Label(ctrl, text="Voltage col:").pack(side=tk.LEFT)
+        vcol = tk.IntVar(value=1)
+        ttk.Spinbox(ctrl, from_=0, to=20, width=4, textvariable=vcol).pack(side=tk.LEFT, padx=(4, 12))
+
+        def do_load():
+            sep = sep_var.get()
+            if sep == "\\t":
+                sep = "\t"
+            try:
+                df = pd.read_csv(
+                    filename,
+                    sep=sep,
+                    skiprows=skip_var.get(),
+                    header=None,
+                    engine="python",
+                    decimal=".",
+                    on_bad_lines="skip",
+                )
+                t = df.iloc[:, tcol.get()].astype(float).values
+                v = df.iloc[:, vcol.get()].astype(float).values
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showerror("Import error", str(e))
+                return
+            win.destroy()
+            self._load_channels(t, [v], ["CH1"])
+
+        btns = ttk.Frame(win)
+        btns.pack(pady=(4, 12))
+        ttk.Button(btns, text="Load", command=do_load,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=6)
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.LEFT, padx=6)
+
+
+    # -----------------------------
+    def auto_fit(self):
+        """Ajusta T/div, y para cada canal su V/div y v_offset."""
+        if self.time is None or not self.channels:
+            return
+
+        # Horizontal: mostrar todo el CSV
+        self.auto_time_div()
+
+        # Vertical: para CADA canal, ajustar su v_div y v_offset
+        for ch in self.channels:
+            v = ch["voltage"]
+            if len(v) == 0:
+                continue
+            vmin = float(np.min(v))
+            vmax = float(np.max(v))
+            vpp = vmax - vmin
+
+            # v_div que deje la señal ocupando ~8 divisiones
+            if vpp > 0:
+                target = vpp / 8.0
+                chosen = V_DIV_VALUES[-1]
+                for vd in V_DIV_VALUES:
+                    if vd >= target:
+                        chosen = vd
+                        break
+                ch["v_div"] = chosen
+            else:
+                ch["v_div"] = 1.0
+
+            # Offset al punto medio
+            # Offset al punto medio de la señal (para centrarla en pantalla)
+            # Modelo: y_screen = (v - offset)/v_div * v_div_activo
+            # Con offset = mean(v), la señal queda centrada en 0.
+            ch["v_offset"] = (vmax + vmin) / 2.0
+
+        # Volcar del canal activo a las vars globales
+        self._sync_active_channel_vars()
+
+        # Sincronizar sliders (auto_fit sí resetea offset a 0)
+        self.t_offset.set(0.0)
+        self.configure_slider()
+        self.configure_v_slider()
+        # El slider va invertido: derecha=+ = traza arriba = offset negativo
+        self.v_slider.set(-self.v_offset.get())
+
+        self._sync_scale_displays()
+        self.update_plot()
+
+    # -----------------------------
+    def _sync_scale_displays(self):
+        """Actualiza los StringVar de display a partir de los valores numéricos."""
+        self._updating_display = True
+        self.v_div_display.set(format_si(self.v_div.get(), self._active_unit()))
+        self.t_div_display.set(format_si(self.t_div.get(), "s"))
+        self._updating_display = False
+
+    # -----------------------------
+    def auto_v_div(self):
+        """Auto-fit vertical del canal ACTIVO. Mantiene compatibilidad."""
+        if not self.channels:
+            return
+        ch = self.channels[self.active_channel_idx]
+        v = ch["voltage"]
+        if len(v) == 0:
+            return
+        vmin = float(np.min(v))
+        vmax = float(np.max(v))
+        vpp = vmax - vmin
+        if vpp <= 0:
+            return
+        target = vpp / 8.0
+        chosen = V_DIV_VALUES[-1]
+        for vd in V_DIV_VALUES:
+            if vd >= target:
+                chosen = vd
+                break
+        ch["v_div"] = chosen
+        self.v_div.set(chosen)
+
+    # -----------------------------
+    def auto_time_div(self):
+        """Usa el valor exacto t_total/H_DIVS para que la traza ocupe TODO
+        el ancho del grid. Este valor no suele ser canónico; el spinbox lo
+        acepta igualmente, y al pulsar una flecha se salta al canónico
+        vecino."""
+        if self.t_total <= 0:
+            return
+        exact = self.t_total / H_DIVS
+        self.t_div.set(exact)
+        self.t_offset.set(0.0)
+        try:
+            self._updating_display = True
+            self.t_div_display.set(format_si(exact, "s"))
+            self._updating_display = False
+        except Exception:
+            pass
+        self._prev_t_div = exact
+
+    # -----------------------------
+    def configure_slider(self):
+        window = self.t_div.get() * H_DIVS
+        max_offset = max(0.0, self.t_total - window)
+
+        # Anti-ruido de coma flotante: si el max_offset es ridículamente
+        # pequeño comparado con la ventana visible, es porque la captura
+        # cabe entera (o casi) en pantalla y el residuo viene de imprecisión
+        # de float (t_total / H_DIVS no siempre da un t_div canónico,
+        # y al combinar valores aparecen sobras de 1e-8 a 1e-7 que el slider
+        # interpreta como rango utilizable). Eso provoca que tras un zoom
+        # + auto fit el slider se quede mal alineado y los ticks del eje X
+        # muestren "17.1 ns" o similar en vez de "0 s".
+        #
+        # Umbral: usamos t_div como referencia, no window. Cualquier offset
+        # por debajo de t_div * 1e-4 (= 0.01 % de una división) es ruido
+        # de float y lo tratamos como cero estricto. Con t/div = 1 ms eso
+        # son 100 ns, suficiente para absorber cualquier error acumulado
+        # por las operaciones t_total - canonical_t_div * H_DIVS.
+        t_div = self.t_div.get()
+        noise_threshold = t_div * 1e-4
+        if max_offset < noise_threshold:
+            max_offset = 0.0
+
+        self.h_slider.config(from_=0, to=max_offset)
+        # Mantener el offset actual (solo clamp si se sale)
+        cur = self.t_offset.get()
+        cur = max(0.0, min(cur, max_offset))
+        # Mismo snap a 0 estricto si el cur queda en territorio "ruido".
+        if abs(cur) < noise_threshold:
+            cur = 0.0
+        self.t_offset.set(cur)
+        self.h_slider.set(cur)
+
+    # -----------------------------
+    def configure_v_slider(self):
+        """Configura el rango del slider vertical en función de V/div.
+        Se limita a ±4 divisiones."""
+        v_div = self.v_div.get()
+        max_v = v_div * 4   # máximo 4 divisiones arriba / abajo
+        # Sentido normal: izquierda (-) → derecha (+)
+        self.v_slider.config(from_=-max_v, to=max_v)
+
+    # -----------------------------
+    def on_slider_move(self, value):
+        self.t_offset.set(float(value))
+        self.update_plot()
+
+    # -----------------------------
+    def on_v_slider_move(self, value):
+        # El slider va de -max (izquierda) a +max (derecha).
+        # "derecha = traza arriba" → offset del canal = -value
+        # (porque en el modelo nuevo, offset menor → traza arriba)
+        if getattr(self, "_syncing_active", False):
+            return
+        v = float(value)
+        self.v_offset.set(-v)
+        if self.channels:
+            self.channels[self.active_channel_idx]["v_offset"] = -v
+        self.update_plot()
+
+    # -----------------------------
+    def on_time_div_change(self):
+        if self.time is None:
+            return
+        # Zoom respecto al centro de la ventana visible.
+        new_t_div = self.t_div.get()
+        prev_t_div = getattr(self, "_prev_t_div", new_t_div)
+
+        if prev_t_div != new_t_div and prev_t_div > 0:
+            # Centro actual en segundos
+            t_center = self.t_offset.get() + prev_t_div * H_DIVS / 2.0
+            # Nuevo offset: el centro debe seguir siendo t_center
+            new_offset = t_center - new_t_div * H_DIVS / 2.0
+            # Clamp dentro del rango válido
+            max_offset = max(0.0, self.t_total - new_t_div * H_DIVS)
+            new_offset = max(0.0, min(new_offset, max_offset))
+            # Anti-ruido: si tras todos los cálculos quedó un offset
+            # ridículamente pequeño respecto al nuevo t/div, forzar a 0.
+            # Esto evita arrastrar artefactos de coma flotante a través de
+            # sucesivos cambios de t/div (zoom + auto-fit típico).
+            if abs(new_offset) < new_t_div * 1e-4:
+                new_offset = 0.0
+            self.t_offset.set(new_offset)
+        self._prev_t_div = new_t_div
+        self.configure_slider()
+        self.update_plot()
+
+    def _snap_t_div_nearest(self, current):
+        """Devuelve el valor de TIME_DIV_VALUES más cercano a 'current' en
+        escala logarítmica."""
+        import math
+        lc = math.log10(max(current, 1e-18))
+        return min(TIME_DIV_VALUES, key=lambda v: abs(math.log10(v) - lc))
+
+    # -----------------------------
+    def on_v_div_change(self):
+        # Pivot desde el GND del canal activo, estilo scope real: el "0V
+        # del canal" debe quedar en la misma posición RELATIVA AL GRID
+        # (misma cantidad de divisiones desde el centro), no en el mismo
+        # pixel absoluto. Esto requiere escalar v_offset proporcionalmente
+        # a v_div: la posición del GND, en divisiones, es
+        #     pos_GND_divs = -v_offset / v_div
+        # y queremos que se conserve al cambiar v_div:
+        #     v_offset_new = v_offset_old * (v_div_new / v_div_old)
+        #
+        # Sin esto, al subir V/div el centro del grid sigue mostrando el
+        # mismo valor en voltios (label invariante) pero el GND del canal
+        # se "acerca" al centro del grid en divisiones, lo que el usuario
+        # percibe como un desplazamiento de la traza respecto a las líneas.
+        new_v_div = self.v_div.get()
+        if self.channels:
+            # Leemos v_div ANTES de persistir el nuevo: ch["v_div"] del
+            # canal activo aún tiene el valor antiguo en este punto
+            # (_persist_active_channel_vars lo actualiza más abajo).
+            old_v_div = self.channels[self.active_channel_idx].get("v_div")
+            if (isinstance(old_v_div, (int, float)) and old_v_div > 0
+                    and new_v_div > 0 and abs(new_v_div - old_v_div) > 1e-12):
+                scaled = self.v_offset.get() * (new_v_div / old_v_div)
+                self._syncing_active = True
+                try:
+                    self.v_offset.set(scaled)
+                finally:
+                    self._syncing_active = False
+
+        # _syncing_active=True durante TODO el resto del método blinda
+        # configure_v_slider() (al cambiar from_/to puede mover el thumb
+        # y disparar on_v_slider_move espuriamente) y el set() final.
+        self._syncing_active = True
+        try:
+            # Reconfigurar el slider vertical para adaptar el paso a la
+            # nueva escala
+            self.configure_v_slider()
+            # Si el offset actual queda fuera del nuevo límite, recortarlo
+            v_limit = new_v_div * 4
+            current = self.v_offset.get()
+            clamped = max(-v_limit, min(current, v_limit))
+            if clamped != current:
+                self.v_offset.set(clamped)
+            # Sincronizar el slider con el offset definitivo (signo invertido).
+            self.v_slider.set(-self.v_offset.get())
+            # Persistir al canal activo
+            self._persist_active_channel_vars()
+        finally:
+            self._syncing_active = False
+        self.update_plot()
+
+    # -----------------------------
+    # Spinbox SCALE: flechas y edición manual
+    # -----------------------------
+    def _snap_to_list(self, value, values, direction=None):
+        """Devuelve el valor de `values` más cercano a `value`.
+        Si direction='up' busca el siguiente mayor; 'down', el anterior menor."""
+        values = sorted(values)
+        if direction == "up":
+            for v in values:
+                if v > value + 1e-15:
+                    return v
+            return values[-1]
+        if direction == "down":
+            for v in reversed(values):
+                if v < value - 1e-15:
+                    return v
+            return values[0]
+        # Más cercano (sin dirección)
+        return min(values, key=lambda v: abs(v - value))
+
+    def _spin_direction(self, spinbox, stringvar, last_text_attr):
+        """Intenta inferir si el usuario pulsó ↑ o ↓ comparando el texto
+        anterior con el actual. Si no se puede, devuelve None."""
+        prev = getattr(self, last_text_attr, None)
+        curr = stringvar.get()
+        # Guardar para la próxima
+        setattr(self, last_text_attr, curr)
+        if prev is None:
+            return None
+        # Heurística simple: si el texto ha cambiado tras pulsar una flecha,
+        # matplotlib/ttk nos daría el nuevo valor ya escrito. Aquí no tenemos
+        # forma directa; usamos el valor numérico anterior guardado.
+        return None
+
+    # -----------------------------
+    # Spinbox SCALE: valores pre-formateados, detección por trace
+    # -----------------------------
+    def _v_div_values_formatted(self):
+        """Lista de textos válidos para el spinbox V/div.
+        En modo normal usa V_DIV_VALUES; en Fine usa una rejilla de 0.1 V."""
+        unit = self._active_unit()
+        if self.fine_mode.get():
+            # 0.1 a 50 (unit) en pasos de 0.1 (arriba de 50 sería exagerado)
+            return [format_si(round(x * 0.1, 2), unit) for x in range(1, 501)]
+        return [format_si(v, unit) for v in V_DIV_VALUES]
+
+    def _on_fine_mode_toggle(self):
+        """Al cambiar de modo Fine, re-acomoda el v_div actual a la nueva
+        rejilla (Fine = pasos de 0.1V, Normal = V_DIV_VALUES canónicos)."""
+        if self.fine_mode.get():
+            snapped = round(self.v_div.get() * 10) / 10.0
+            snapped = max(0.1, snapped)
+        else:
+            snapped = min(V_DIV_VALUES, key=lambda v: abs(v - self.v_div.get()))
+
+        self.v_div.set(snapped)
+        self._updating_display = True
+        self.v_div_display.set(format_si(snapped, self._active_unit()))
+        self._updating_display = False
+        self.on_v_div_change()
+
+    def _on_v_div_display_changed(self, *args):
+        """Se invoca ante CUALQUIER cambio del StringVar (flechas o tipeo).
+        Solo procesamos los cambios que provienen del usuario."""
+        if getattr(self, "_updating_display", False):
+            return
+        text = self.v_div_display.get()
+        val = parse_si(text, self._active_unit())
+        if val is None or val <= 0:
+            return  # texto incompleto o inválido: esperar a Enter/FocusOut
+        if abs(val - self.v_div.get()) < 1e-15:
+            return  # sin cambio real
+        self.v_div.set(val)
+        self.on_v_div_change()
+
+    def _on_v_div_typed(self):
+        """Enter o FocusOut: formatea el texto al canon."""
+        text = self.v_div_display.get()
+        val = parse_si(text, self._active_unit())
+        if val is None or val <= 0:
+            # Restaurar al valor anterior
+            self._updating_display = True
+            self.v_div_display.set(format_si(self.v_div.get(), self._active_unit()))
+            self._updating_display = False
+            return
+        # Si el valor parseado es el mismo que ya tenemos, solo reformatear el
+        # display — NO disparar on_v_div_change (eso tocaría el slider y movería
+        # la traza sin motivo).
+        if abs(val - self.v_div.get()) < 1e-15:
+            self._updating_display = True
+            self.v_div_display.set(format_si(self.v_div.get(), self._active_unit()))
+            self._updating_display = False
+            return
+        self.v_div.set(val)
+        self._updating_display = True
+        self.v_div_display.set(format_si(val, self._active_unit()))
+        self._updating_display = False
+        self.on_v_div_change()
+
+    def _step_v_div(self, direction):
+        """Incrementa o decrementa v_div. En modo normal salta al V_DIV_VALUES
+        vecino; en modo Fine usa pasos de 0.1 V."""
+        current = self.v_div.get()
+        if self.fine_mode.get():
+            step = 0.1
+            if direction == "up":
+                # Sin techo: si el usuario está en una escala fuera del rango
+                # cosmético del spinbox (p.ej. 100 V/div en buses de potencia),
+                # un techo aplastaría el valor a la baja al primer click. Fine
+                # solo cambia el TAMAÑO del paso, no el rango admisible.
+                target = round((current + step) * 10) / 10.0
+            else:
+                target = round((current - step) * 10) / 10.0
+                target = max(target, 0.1)
+        else:
+            if direction == "up":
+                target = None
+                for v in V_DIV_VALUES:
+                    if v > current * 1.0001:
+                        target = v
+                        break
+                if target is None:
+                    target = V_DIV_VALUES[-1]
+            else:
+                target = None
+                for v in reversed(V_DIV_VALUES):
+                    if v < current * 0.9999:
+                        target = v
+                        break
+                if target is None:
+                    target = V_DIV_VALUES[0]
+
+        self._updating_display = True
+        self.v_div_display.set(format_si(target, self._active_unit()))
+        self._updating_display = False
+        self.v_div.set(target)
+        self.on_v_div_change()
+
+    def _step_t_div(self, direction):
+        """Incrementa o decrementa t_div al TIME_DIV_VALUES vecino, partiendo
+        SIEMPRE del valor actual de self.t_div (no del texto del display).
+        El 'up' está capado: no permite alejarse más allá del t_div que hace
+        que la traza completa ocupe H_DIVS divisiones."""
+        current = self.t_div.get()
+
+        # Cap superior: el t_div máximo útil es t_total/H_DIVS (más allá
+        # queda pantalla vacía a la derecha de la traza).
+        cap = (self.t_total / H_DIVS) if (self.t_total and self.t_total > 0) else None
+
+        if direction == "up":
+            if cap is not None and current >= cap * 0.9999:
+                return  # ya estamos en el máximo útil
+            target = None
+            for v in TIME_DIV_VALUES:
+                if v > current * 1.0001:
+                    if cap is not None and v > cap:
+                        # El siguiente canónico excede el cap: snapear al cap exacto
+                        target = cap
+                    else:
+                        target = v
+                    break
+            if target is None:
+                target = cap if cap is not None else TIME_DIV_VALUES[-1]
+        else:
+            target = None
+            for v in reversed(TIME_DIV_VALUES):
+                if v < current * 0.9999:
+                    target = v
+                    break
+            if target is None:
+                target = TIME_DIV_VALUES[0]
+
+        self._updating_display = True
+        self.t_div_display.set(format_si(target, "s"))
+        self._updating_display = False
+        self.t_div.set(target)
+        self.on_time_div_change()
+
+    def _on_t_div_spin_arrow(self):
+        """Callback de las flechas del spinbox t_div. Ignora el valor que Tk
+        haya puesto (incremento de 1 no tiene sentido aquí) y salta al
+        TIME_DIV_VALUES vecino hacia arriba o hacia abajo según el delta
+        aproximado."""
+        try:
+            new_text = self.t_div_display.get()
+            new_val = parse_si(new_text, "s")
+        except Exception:
+            new_val = None
+        current = self.t_div.get()
+        # Dirección: si Tk subió, vamos al vecino mayor; si bajó, al menor
+        direction = "up" if (new_val is not None and new_val > current) else "down"
+        # Buscar el vecino canónico
+        if direction == "up":
+            target = None
+            for v in TIME_DIV_VALUES:
+                if v > current * 1.0001:
+                    target = v
+                    break
+            if target is None:
+                target = TIME_DIV_VALUES[-1]
+        else:
+            target = None
+            for v in reversed(TIME_DIV_VALUES):
+                if v < current * 0.9999:
+                    target = v
+                    break
+            if target is None:
+                target = TIME_DIV_VALUES[0]
+
+        self._updating_display = True
+        self.t_div_display.set(format_si(target, "s"))
+        self._updating_display = False
+        self.t_div.set(target)
+        self.on_time_div_change()
+
+    def _on_t_div_display_changed(self, *args):
+        # El trace solo reacciona cuando el usuario escribe texto en directo.
+        # NO aplica snap aquí (las flechas ya saltan por _on_t_div_spin_arrow,
+        # y Enter/FocusOut los gestiona _on_t_div_typed).
+        if getattr(self, "_updating_display", False):
+            return
+        text = self.t_div_display.get()
+        val = parse_si(text, "s")
+        if val is None or val <= 0:
+            return
+        if abs(val - self.t_div.get()) < 1e-18:
+            return
+        self.t_div.set(val)
+        self.on_time_div_change()
+
+    def _on_t_div_typed(self):
+        text = self.t_div_display.get()
+        val = parse_si(text, "s")
+        if val is None or val <= 0:
+            self._updating_display = True
+            self.t_div_display.set(format_si(self.t_div.get(), "s"))
+            self._updating_display = False
+            return
+        # Si el valor ya coincide con el actual (p.ej. tras auto_fit con valor
+        # no-canónico), solo reformateamos el texto y NO hacemos snap.
+        # Sin esto, un focus-out sobre un valor exacto se "saltaba" al
+        # canónico más cercano.
+        if abs(val - self.t_div.get()) < max(self.t_div.get() * 1e-6, 1e-18):
+            self._updating_display = True
+            self.t_div_display.set(format_si(self.t_div.get(), "s"))
+            self._updating_display = False
+            return
+        # Valor distinto al actual → snap al canónico más cercano
+        val = self._snap_t_div_nearest(val)
+        self.t_div.set(val)
+        self._updating_display = True
+        self.t_div_display.set(format_si(val, "s"))
+        self._updating_display = False
+        self.on_time_div_change()
+
+    # -----------------------------
+    def center_trace(self):
+        """Centra la traza del canal activo (offset = media de la señal)."""
+        if not self.channels:
+            return
+        ch = self.channels[self.active_channel_idx]
+        v = ch["voltage"]
+        if len(v) == 0:
+            return
+        mid = float((np.max(v) + np.min(v)) / 2.0)
+        ch["v_offset"] = mid
+        self.v_offset.set(mid)
+        self.v_slider.set(-mid)
+        self.update_plot()
+
+    def _snap_horizontal_to_zero(self):
+        """Ajusta t_offset para que el instante 't = 0 absoluto del CSV'
+        (i.e. -time_origin internamente) caiga exactamente sobre un tick
+        del grid.
+
+        Cómo funciona:
+          - Solo aplica en modo Absolute (time_show_absolute=True).
+          - El tiempo absoluto en la posición de pantalla x = k*t_div es:
+                t_abs(k) = t_offset + k*t_div + time_origin
+          - Queremos t_abs(k) = 0  →  t_offset = -k*t_div - time_origin
+          - Elegimos k entero en [0, H_DIVS] que produce un t_offset
+            válido (≥ 0 y ≤ max_offset) y más cercano al t_offset actual.
+          - Si no hay ningún k válido (porque time_origin queda fuera
+            del rango cubrible por t_offset), no hacemos nada y notificamos.
+        """
+        if self.time is None:
+            self._show_toast("Load a CSV first")
+            return
+        if not getattr(self, "time_show_absolute", None) or \
+                not self.time_show_absolute.get():
+            self._show_toast("Switch Time axis to 'Absolute' in Appearance")
+            return
+
+        t_div = self.t_div.get()
+        if t_div <= 0:
+            return
+        time_origin = self.time_origin
+        window = t_div * H_DIVS
+        max_offset = max(0.0, self.t_total - window)
+
+        # Candidatos: t_offset = -k*t_div - time_origin, para k=0..H_DIVS.
+        # Filtrar los que estén dentro del rango [0, max_offset].
+        candidates = []
+        for k in range(H_DIVS + 1):
+            cand = -k * t_div - time_origin
+            if 0.0 <= cand <= max_offset + t_div * 1e-6:
+                candidates.append(cand)
+
+        if not candidates:
+            # No hay forma de alinear t=0 con un tick del grid actual.
+            # Probablemente time_origin es positivo (no había pre-trigger)
+            # o el zoom es demasiado grande/pequeño.
+            if time_origin >= 0:
+                self._show_toast("t=0 already at start (no pre-trigger)")
+            else:
+                self._show_toast("Cannot align: change T/div first")
+            return
+
+        # Elegir el candidato más cercano al t_offset actual (mínimo salto).
+        cur = self.t_offset.get()
+        best = min(candidates, key=lambda c: abs(c - cur))
+        self.t_offset.set(best)
+        try:
+            self.h_slider.set(best)
+        except Exception:
+            pass
+        self.update_plot()
+
+    def _update_snap_t0_state(self):
+        """Habilita/deshabilita el botón 'Snap horizontal to t=0' según
+        si el modo Absolute está activo y hay un CSV cargado. Llamar desde:
+          - construcción inicial de la UI
+          - toggle del modo en Appearance
+          - tras cargar/descargar un CSV
+        """
+        btn = getattr(self, "_snap_t0_btn", None)
+        if btn is None:
+            return
+        try:
+            absolute = (self.time_show_absolute.get()
+                        if hasattr(self, "time_show_absolute") else False)
+            has_csv = (self.time is not None and len(self.channels) > 0)
+            btn.config(state=("normal" if (absolute and has_csv)
+                              else "disabled"))
+        except Exception:
+            pass
+
+    # -----------------------------
+    # Curva gamma para acentuar las zonas medias de slope. <1 destaca más
+    # tramos como "rápidos". 0.5 da un efecto visualmente notable sin que
+    # los tramos planos pierdan brillo.
+    _PHOSPHOR_GAMMA = 0.5
+    # Percentil usado como "máximo" para normalizar. Usar el max real es
+    # frágil: un único pico (glitch, transición ideal) deja al resto de
+    # los segmentos con slope normalizada ≈ 0 → casi no se ve el efecto.
+    # 95 absorbe outliers y reparte el rango dinámico entre los slopes
+    # típicos.
+    _PHOSPHOR_PERCENTILE = 95.0
+    # Tope de segmentos por canal cuando phosphor está activo. Cada
+    # segmento es un draw call en LineCollection; con datasets típicos
+    # de osciloscopio (>50k puntos por canal) la app se vuelve inusable
+    # sin esto. 1500 (ajustado tras pruebas reales con la app) da el
+    # mejor compromiso fluidez/resolución del efecto. min-max-decimate
+    # conserva picos (no promedia), así que los flancos siguen viéndose
+    # pese al cap.
+    _PHOSPHOR_MAX_SEGMENTS = 1500
+
+    def _compute_phosphor_rgba(self, t, y, base_color, base_alpha, intensity):
+        """Devuelve (segments, rgba) para construir/refrescar un
+        LineCollection con alpha por segmento (CRT-style intensity grading).
+
+        Modelo:
+          - slope = |dy/dt| por segmento.
+          - smax = percentil 95 de slope (robusto a outliers).
+          - norm = (slope/smax)**gamma, clip [0, 1]   (gamma=0.5 acentúa
+            zonas medias; sin gamma, un único flanco ahoga el resto).
+          - alpha_min = base_alpha · (1 − intensity)
+              · intensity = 0 → alpha_min = base_alpha (sin efecto)
+              · intensity = 1 → alpha_min = 0
+          - alpha_seg = lerp(alpha_min, base_alpha, 1 − norm)
+
+        Degenerados (n<2, todo plano, dt=0) devuelven arrays vacíos /
+        alpha uniforme — seguro de pasar a LineCollection sin efecto.
+        """
+        import numpy as _np
+
+        t = _np.asarray(t, dtype=float)
+        y = _np.asarray(y, dtype=float)
+        n = len(t)
+        if n < 2:
+            return _np.empty((0, 2, 2), dtype=float), _np.empty((0, 4), dtype=float)
+
+        pts = _np.column_stack([t, y])
+        segments = _np.stack([pts[:-1], pts[1:]], axis=1)  # (n-1, 2, 2)
+
+        dt = _np.diff(t)
+        dy = _np.diff(y)
+        dt_safe = _np.where(dt == 0, 1e-30, dt)
+        slope = _np.abs(dy / dt_safe)
+
+        if slope.size:
+            # Percentil 95 como "max" robusto. Si todos son 0 da 0, manejado
+            # abajo. nanpercentile tolera NaN puntuales.
+            smax = float(_np.nanpercentile(slope, self._PHOSPHOR_PERCENTILE))
+        else:
+            smax = 0.0
+        if smax <= 0.0 or not _np.isfinite(smax):
+            norm = _np.zeros_like(slope)
+        else:
+            norm = _np.clip(slope / smax, 0.0, 1.0)
+            # Curva gamma: rebaja la rampa para que zonas medias de slope
+            # también se vean atenuadas, no solo los picos.
+            norm = _np.power(norm, self._PHOSPHOR_GAMMA)
+
+        intensity = max(0.0, min(1.0, float(intensity)))
+        alpha_min = base_alpha * (1.0 - intensity)
+        alpha_seg = alpha_min + (base_alpha - alpha_min) * (1.0 - norm)
+
+        r, g, b = self._hex_to_rgb01(base_color)
+        rgba = _np.empty((segments.shape[0], 4), dtype=float)
+        rgba[:, 0] = r
+        rgba[:, 1] = g
+        rgba[:, 2] = b
+        rgba[:, 3] = alpha_seg
+        return segments, rgba
+
+    def _build_phosphor_collection(
+            self, t, y, base_color, base_alpha, linewidth, intensity):
+        """Construye un LineCollection nuevo con alpha por segmento.
+        Path lento (full redraw). Para refrescar uno ya existente usa
+        directamente lc.set_segments(...) + lc.set_color(...) con el
+        resultado de _compute_phosphor_rgba."""
+        from matplotlib.collections import LineCollection
+        segments, rgba = self._compute_phosphor_rgba(
+            t, y, base_color, base_alpha, intensity)
+        return LineCollection(
+            segments, colors=rgba, linewidths=linewidth,
+            capstyle="round", joinstyle="round", antialiased=True,
+        )
+
+    def _hex_to_rgb01(self, hex_color):
+        """Convierte '#rrggbb' a (r, g, b) en [0, 1]. Tolerante a '#rgb'
+        y a strings sin '#'. Si no parsea, devuelve blanco."""
+        h = (hex_color or "").strip().lstrip("#")
+        try:
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            if len(h) != 6:
+                return (1.0, 1.0, 1.0)
+            return (
+                int(h[0:2], 16) / 255.0,
+                int(h[2:4], 16) / 255.0,
+                int(h[4:6], 16) / 255.0,
+            )
+        except Exception:
+            return (1.0, 1.0, 1.0)
+
+    def _structure_fingerprint(self):
+        """Devuelve una tupla hashable que captura el estado 'estructural' del
+        plot. Si cambia entre dos llamadas, hay que hacer un full rebuild
+        (clear + recreate). Si no, basta con set_data() (fast path).
+
+        Estructural = aquello que cambia los artists necesarios o sus propiedades
+        fijas (color, linewidth, visibilidad). NO incluye t_offset, v_offset
+        del scope, ni posiciones de cursores → esos son fast-path.
+        """
+        # Canales: UIDs visibles + sus colores + v_div/v_offset por canal +
+        # render_mode. Si cambia algo de esto, hay que redibujar.
+        chs = tuple(
+            (ch.get("_uid", id(ch)),
+             ch["color"],
+             bool(ch["visible"].get()),
+             float(ch["v_div"]),
+             float(ch["v_offset"]),
+             ch.get("unit", DEFAULT_UNIT))   # v1.29: unit afecta a ticks Y
+            for ch in self.channels
+        )
+        return (
+            chs,
+            self.active_channel_idx,
+            self.render_mode.get(),
+            float(self.t_div.get()),     # t_div cambia los ticks y rango
+            float(self.v_div.get()),     # v_div cambia el grid (eje Y screen)
+            CURRENT_THEME_NAME,
+            id(self.time),                # cargar otro CSV cambia el array
+            bool(self._cursors_vertical_active()),
+            bool(self._cursors_horizontal_active()),
+            # Colores personalizados del plot (Appearance → Advanced).
+            # Si cambian, hay que repintar TODO (facecolor, spines, grid,
+            # tick colors) y eso solo lo hace _full_redraw_plot. Sin esto,
+            # cambiar el color en Advanced no se ve hasta el siguiente
+            # cambio estructural (pan no basta — usa fast path).
+            self.grid_theme.get("bg"),
+            self.grid_theme.get("grid_color"),
+            self.grid_theme.get("text_color"),
+            self.grid_theme.get("time_label_bg"),
+            # Phosphor cambia el tipo de artist por canal (Line2D vs
+            # LineCollection). Toggle → full rebuild obligado.
+            bool(self.phosphor_enabled.get()),
+        )
+
+    def update_plot(self):
+        """Punto de entrada único para redibujar. Internamente decide entre:
+          - Full rebuild (clear + recreate artists): cuando cambia algo
+            estructural (canales, render_mode, tema, t_div, v_div...).
+          - Fast update (solo set_data en líneas existentes): para pan, drag
+            de offset, drag de cursores. ~5-10x más rápido con datasets grandes.
+        """
+        # Guard de init: durante la construcción de la UI, traces de tk.Vars
+        # (V/div, sliders, etc.) pueden disparar update_plot antes de que
+        # self.ax exista. El primer redraw real lo hará _build_ui al final.
+        if not hasattr(self, "ax"):
+            return
+        # XY mode: branch al principio, ignora el resto del plot time-domain
+        if self.xy_config["enabled"]:
+            self._draw_xy()
+            try:
+                self._redraw_minimap()
+            except Exception:
+                pass
+            return
+
+        if self.time is None or not self.channels:
+            # Nada que mostrar: hacer full rebuild para limpiar pantalla
+            self._full_redraw_plot()
+            return
+
+        # Decidir camino: si la estructura no ha cambiado, fast path.
+        # Phosphor mode (v1.27) sigue por fast path: _fast_update_plot
+        # detecta el tipo del artist cacheado (LineCollection vs Line2D)
+        # y refresca segments+colors en vez de set_data. Eso evita el
+        # cost de ax.clear()+rebuild que es el cuello de botella.
+        fp = self._structure_fingerprint()
+        if fp == self._last_structure_fingerprint and self._channel_lines:
+            self._fast_update_plot()
+        else:
+            self._full_redraw_plot()
+            self._last_structure_fingerprint = fp
+
+    def _fast_update_plot(self):
+        """Camino rápido: solo actualiza set_data() de las trazas y las
+        posiciones de los cursores. No toca ticks ni grid (no han cambiado).
+        Usado durante pan horizontal/vertical y drag de cursores.
+
+        Asume que _channel_lines ya contiene un Line2D por cada canal visible
+        (creado por _full_redraw_plot en la llamada anterior).
+        """
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+
+        i_lo = int(np.searchsorted(self.time, t_start, side="left"))
+        i_hi = int(np.searchsorted(self.time, t_end,   side="right"))
+        t_vis = self.time[i_lo:i_hi]
+
+        try:
+            bbox = self.ax.get_window_extent()
+            n_pixels = max(int(bbox.width), 100)
+        except Exception:
+            n_pixels = 1200
+
+        v_div_active = self.v_div.get()
+
+        # phosphor on: leemos intensity una vez (no por canal)
+        phosphor = bool(self.phosphor_enabled.get())
+        intensity = float(self.phosphor_intensity.get()) if phosphor else 0.0
+
+        # Actualizar cada línea de canal. El artist en cache puede ser:
+        #   - Line2D       (modo normal): set_data → muy rápido.
+        #   - LineCollection (modo phosphor): set_segments + set_color con
+        #     RGBA por segmento → más caro pero evita el rebuild completo.
+        for ch in self.channels:
+            uid = ch.get("_uid")
+            line = self._channel_lines.get(uid)
+            if line is None:
+                continue
+            if not ch["visible"].get():
+                line.set_visible(False)
+                continue
+            line.set_visible(True)
+
+            v = ch["voltage"][i_lo:i_hi]
+            if self.render_mode.get() == "Fast":
+                t_plot, v_plot = minmax_decimate(t_vis, v, n_pixels)
+            else:
+                t_plot, v_plot = t_vis, v
+
+            divs = (v_plot - ch["v_offset"]) / ch["v_div"]
+            y_plot = divs * v_div_active
+            tx = t_plot - t_start
+
+            # set_segments existe en LineCollection; en Line2D no. Lo usamos
+            # como discriminador para evitar isinstance + import.
+            if hasattr(line, "set_segments"):
+                is_active = (ch is self.channels[self.active_channel_idx])
+                base_alpha = 1.0 if is_active else 0.85
+                # Mismo cap que en _full_redraw_plot: sin él arrastrar el
+                # plot con phosphor on es inviable en datasets grandes.
+                tp, yp = tx, y_plot
+                cap = self._PHOSPHOR_MAX_SEGMENTS
+                if len(tp) > cap:
+                    tp, yp = minmax_decimate(tp, yp, cap // 2)
+                segs, rgba = self._compute_phosphor_rgba(
+                    tp, yp,
+                    base_color=ch["color"],
+                    base_alpha=base_alpha,
+                    intensity=intensity,
+                )
+                line.set_segments(segs)
+                line.set_color(rgba)
+            else:
+                # set_data evita recrear el artist; reuse del path interno
+                line.set_data(tx, y_plot)
+
+        # ─────────────────────────────────────────────────────────────────
+        # IMPORTANTE: en fast path NO tocamos set_ylim ni set_yticks.
+        # ─────────────────────────────────────────────────────────────────
+        # En este modelo el "v_offset global del scope" (self.v_offset) no es
+        # un offset del viewport — es un alias del v_offset del canal activo
+        # (sincronizados por on_v_slider_move / on_mouse_drag). El grid SIEMPRE
+        # se queda centrado en (-v_range/2, +v_range/2) y los datos se desplazan
+        # vía `(v_data - ch["v_offset"]) / ch["v_div"] * v_div_active` arriba.
+        #
+        # Si tocásemos set_ylim aquí desplazaríamos el viewport entero junto
+        # con los ticks, el time_div_label de la esquina, la línea de 0V del
+        # grid… que es precisamente el bug que veíamos.
+        #
+        # Las etiquetas de los ticks Y pueden cambiar si el v_offset del canal
+        # activo cambia (porque muestran V_real del canal). Eso lo actualizamos
+        # aquí en O(V_DIVS) — barato.
+        v_range = v_div_active * V_DIVS
+        if self.channels:
+            yticks_screen = np.linspace(-v_range / 2, v_range / 2, V_DIVS + 1)
+            active = self.channels[self.active_channel_idx]
+            # y_real = y_screen / v_div_active * sel.v_div + sel.v_offset
+            yreal = yticks_screen / v_div_active * active["v_div"] + active["v_offset"]
+            # sig_figs=4 para consistencia con configure_grid (ver allí el
+            # razonamiento del modo Fine). Limpieza idéntica del residuo
+            # numérico cerca de cero (evita "100 fV" en la línea del 0 V).
+            noise_thr = v_div_active * 1e-9
+            y_unit = self._active_unit()
+            self.ax.set_yticklabels([
+                format_si(0.0 if abs(y) < noise_thr else y, y_unit, sig_figs=4)
+                for y in yreal
+            ])
+            for lbl in self.ax.get_yticklabels():
+                lbl.set_color(active["color"])
+
+        # Xticklabels: aunque las POSICIONES de los xticks no cambian
+        # (el plot tiene xlim fijo [0, t_range]), las ETIQUETAS sí: cada
+        # tick muestra "t_offset + x + time_origin". Durante un pan,
+        # t_offset cambia y debemos refrescar O(H_DIVS) etiquetas. Barato.
+        try:
+            xticks_arr = self.ax.get_xticks()
+            t_o = self._t_display_origin()
+            self.ax.set_xticklabels(
+                [format_si(t_start + x + t_o, "s", sig_figs=3)
+                 for x in xticks_arr])
+        except Exception:
+            pass
+
+        # Cursores verticales (tiempo)
+        self._fast_update_vertical_cursors(t_start)
+
+        # Cursores horizontales (voltaje)
+        self._fast_update_horizontal_cursors()
+
+        # Marcadores GND, time_div_label, info text, etc.
+        # Los marcadores GND son baratos, los redibujamos siempre.
+        # (Más adelante también los podemos persistir si fuese cuello de botella.)
+        self._clear_gnd_markers()
+        for i, ch in enumerate(self.channels):
+            if ch["visible"].get():
+                self._draw_channel_ground_marker(
+                    ch, v_div_active, is_active=(i == self.active_channel_idx)
+                )
+
+        self.update_cursors_info_label()
+        self.update_measurements_label()
+        self._update_filename_label()
+        # Anotaciones y triggers: estos limpian/redibujan internamente
+        self._draw_annotations()
+        self._draw_trigger_markers()
+        self._draw_protocol_frames()
+        self.update_time_div_label()
+
+        self.canvas.draw_idle()
+        try:
+            self._redraw_minimap()
+        except Exception:
+            pass
+
+    def _fast_update_vertical_cursors(self, t_start):
+        """Mueve los axvline persistentes a las nuevas posiciones, o los
+        oculta si los cursores verticales no están activos."""
+        active = self._cursors_vertical_active()
+        for i, line in enumerate(self._cursor_v_lines):
+            if line is None:
+                continue
+            if not active:
+                line.set_visible(False)
+                continue
+            x = self.cursor_x[i]
+            window = self.t_div.get() * H_DIVS
+            if t_start <= x <= t_start + window:
+                line.set_xdata([x - t_start, x - t_start])
+                line.set_visible(True)
+            else:
+                line.set_visible(False)
+
+        # Marker (X) sobre traza y texto del cursor: limpiar y redibujar.
+        # Son baratos (un punto y un texto), no merece la pena persistirlos
+        # con tanta lógica de estado.
+        self._clear_cursor_v_markers()
+        if active:
+            for x in self.cursor_x:
+                if t_start <= x <= t_start + self.t_div.get() * H_DIVS:
+                    self._draw_vertical_cursor_marker(x)
+
+    def _fast_update_horizontal_cursors(self):
+        """Mueve los axhline persistentes o los oculta."""
+        active = self._cursors_horizontal_active()
+        for i, line in enumerate(self._cursor_h_lines):
+            if line is None:
+                continue
+            if not active:
+                line.set_visible(False)
+                continue
+            line.set_ydata([self.cursor_y[i], self.cursor_y[i]])
+            line.set_visible(True)
+
+    def _clear_gnd_markers(self):
+        """Borra los artists del marcador GND. Pequeño coste pero estable."""
+        for a in self._gnd_marker_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._gnd_marker_artists = []
+
+    def _clear_cursor_v_markers(self):
+        """Borra los artists del cursor vertical (marker X + texto)."""
+        for a in self._cursor_v_marker_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._cursor_v_marker_artists = []
+
+    def _full_redraw_plot(self):
+        """Camino lento: clear() + recrear todos los artists. Se llama cuando
+        cambia algo estructural (canales, render_mode, tema, t_div, v_div).
+        Es la lógica antigua de update_plot, adaptada para guardar referencias
+        a los artists creados (Line2D por canal, cursores, hash marks...) para
+        que el siguiente fast_update_plot pueda reutilizarlos.
+        """
+        # configure_grid hace ax.clear() entre otras cosas → invalida todos
+        # los artists previos. Limpiamos también nuestros caches.
+        self._channel_lines = {}
+        self._cursor_v_lines = [None, None]
+        self._cursor_h_lines = [None, None]
+        self._gnd_marker_artists = []
+        self._cursor_v_marker_artists = []
+        # ax.clear() ya invalidó estos artists; vacíar listas para evitar
+        # llamar a .remove() sobre artists muertos en el próximo draw.
+        self._annotation_artists = []
+        self._trigger_marker_artists = []
+        self._protocol_artists = []
+        # Las hashmarks las repuebla configure_grid()
+        self._hashmark_artists = []
+
+        self.configure_grid()
+
+        if self.time is None or not self.channels:
+            self.canvas.draw_idle()
+            return
+
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+
+        i_lo = int(np.searchsorted(self.time, t_start, side="left"))
+        i_hi = int(np.searchsorted(self.time, t_end,   side="right"))
+        t_vis = self.time[i_lo:i_hi]
+
+        try:
+            bbox = self.ax.get_window_extent()
+            n_pixels = max(int(bbox.width), 100)
+        except Exception:
+            n_pixels = 1200
+
+        v_div_active = self.v_div.get()
+        # NB: NO aplicamos `self.v_offset` global como offset del viewport.
+        # configure_grid() (llamado antes) ya dejó el ax con ylim simétrico
+        # en (-v_range/2, +v_range/2). El desplazamiento del slider/drag se
+        # propaga al `v_offset` del canal activo y se manifiesta abajo en
+        # `y_plot = (v - ch["v_offset"]) / ch["v_div"] * v_div_active`.
+        # Si hiciésemos `set_ylim(... +v_off)` arrastraríamos también la línea
+        # central de 0V del grid y el time_div_label de la esquina.
+
+        # Orden: primero los no activos, luego el activo arriba
+        order = [i for i in range(len(self.channels)) if i != self.active_channel_idx]
+        order.append(self.active_channel_idx)
+
+        for i in order:
+            ch = self.channels[i]
+            if not ch["visible"].get():
+                continue
+
+            v = ch["voltage"][i_lo:i_hi]
+            if self.render_mode.get() == "Fast":
+                t_plot, v_plot = minmax_decimate(t_vis, v, n_pixels)
+            else:
+                t_plot, v_plot = t_vis, v
+
+            divs = (v_plot - ch["v_offset"]) / ch["v_div"]
+            y_plot = divs * v_div_active
+
+            is_active = (i == self.active_channel_idx)
+            base_lw    = 1.0 if is_active else 0.8
+            base_alpha = 1.0 if is_active else 0.85
+
+            if self.phosphor_enabled.get() and len(t_plot) >= 2:
+                # Cada segmento del LineCollection es un draw call. Si la
+                # ventana visible tiene 50k+ puntos, sin decimar la app se
+                # arrastra. minmax_decimate conserva picos (no promedia),
+                # así que el efecto visual de los flancos se preserva.
+                tp = t_plot - t_start
+                yp = y_plot
+                cap = self._PHOSPHOR_MAX_SEGMENTS
+                if len(tp) > cap:
+                    tp, yp = minmax_decimate(tp, yp, cap // 2)
+                line = self._build_phosphor_collection(
+                    tp, yp,
+                    base_color=ch["color"],
+                    base_alpha=base_alpha,
+                    linewidth=base_lw,
+                    intensity=float(self.phosphor_intensity.get()),
+                )
+                self.ax.add_collection(line)
+            else:
+                (line,) = self.ax.plot(
+                    t_plot - t_start,
+                    y_plot,
+                    color=ch["color"],
+                    linewidth=base_lw,
+                    alpha=base_alpha,
+                )
+            uid = ch.get("_uid")
+            if uid is not None:
+                self._channel_lines[uid] = line
+
+            self._draw_channel_ground_marker(
+                ch, v_div_active, is_active=(i == self.active_channel_idx)
+            )
+
+        # Cursores verticales (tiempo) — crear axvline persistentes SIEMPRE
+        # que los cursores estén activos, aunque caigan fuera de la ventana
+        # visible. Si están fuera del rango, los creamos invisibles; el
+        # fast path (_fast_update_vertical_cursors) los hará visibles cuando
+        # entren en rango por pan/zoom posterior.
+        # Antes, si el cursor caía fuera en el momento del full redraw, el
+        # artist NO se creaba (_cursor_v_lines[k] quedaba en None) y el
+        # fast path lo ignoraba para siempre — bug que solo se "arreglaba"
+        # forzando otro full redraw (cambiando modo de cursor, p.ej.).
+        if self._cursors_vertical_active():
+            for k, x in enumerate(self.cursor_x):
+                # Posición efectiva: si está fuera de rango, lo creamos en
+                # 0 invisible. La posición real la pondrá el fast path.
+                in_range = (t_start <= x <= t_end)
+                x_pos = (x - t_start) if in_range else 0.0
+                line = self.ax.axvline(
+                    x_pos, color="white",
+                    linestyle=(0, (5, 5)), linewidth=1.2
+                )
+                line.set_visible(in_range)
+                self._cursor_v_lines[k] = line
+                if in_range:
+                    self._draw_vertical_cursor_marker(x)
+
+        # Cursores horizontales (voltaje)
+        if self._cursors_horizontal_active():
+            for k, y in enumerate(self.cursor_y):
+                line = self.ax.axhline(
+                    y, color="white",
+                    linestyle=(0, (5, 5)), linewidth=1.2
+                )
+                self._cursor_h_lines[k] = line
+
+        self.update_cursors_info_label()
+        self.update_measurements_label()
+        self._update_filename_label()
+        self._draw_annotations()
+        self._draw_trigger_markers()
+        self._draw_protocol_frames()
+        self.canvas.draw_idle()
+        try:
+            self._redraw_minimap()
+        except Exception:
+            pass
+
+    def _draw_vertical_cursor_marker(self, cursor_time):
+        """Dibuja un marcador (X) + valor de tensión en el punto donde el
+        cursor vertical cruza la traza.
+
+        Por defecto solo dibuja en el canal activo. Si
+        `self.cursor_show_all` está activado, dibuja en TODOS los canales
+        visibles — útil para comparar tensiones de varios canales en el
+        mismo instante temporal.
+
+        La etiqueta de cada marker incluye el nombre del canal cuando hay
+        múltiples (para evitar ambigüedad al leer)."""
+        if not self.channels:
+            return
+
+        show_all = bool(self.cursor_show_all.get())
+
+        # Lista de canales a procesar
+        if show_all:
+            targets = [(i, ch) for i, ch in enumerate(self.channels)
+                       if ch["visible"].get()]
+        else:
+            ch = self.channels[self.active_channel_idx]
+            if not ch["visible"].get():
+                return
+            targets = [(self.active_channel_idx, ch)]
+
+        if not targets:
+            return
+
+        # Índice más cercano en tiempo — común a todos los canales
+        # (mismo timebase self.time).
+        idx = int(np.searchsorted(self.time, cursor_time))
+        idx = max(0, min(idx, len(self.time) - 1))
+
+        # Coordenadas de pantalla — comunes para X
+        x_screen = cursor_time - self.t_offset.get()
+        v_div_active = self.v_div.get()
+        v_range = v_div_active * V_DIVS
+        t_range = self.t_div.get() * H_DIVS
+
+        # Si hay más de un marker, prefijar con el nombre del canal
+        # para que se entienda cuál es cuál.
+        prefix_name = show_all and len(targets) > 1
+
+        for ch_idx, ch in targets:
+            v_real = float(ch["voltage"][idx])
+            y_screen = (v_real - ch["v_offset"]) / ch["v_div"] * v_div_active
+
+            # Solo dibujar si cae en el área visible verticalmente
+            if not (-v_range / 2 <= y_screen <= v_range / 2):
+                continue
+
+            # Marcador X en color del canal
+            marker_line = self.ax.plot(
+                x_screen, y_screen,
+                marker="x",
+                color=ch["color"],
+                markersize=10,
+                markeredgewidth=1.4,
+            )
+            if marker_line:
+                self._cursor_v_marker_artists.append(marker_line[0])
+
+            # Etiqueta con el valor — con prefijo de nombre si hay varios.
+            # Unidad propia de cada canal (v1.29).
+            ch_unit = ch.get("unit", DEFAULT_UNIT)
+            if prefix_name:
+                label_text = f" {ch['name']}: {format_si(v_real, ch_unit)}"
+            else:
+                label_text = f" {format_si(v_real, ch_unit)}"
+
+            ann = self.ax.annotate(
+                label_text,
+                xy=(x_screen, y_screen),
+                xytext=(x_screen + t_range * 0.008, y_screen),
+                ha="left", va="center",
+                fontsize=8,
+                color=ch["color"],
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="#111111",
+                    edgecolor="none",
+                    alpha=0.6,
+                    boxstyle="round,pad=0.15",
+                ),
+            )
+            self._cursor_v_marker_artists.append(ann)
+
+
+    def _update_filename_label(self):
+        """Actualiza el label discreto de la esquina inferior derecha con
+        el nombre del fichero abierto y la marca del osciloscopio detectada."""
+        if self.current_filename is None:
+            self.filename_label.set_text("")
+            return
+        text = self.current_filename
+        if self.current_brand:
+            text += f"  |  Oscilloscope: {self.current_brand}"
+        self.filename_label.set_text(text)
+
+
+    def _draw_channel_ground_marker(self, ch, v_div_active, is_active=False):
+        """Dibuja un pequeño marcador a la izquierda indicando el nivel 0V
+        de cada canal, en su color."""
+        v_range = v_div_active * V_DIVS
+        v_offset_global = self.v_offset.get()
+        t_range = self.t_div.get() * H_DIVS
+
+        # El 0V real del canal, en coordenadas de pantalla:
+        # y_screen = (0 - ch_offset)/ch_vdiv · v_div_active
+        y_gnd = (-ch["v_offset"] / ch["v_div"]) * v_div_active
+
+        y_min = -v_range / 2
+        y_max =  v_range / 2
+        if not (y_min <= y_gnd <= y_max):
+            return
+
+        # Etiqueta con el nombre del canal a la izquierda.
+        # Usa un bbox semitransparente del color de fondo del grid para que
+        # NUNCA se superponga con los ticks del eje Y.
+        ann = self.ax.annotate(
+            f"▶ {ch['name']}",
+            xy=(0, y_gnd),
+            xytext=(-t_range * 0.09, y_gnd),
+            ha="right",
+            va="center",
+            color=ch["color"],
+            fontsize=9,
+            fontweight="bold" if is_active else "normal",
+            annotation_clip=False,
+            bbox=dict(
+                boxstyle="round,pad=0.15",
+                facecolor=self.grid_theme.get("bg", "black"),
+                edgecolor="none",
+                alpha=0.9,
+            ),
+        )
+        self._gnd_marker_artists.append(ann)
+        
+
+    def _on_plot_ctrl_wheel(self, event):
+        """Ctrl + rueda sobre el plot: zoom horizontal (T/div).
+
+        Mismo comportamiento que la rueda sobre el minimap pero accesible
+        sin tener que mover el ratón fuera del grid.
+
+        Convención: rueda ARRIBA → zoom in (T/div ↓, mostrar menos tiempo),
+        rueda ABAJO → zoom out. Igual que _on_minimap_wheel para que el
+        usuario no tenga que reaprender gestos.
+        """
+        if self.time is None:
+            return
+        if hasattr(event, "delta") and event.delta:
+            direction = "down" if event.delta > 0 else "up"
+        elif getattr(event, "num", None) == 4:
+            direction = "down"     # Linux scroll-up → zoom in
+        elif getattr(event, "num", None) == 5:
+            direction = "up"       # Linux scroll-down → zoom out
+        else:
+            return
+        self._step_t_div(direction)
+        return "break"
+
+    def _on_plot_shift_wheel(self, event):
+        """Shift + rueda sobre el plot: pan horizontal.
+
+        Detecta el sentido de la rueda según la plataforma:
+          - Windows/Mac: event.delta (±120 múltiplos; signo = dirección).
+          - Linux: usa Button-4 (up) y Button-5 (down), event.num.
+
+        Mueve t_offset en pasos de ~1 división (=t_div). Es lo bastante
+        rápido para navegar pero sin saltos enormes que despisten.
+        """
+        if self.time is None:
+            return
+        # Determinar dirección
+        if hasattr(event, "delta") and event.delta:
+            direction = 1 if event.delta < 0 else -1     # rueda abajo = pan→
+        elif getattr(event, "num", None) == 5:
+            direction = 1                                 # Linux scroll-down
+        elif getattr(event, "num", None) == 4:
+            direction = -1                                # Linux scroll-up
+        else:
+            return
+
+        step = self.t_div.get() * direction              # 1 div por tick
+        new_offset = self.t_offset.get() + step
+
+        # Clamp al rango válido del CSV: 0 .. (t_total - t_window)
+        t_window = self.t_div.get() * H_DIVS
+        max_offset = max(0.0, self.t_total - t_window)
+        new_offset = max(0.0, min(new_offset, max_offset))
+
+        self.t_offset.set(new_offset)
+        # Sincronizar el slider horizontal si existe
+        try:
+            self.h_slider.set(new_offset)
+        except Exception:
+            pass
+        self.update_plot()
+        # Devolver "break" para que el evento no se propague a contenedores
+        return "break"
+
+    def on_mouse_press(self, event):
+        # Click derecho: menú contextual del plot
+        if event.button == 3 and event.inaxes == self.ax:
+            self._show_plot_context_menu(event)
+            return
+
+        # Annotation mode: intercepta y consume el evento
+        if self._is_annotation_active():
+            if self._on_annotation_press(event):
+                return
+
+        if event.button != 1 or event.inaxes != self.ax:
+            return
+        if self.time is None or event.xdata is None:
+            return
+
+        click_consumed = False
+
+
+        # -----------------------------
+        # CURSORES
+        # -----------------------------
+        # En modo combinado, probamos primero con el tipo cuyo click está
+        # más cerca (minimal distance en coordenadas de su eje).
+
+        v_on = self._cursors_vertical_active()
+        h_on = self._cursors_horizontal_active()
+
+        if v_on or h_on:
+            # Probar vertical (tiempo)
+            if v_on:
+                click_time = event.xdata + self.t_offset.get()
+                tol = self.t_div.get() * 0.2
+                for i, x in enumerate(self.cursor_x):
+                    if abs(click_time - x) < tol:
+                        self.active_cursor = i
+                        click_consumed = True
+                        break
+
+            # Si no se ha agarrado vertical, probar horizontal
+            if not click_consumed and h_on:
+                click_voltage = event.ydata
+                tol = self.v_div.get() * 0.3
+                for i, y in enumerate(self.cursor_y):
+                    if abs(click_voltage - y) < tol:
+                        self.active_cursor_y = i
+                        click_consumed = True
+                        break
+
+
+        # -----------------------------
+        # DRAG DE TRAZA (fallback) - siempre horizontal,
+        # y también vertical SOLO si se pincha sobre la traza
+        # -----------------------------
+        if not click_consumed:
+            self.dragging = True
+            self.drag_start_x = event.xdata
+            self.drag_start_y = event.ydata
+            self.drag_start_offset = self.t_offset.get()
+
+            # ¿El click ha caído sobre algún canal? Si sí, actívalo y
+            # habilita drag vertical. Si no, solo drag horizontal.
+            clicked_idx = self.find_channel_under_click(event)
+            if clicked_idx is not None:
+                if clicked_idx != self.active_channel_idx:
+                    self.set_active_channel(clicked_idx)
+                    self._rebuild_channels_panel()
+                self.drag_vertical_enabled = True
+                self.drag_start_v_offset = self.v_offset.get()
+            else:
+                self.drag_vertical_enabled = False
+                self.drag_start_v_offset = self.v_offset.get()
+
+
+
+
+    def on_mouse_release(self, event):
+        # Annotation: termina stroke si estaba dibujando
+        if self._current_stroke is not None:
+            self._on_annotation_release(event)
+            return
+        self.dragging = False
+        self.active_cursor = None
+        self.active_cursor_y = None
+
+
+    def on_mouse_move(self, event):
+        if self.time is None:
+            return
+
+        # Annotation: prolonga stroke si se está dibujando
+        if self._current_stroke is not None:
+            self._on_annotation_move(event)
+            return
+
+        # -----------------------------
+        # CURSORES ACTIVOS
+        # -----------------------------
+        # Cursor vertical (tiempo) - funciona en modos Vertical y Horizontal+Vertical
+        if self._cursors_vertical_active() and self.active_cursor is not None:
+            if event.xdata is None:
+                return
+            new_time = event.xdata + self.t_offset.get()
+            new_time = max(0.0, min(new_time, self.t_total))
+            self.cursor_x[self.active_cursor] = new_time
+            self._schedule_update_plot()
+            self._mark_dirty()
+            return
+
+        # Cursor horizontal (voltaje) - funciona en modos Horizontal y Horizontal+Vertical
+        if self._cursors_horizontal_active() and self.active_cursor_y is not None:
+            if event.ydata is None:
+                return
+            new_voltage = event.ydata
+            v_half_range = (self.v_div.get() * V_DIVS) / 2
+            new_voltage = max(-v_half_range, min(new_voltage, v_half_range))
+            self.cursor_y[self.active_cursor_y] = new_voltage
+            self._schedule_update_plot()
+            self._mark_dirty()
+            return
+
+        # -----------------------------
+        # MOVER TRAZA (fallback) - X e Y
+        # -----------------------------
+        if not self.dragging:
+            return
+
+        if event.xdata is None:
+            return
+
+        # --- Horizontal ---
+        dx = event.xdata - self.drag_start_x
+        window = self.t_div.get() * H_DIVS
+        max_offset = max(0.0, self.t_total - window)
+
+        new_offset = self.drag_start_offset - dx
+        new_offset = max(0.0, min(new_offset, max_offset))
+
+        self.t_offset.set(new_offset)
+        self.h_slider.set(new_offset)
+
+        # --- Vertical (solo si el click inicial fue sobre la traza) ---
+        if getattr(self, "drag_vertical_enabled", False) and event.ydata is not None:
+            dy = event.ydata - self.drag_start_y
+            # Modelo nuevo: las trazas se dibujan como (v - offset)/v_div.
+            # Arrastrar hacia arriba → la traza sube → offset debe disminuir.
+            new_v_offset = self.drag_start_v_offset - dy
+
+            # Limitar a ±4 divisiones (en V del canal activo)
+            v_limit = self.v_div.get() * 4
+            new_v_offset = max(-v_limit, min(new_v_offset, v_limit))
+
+            self.v_offset.set(new_v_offset)
+            # Slider INVERTIDO: derecha=+=traza arriba=offset negativo.
+            # Bloqueamos el callback del slider para que no re-escriba el offset.
+            self._syncing_active = True
+            try:
+                self.v_slider.set(-new_v_offset)
+            finally:
+                self._syncing_active = False
+            # Persistir al canal activo
+            if self.channels:
+                self.channels[self.active_channel_idx]["v_offset"] = new_v_offset
+
+        self._schedule_update_plot()
+
+
+        
+ 
+    
+    def open_fft_window(self):
+        # Singleton: si ya hay una ventana FFT abierta, traerla al frente
+        # en lugar de abrir otra. Mismo patrón que open_xy_window.
+        if getattr(self, "_fft_window", None) is not None \
+                and self._fft_window.winfo_exists():
+            self._fft_window.lift()
+            self._fft_window.focus_force()
+            return
+        if self.time is None:
+            return
+        fft = FFTWindow(self)
+        self._fft_window = fft.win
+        # Guardar también la instancia para poder notificarle cambios de
+        # tema en runtime (ver apply_theme_runtime).
+        self._fft_instance = fft
+
+    def open_eye_window(self):
+        """Abre el diagrama de ojos sobre el canal activo."""
+        # Singleton — ver open_fft_window
+        if getattr(self, "_eye_window", None) is not None \
+                and self._eye_window.winfo_exists():
+            self._eye_window.lift()
+            self._eye_window.focus_force()
+            return
+        if self.time is None or not self.channels:
+            self._show_toast("Load a CSV first")
+            return
+        eye = EyeDiagramWindow(self)
+        self._eye_window = eye.win
+        self._eye_instance = eye
+
+    def open_decoder_window(self):
+        """Abre el decoder de protocolos."""
+        # Singleton — ver open_fft_window
+        if getattr(self, "_decoder_window", None) is not None \
+                and self._decoder_window.winfo_exists():
+            self._decoder_window.lift()
+            self._decoder_window.focus_force()
+            return
+        if self.time is None or not self.channels:
+            self._show_toast("Load a CSV first")
+            return
+        dec = DecoderWindow(self)
+        self._decoder_window = dec.win
+
+    def _set_protocol_frames(self, frames, channel_roles):
+        """Recibe los frames decodificados de DecoderWindow.
+
+        frames: lista de dicts (ver ProtocolDecoder.decode).
+        channel_roles: dict {"primary": ch_idx} indicando bajo qué canal
+                       se dibuja la barra de campos.
+
+        Almacena el estado y fuerza un full redraw para que las cajas
+        aparezcan. Llamar con frames=[] para limpiar el overlay.
+        """
+        self._protocol_frames = list(frames)
+        self._protocol_channel_idx = channel_roles.get("primary", 0) if frames else None
+        # Forzar full redraw: invalidar fingerprint para que update_plot
+        # vaya por el camino lento que llama a _draw_protocol_frames.
+        self._last_structure_fingerprint = None
+        self.update_plot()
+
+    def _draw_protocol_frames(self):
+        """Dibuja las cajas del decoder bajo la traza del canal asociado.
+
+        Se llama desde _full_redraw_plot y _fast_update_plot, igual que
+        _draw_trigger_markers. Limpia artists previos antes de redibujar.
+        """
+        # Limpiar previos
+        for a in getattr(self, "_protocol_artists", []):
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._protocol_artists = []
+
+        frames = getattr(self, "_protocol_frames", None)
+        ch_idx = getattr(self, "_protocol_channel_idx", None)
+        if not frames or ch_idx is None:
+            return
+        if ch_idx >= len(self.channels):
+            return
+
+        ch = self.channels[ch_idx]
+        if not ch["visible"].get():
+            return
+
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+        t_end = t_start + window
+        v_range = self.v_div.get() * V_DIVS
+
+        # Posición Y de la barra: debajo del GND del canal, fija respecto al
+        # eje screen. Usamos coordenadas blended para que el alto sea fijo
+        # en píxeles pero la posición X siga datos.
+        # Lo más simple: poner la barra entre y = -v_range/2 * 0.95
+        # y -v_range/2 * 0.82 (un 13% del alto total cerca del fondo).
+        y_lo, y_hi = self.ax.get_ylim()
+        y_top = y_lo + (y_hi - y_lo) * 0.10
+        y_bot = y_lo + (y_hi - y_lo) * 0.03
+        box_h = y_top - y_bot
+
+        # Para no dibujar miles de cajas fuera de pantalla: filtrar
+        visible = [f for f in frames
+                   if f["t_end"] >= t_start and f["t_start"] <= t_end]
+
+        # Import local (no contaminar el módulo)
+        from matplotlib.patches import Rectangle
+
+        # Si hay demasiados frames visibles, el texto se solapa — degradamos
+        # mostrando solo cajas sin texto cuando son muy estrechas (<20 px).
+        bbox = self.ax.get_window_extent()
+        px_per_s = bbox.width / max(window, 1e-12)
+
+        for f in visible:
+            t0 = max(f["t_start"], t_start)
+            t1 = min(f["t_end"], t_end)
+            if t1 <= t0:
+                continue
+            x0_screen = t0 - t_start
+            x1_screen = t1 - t_start
+            width_px = (t1 - t0) * px_per_s
+
+            color = f.get("color", "#5fa8ff")
+            err = f.get("error", False)
+            edge = "#ff0000" if err else "#000000"
+
+            # Caja
+            rect = Rectangle(
+                (x0_screen, y_bot),
+                x1_screen - x0_screen, box_h,
+                facecolor=color,
+                edgecolor=edge,
+                linewidth=1.0 if err else 0.5,
+                alpha=0.85,
+                zorder=10,
+            )
+            self.ax.add_patch(rect)
+            self._protocol_artists.append(rect)
+
+            # Texto si cabe (al menos ~20px de ancho)
+            if width_px > 20:
+                # Truncar label si la caja es estrecha
+                label = f.get("label", "")
+                max_chars = max(1, int(width_px / 8))   # ~8 px por char
+                if len(label) > max_chars:
+                    label = label[:max_chars - 1] + "…"
+                txt = self.ax.text(
+                    (x0_screen + x1_screen) / 2.0,
+                    y_bot + box_h / 2.0,
+                    label,
+                    color="black",
+                    fontsize=8,
+                    fontfamily="Consolas",
+                    ha="center", va="center",
+                    zorder=11,
+                )
+                self._protocol_artists.append(txt)
+
+        
+    def on_cursors_toggle(self):
+        if self.cursors_enabled.get():
+            self.cursor_mode_combo.config(state="readonly")
+        else:
+            self.cursor_mode_combo.config(state="disabled")
+        self.update_plot()
+        
+        
+        
+    def center_cursors(self):
+        if self.time is None:
+            return
+
+        # Ventana visible actual
+        t_start = self.t_offset.get()
+        window = self.t_div.get() * H_DIVS
+
+        # Recolocar cursores dentro del view
+        self.cursor_x = [
+            t_start + window * 0.25,
+            t_start + window * 0.75,
+        ]
+
+        # Redibujar
+        self.update_plot()
+
+
+
+    def _force_refresh_ttk_in(self, parent):
+        """Recorre el árbol y, para los ttk.Treeview encontrados, fuerza un
+        recálculo de estilo. ttk almacena en caché los colores y no los
+        actualiza solo cuando se reconfigura ttk.Style globalmente.
+
+        Truco: cambiar el estilo a uno custom temporal y volver al default.
+        Esto invalida el cache interno.
+        """
+        try:
+            cls = parent.winfo_class()
+        except Exception:
+            return
+        if cls == "Treeview":
+            try:
+                # Forzar re-cálculo: re-aplicar el style por nombre
+                cur_style = parent.cget("style") or "Treeview"
+                parent.configure(style="")
+                parent.update_idletasks()
+                parent.configure(style=cur_style)
+            except Exception:
+                pass
+        # Recursión
+        try:
+            for c in parent.winfo_children():
+                self._force_refresh_ttk_in(c)
+        except Exception:
+            pass
+
+    def apply_theme_runtime(self, name, sync_plot=True, fade=None):
+        """Cambia el tema de la chrome en runtime, opcionalmente con fade.
+
+        Parámetros:
+            name      : "Dark" | "Light" | "Blueprint" | "High Contrast"
+            sync_plot : si True, también actualiza self.grid_theme con los
+                        colores PLOT_* del tema. Si False, el plot mantiene
+                        su tema independiente (útil cuando el usuario ha
+                        personalizado el plot a mano).
+            fade      : True/False/None. Si None, se lee de user_config
+                        (clave 'theme_fade', default True).
+
+        Comportamiento:
+            - fade=False → cambio instantáneo (comportamiento legacy).
+            - fade=True  → animación corta (~180-200 ms) interpolando los
+                           colores entre el tema actual y el destino, y
+                           barrido completo al final.
+        """
+        if name not in THEMES:
+            return
+        if name == CURRENT_THEME_NAME and not sync_plot:
+            return
+
+        # Resolver fade desde config si no lo fuerza el caller
+        if fade is None:
+            fade = bool(load_user_config().get("theme_fade", True))
+
+        if fade and name != CURRENT_THEME_NAME:
+            # Solo tiene sentido animar si CAMBIA el tema; si solo cambia
+            # sync_plot pero el nombre es el mismo, ir directo.
+            self._apply_theme_fade(name, sync_plot)
+        else:
+            self._apply_theme_immediate(name, sync_plot)
+
+    def _apply_theme_fade(self, name, sync_plot):
+        """Transición de tema con overlay alpha — coste constante.
+
+        En lugar de interpolar los colores de cientos de widgets frame a
+        frame (caro en PCs modestos), tapamos la ventana con un Toplevel
+        sin decoración del color del tema nuevo, animamos solo su alpha,
+        y mientras el overlay está opaco aplicamos el tema en seco por
+        detrás. El usuario ve:
+
+          1. Pantalla actual.
+          2. "Cortina" del color del tema nuevo apareciendo (fade-in).
+          3. Cortina opaca → cambio brusco invisible.
+          4. Cortina desapareciendo (fade-out) revela la UI ya con tema nuevo.
+
+        El coste de la animación es independiente del nº de widgets: solo
+        animamos un atributo (-alpha) de un único Toplevel. Si el WM no
+        soporta -alpha, caemos al cambio instantáneo (degradación elegante).
+
+        Si el usuario re-dispara un cambio de tema mientras hay una
+        animación en curso, cancelamos la anterior y destruimos el overlay
+        viejo para no apilar capas.
+        """
+        # v1.29: el tema es preferencia personal (persiste en user_config),
+        # NO estado de sesión. Cambiar tema YA NO marca dirty ni se serializa
+        # en el .ocv (ver _build_session_dict y _apply_session).
+
+        # Cancelar animación previa
+        prev_id = getattr(self, "_theme_fade_after_id", None)
+        if prev_id is not None:
+            try:
+                self.root.after_cancel(prev_id)
+            except Exception:
+                pass
+            self._theme_fade_after_id = None
+        prev_ov = getattr(self, "_theme_fade_overlay", None)
+        if prev_ov is not None:
+            try:
+                prev_ov.destroy()
+            except Exception:
+                pass
+            self._theme_fade_overlay = None
+
+        new_bg = THEMES[name]["BG"]
+
+        # Crear overlay sobre la ventana principal. overrideredirect quita
+        # marco, attributes("-topmost", True) garantiza que cubre todo.
+        try:
+            ov = tk.Toplevel(self.root)
+            ov.overrideredirect(True)
+            ov.configure(bg=new_bg)
+            ov.attributes("-topmost", True)
+            ov.attributes("-alpha", 0.0)
+        except Exception:
+            # WM sin -alpha o sin overrideredirect → fallback a cambio brusco
+            self._apply_theme_immediate(name, sync_plot)
+            return
+
+        # Dimensionar y posicionar para cubrir EXACTAMENTE la root.
+        # No usamos winfo_screen* (sería la pantalla primaria en multi-monitor):
+        # winfo_rootx/y/width/height son coords absolutas del WM y funcionan
+        # con la app en cualquier monitor.
+        try:
+            self.root.update_idletasks()
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            ov.geometry(f"{rw}x{rh}+{rx}+{ry}")
+        except Exception:
+            pass
+
+        self._theme_fade_overlay = ov
+
+        # Parámetros de la animación. Total ~160 ms y solo 8 ticks de Tk:
+        # mucho más barato que las 6× iteraciones por widget anteriores.
+        fade_in_steps  = 4
+        fade_out_steps = 4
+        step_delay_ms  = 20
+        peak_alpha     = 0.97   # pelín por debajo de 1 → no parece freeze
+
+        def fade_in(i=0):
+            self._theme_fade_after_id = None
+            if i >= fade_in_steps:
+                # Overlay opaco: cambio brusco invisible al usuario.
+                try:
+                    self._apply_theme_immediate(name, sync_plot)
+                except Exception:
+                    pass
+                # Encadenar fade-out
+                self._theme_fade_after_id = self.root.after(
+                    step_delay_ms, lambda: fade_out(0))
+                return
+            try:
+                ov.attributes("-alpha",
+                              peak_alpha * ((i + 1) / fade_in_steps))
+            except Exception:
+                pass
+            self._theme_fade_after_id = self.root.after(
+                step_delay_ms, lambda: fade_in(i + 1))
+
+        def fade_out(i=0):
+            self._theme_fade_after_id = None
+            if i >= fade_out_steps:
+                try:
+                    ov.destroy()
+                except Exception:
+                    pass
+                self._theme_fade_overlay = None
+                return
+            try:
+                ov.attributes("-alpha",
+                              peak_alpha * (1 - (i + 1) / fade_out_steps))
+            except Exception:
+                pass
+            self._theme_fade_after_id = self.root.after(
+                step_delay_ms, lambda: fade_out(i + 1))
+
+        fade_in(0)
+
+    def _apply_theme_immediate(self, name, sync_plot=True):
+        """Aplica el tema indicado de forma INSTANTÁNEA (sin fade).
+
+        Procedimiento:
+            1) apply_theme() reescribe COLOR_* y ttk.Style.
+            2) _retheme_tk_widgets() recorre el árbol y actualiza tk.* clásicos.
+            3) Si sync_plot: actualiza grid_theme y fuerza update_plot.
+            4) Actualiza widgets puntuales que tienen colores en propiedades
+               específicas no cubiertas por el barrido (highlight*, etc.).
+        """
+        if name not in THEMES:
+            return
+
+        apply_theme(self.root, name)
+        _retheme_tk_widgets(self.root)
+
+        # Refrescar Toplevels abiertos (FFT, trigger, XY, etc.) — son hijos
+        # de root pero no aparecen en winfo_children() de root directamente
+        # en todas las versiones de Tk. Iterar explícitamente:
+        try:
+            for tl in self.root.winfo_children():
+                if isinstance(tl, tk.Toplevel):
+                    _retheme_tk_widgets(tl)
+                    # ttk.Treeview no se refresca solo aunque el Style cambie.
+                    # Truco: cambiar la propiedad `style` a algo trivialmente
+                    # distinto y volver fuerza un re-cálculo.
+                    self._force_refresh_ttk_in(tl)
+        except Exception:
+            pass
+
+        if sync_plot:
+            t = THEMES[name]
+            self.grid_theme["bg"]            = t["PLOT_BG"]
+            self.grid_theme["grid_color"]    = t["PLOT_GRID"]
+            self.grid_theme["text_color"]    = t["PLOT_TEXT"]
+            self.grid_theme["time_label_bg"] = t["PLOT_TIME_LBL_BG"]
+            # v1.29: si Appearance está abierta, refrescar swatches del
+            # plot grid AHORA. El fade es asíncrono, así que el
+            # refresh_swatches inline de choose_theme corría antes de
+            # tiempo (con colores residuales del tema anterior).
+            try:
+                cb = getattr(self, "_appearance_swatch_refresh", None)
+                if cb is not None:
+                    cb()
+            except Exception:
+                pass
+        # v1.30: repintar el icono tuerca de la top bar. tk.Canvas guarda
+        # los items con su color absoluto, así que un cambio de tema sin
+        # repintar deja la tuerca con el accent del tema viejo.
+        try:
+            cb = getattr(self, "_gear_redraw", None)
+            if cb is not None:
+                cb()
+        except Exception:
+            pass
+            # Cambiar el tema GLOBAL invalida las personalizaciones de
+            # Advanced (que aplicaban sobre el tema anterior). Eliminamos
+            # esa clave del config persistido para no arrastrarlas al
+            # próximo arranque — el nuevo tema manda hasta que el usuario
+            # personalice de nuevo en Advanced.
+            try:
+                save_user_config({"grid_theme": None})
+            except Exception:
+                pass
+
+        # Re-render del plot principal con los nuevos colores
+        try:
+            self.update_plot()
+        except Exception:
+            pass
+
+        # Notificar a las ventanas secundarias con plot propio (FFT, Eye)
+        # para que repinten con el nuevo tema. Son singletons gestionados
+        # por open_*_window, así que cualquier instancia abierta está en
+        # self._fft_window / self._eye_window. La asociación entre window
+        # (Toplevel) y su instancia (FFTWindow/EyeDiagramWindow) se hace
+        # vía un dict que mantenemos paralelo a las refs de Toplevel.
+        for ref_attr in ("_fft_instance", "_eye_instance"):
+            inst = getattr(self, ref_attr, None)
+            if inst is None:
+                continue
+            try:
+                if hasattr(inst, "win") and inst.win.winfo_exists():
+                    if hasattr(inst, "_redraw"):
+                        inst._redraw()
+            except Exception:
+                pass
+
+        # Persistir entre arranques (silenciosamente — no romper si falla)
+        try:
+            save_user_config({"app_theme": name})
+        except Exception:
+            pass
+
+        self._show_toast(f"Theme: {name}")
+
+    def on_close(self):
+        # Cierra limpiamente la aplicación. Antes de destruir la ventana,
+        # persistimos su geometría y estado para restaurarlos en el próximo
+        # arranque. Si _save_main_window_geom falla por cualquier motivo,
+        # no bloqueamos el cierre.
+
+        # Si hay cambios sin guardar pregunta al usuario. Cancel aborta
+        # el cierre (no destruye la ventana).
+        if not self._prompt_save_if_dirty(context="closing"):
+            return
+
+        try:
+            _save_main_window_geom(self.root)
+        except Exception:
+            pass
+        self.root.quit()      # Sale del mainloop
+        self.root.destroy()   # Destruye la ventana y widgets
+
+
+
+
+# =============================
+# FFT Window
+# =============================
+class FFTWindow:
+    """Ventana de análisis de espectro (FFT) tipo analizador.
+
+    Parámetros de control:
+      - W (ms)      : longitud del tramo temporal a transformar.
+      - RBW (Hz)    : resolución espectral. Editable. Al cambiarla se recalcula W.
+      - Window      : Rectangular / Hann / Hamming / Blackman.
+      - Y scale     : Linear (Vrms), dBV, dBm(50Ω), dBµV.
+      - Start/Stop  : visualización (xlim). Editar uno actualiza Center/Span.
+      - Center/Span : visualización (xlim). Editar uno actualiza Start/Stop.
+
+    Drag vertical: desplaza solo el ylim (offset visual).
+    """
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.time = scope.time
+        # Canal seleccionado (por defecto, el activo del scope)
+        self.source_idx = scope.active_channel_idx
+        self.voltage = scope.channels[self.source_idx]["voltage"] \
+            if scope.channels else scope.voltage
+
+        # ==============================================================
+        # Configuración persistente del usuario
+        # ==============================================================
+        # Cargamos las preferencias "estables" (window, y_scale, trace
+        # mode, etc.) desde el config de usuario. Si no hay nada guardado,
+        # esto devuelve FFT_DEFAULT_CONFIG. Los parámetros que dependen
+        # del archivo (W, RBW, frecuencias) NO se persisten — se calculan
+        # al vuelo más abajo a partir de fs/duración.
+        #
+        # Cualquier cambio de la UI llama a self._save_fft_config() para
+        # que la próxima sesión arranque donde la dejamos. El botón
+        # "Reset configuration" restablece los defaults y borra de disco.
+        self._fft_config = load_fft_config()
+        # Flag para evitar que _save_fft_config se dispare durante la
+        # carga inicial — algunos handlers se ejecutan al construir la UI.
+        self._suppress_config_save = True
+
+        # Fuente de la FFT: canal seleccionado (nombre visible)
+        if scope.channels:
+            self.source_var = tk.StringVar(
+                value=scope.channels[self.source_idx]["name"]
+            )
+        else:
+            self.source_var = tk.StringVar(value="")
+
+        # --- Estado ---
+        # Tramo actualmente visible en el osciloscopio → valores por defecto
+        t_start_scope = scope.t_offset.get()
+        window_scope  = scope.t_div.get() * H_DIVS
+
+        mask = (self.time >= t_start_scope) & (self.time <= t_start_scope + window_scope)
+        if np.count_nonzero(mask) < 2:
+            return
+
+        self.t_segment_start = t_start_scope
+        self.dt = float(np.mean(np.diff(self.time[mask])))
+        self.fs = 1.0 / self.dt
+
+        # W en milisegundos (por defecto = ventana visible del scope)
+        self.W = tk.DoubleVar(value=window_scope * 1000.0)
+
+        # Ventana FFT — leer del config persistente (con fallback al default)
+        self.window_name = tk.StringVar(value=self._fft_config["window_name"])
+
+        # RBW se calcula al vuelo desde W y la ventana
+        self.RBW = tk.DoubleVar(value=self._compute_rbw())
+
+        # Escala Y — del config persistente
+        self.y_scale = tk.StringVar(value=self._fft_config["y_scale"])
+
+        # Zoom frecuencia (se inicializan al hacer el primer cálculo)
+        self.f_start  = tk.DoubleVar(value=0.0)
+        self.f_stop   = tk.DoubleVar(value=self.fs / 2.0)
+        self.f_center = tk.DoubleVar(value=self.fs / 4.0)
+        self.f_span   = tk.DoubleVar(value=self.fs / 2.0)
+
+        # StringVars de display (formato SI "240 kHz")
+        self.W_display       = tk.StringVar(value=format_si(self.W.get() / 1000.0, "s"))
+        self.RBW_display     = tk.StringVar(value=format_si(self.RBW.get(), "Hz"))
+        self.f_start_display  = tk.StringVar(value=format_si(self.f_start.get(),  "Hz"))
+        self.f_stop_display   = tk.StringVar(value=format_si(self.f_stop.get(),   "Hz"))
+        self.f_center_display = tk.StringVar(value=format_si(self.f_center.get(), "Hz"))
+        self.f_span_display   = tk.StringVar(value=format_si(self.f_span.get(),   "Hz"))
+
+        # Flag para evitar recursión al actualizar pares redundantes
+        self._updating_freq = False
+
+        # Arrays del último cálculo
+        self.freq = None
+        self.mag_vrms = None
+
+        # Offset vertical para drag
+        self.y_offset = 0.0
+
+        # Drag state
+        self._dragging = False
+        self._drag_start_y = None
+        self._drag_start_offset = 0.0
+
+        # --- Cursor vertical ---
+        self.cursor_enabled = tk.BooleanVar(
+            value=self._fft_config["cursor_enabled"])
+        self.cursor_freq = None          # frecuencia actual del cursor (Hz)
+        self._cursor_dragging = False    # True mientras se arrastra el cursor
+        self._cursor_line = None         # artist matplotlib (axvline)
+        self._cursor_marker = None       # punto sobre el pico (Line2D)
+
+        # ===============================================
+        # Features avanzadas (paso 5)
+        # ===============================================
+        # --- Trace mode: Live | Average | Max-hold | Min-hold ---
+        # Live: el espectro recién calculado. Avg/Max/Min: agregados.
+        self.trace_mode = tk.StringVar(
+            value=self._fft_config["trace_mode"])
+
+        # Buffer para averaging (RMS averaging: media de |X|^2 luego sqrt).
+        # Se reinicia al cambiar parámetros estructurales (W, RBW, ventana,
+        # canal fuente) — porque entonces los bins no son comparables.
+        self._avg_count = 0           # nº de espectros acumulados
+        self._avg_sum_sq = None       # array sum(|X|^2) bin a bin (Vrms^2)
+        self.avg_n = tk.IntVar(
+            value=int(self._fft_config["avg_n"]))   # nº deseado de promedios
+
+        # Max/min hold acumuladores (en Vrms — la unidad nativa interna).
+        self._max_hold = None
+        self._min_hold = None
+
+        # --- Detección de armónicos ---
+        self.show_harmonics = tk.BooleanVar(
+            value=self._fft_config["show_harmonics"])
+        self.n_harmonics = tk.IntVar(
+            value=int(self._fft_config["n_harmonics"]))   # cuántos mostrar incluyendo f0
+        # Estos artists matplotlib se gestionan en _draw_harmonics; los
+        # guardamos en una lista para poder limpiarlos sin tocar el resto.
+        self._harmonic_artists = []
+        # Última frecuencia fundamental detectada (None si no hay)
+        self._f0_detected = None
+        # Última THD calculada (porcentaje, None si no disponible)
+        self._thd_pct = None
+        self._thd_db = None
+
+        # --- UI ---
+        self.win = tk.Toplevel(scope.root)
+        self.win.withdraw()  # anti-flash
+        self.win.title("FFT")
+        # Permitir maximizar: declaramos resizable explícito y eliminamos
+        # transient() de la cadena de chrome (transient hace que Windows
+        # trate la ventana como diálogo modal sin botón de maximizar).
+        # Aplicamos solo el icono + withdraw/deiconify del chrome para
+        # evitar el flash de ventana en blanco.
+        self.win.resizable(True, True)
+        self.win.minsize(700, 420)
+        # Centrado sobre la ventana principal (importante en multimonitor:
+        # _center_dialog usa coords absolutas de root, no la pantalla
+        # primaria). En lugar de geometry("1100x650") fijo.
+        scope._center_dialog(self.win, 1100, 650)
+        self.win.protocol("WM_DELETE_WINDOW", self.win.destroy)
+        # Chrome sin transient: icono y withdraw/deiconify igual que las
+        # otras ventanas, pero conservando los botones de la barra de
+        # título (minimize/maximize/close).
+        self._apply_chrome_maximizable(scope)
+
+        self._build_ui()
+        self._recompute()
+        # UI construida — desactivar la supresión de save y a partir de aquí
+        # cualquier cambio del usuario disparará la persistencia automática.
+        self._suppress_config_save = False
+
+    def _save_fft_config(self):
+        """Persiste las preferencias actuales de la FFT en el user config.
+
+        Se llama automáticamente desde los handlers de cambios en la UI
+        (sin preguntar al usuario, igual que el resto de prefs de la app).
+        El flag `_suppress_config_save` evita escrituras durante la
+        construcción inicial de la ventana.
+
+        IMPORTANTE: aquí solo van las preferencias estables. W, RBW y los
+        rangos de frecuencia NO se persisten porque dependen del archivo
+        cargado (fs y duración). Persistirlos provocaría valores fuera de
+        rango al cambiar a otro trace."""
+        if getattr(self, "_suppress_config_save", True):
+            return
+        cfg = {
+            "window_name":    self.window_name.get(),
+            "y_scale":        self.y_scale.get(),
+            "trace_mode":     self.trace_mode.get(),
+            "avg_n":          int(self.avg_n.get()),
+            "show_harmonics": bool(self.show_harmonics.get()),
+            "n_harmonics":    int(self.n_harmonics.get()),
+            "cursor_enabled": bool(self.cursor_enabled.get()),
+        }
+        self._fft_config = cfg
+        # Guardado silencioso (igual que grid_theme / app_theme): si falla
+        # no molestamos al usuario en mitad de un workflow.
+        save_fft_config(cfg)
+
+    def _reset_fft_config(self):
+        """Restablece la config FFT a sus defaults y la persiste.
+
+        Equivalente a 'olvidar las preferencias guardadas' — útil cuando
+        el usuario ha hecho experimentos raros y quiere volver al estado
+        inicial sin tener que tocar cada control."""
+        # Suprimir save mientras aplicamos los cambios uno a uno
+        self._suppress_config_save = True
+        try:
+            self.window_name.set(FFT_DEFAULT_CONFIG["window_name"])
+            self.y_scale.set(FFT_DEFAULT_CONFIG["y_scale"])
+            self.trace_mode.set(FFT_DEFAULT_CONFIG["trace_mode"])
+            self.avg_n.set(int(FFT_DEFAULT_CONFIG["avg_n"]))
+            self.show_harmonics.set(
+                bool(FFT_DEFAULT_CONFIG["show_harmonics"]))
+            self.n_harmonics.set(int(FFT_DEFAULT_CONFIG["n_harmonics"]))
+            self.cursor_enabled.set(
+                bool(FFT_DEFAULT_CONFIG["cursor_enabled"]))
+            # Aplicar efectos visuales de los cambios
+            self.RBW.set(round(self._compute_rbw(), 6))
+            self._sync_fft_displays()
+            self._reset_trace_buffers(silent=True)
+            # Cerrar cursor si quedó activo
+            self._on_cursor_toggle()
+        finally:
+            self._suppress_config_save = False
+        # Persistir el reset (escribe los defaults a disco)
+        self._save_fft_config()
+        # Refresco final
+        self._recompute()
+
+    def _apply_chrome_maximizable(self, scope):
+        """Variante de _apply_window_chrome para ventanas que necesitan
+        ser maximizables (FFT). transient(root) en Windows inhibe el
+        botón de maximizar, así que NO lo aplicamos aquí. La contrapartida
+        es que la ventana aparece como entrada propia en la taskbar de
+        Windows (en lugar de agruparse con la principal).
+
+        Sí aplicamos icono y withdraw/deiconify para mitigar el flash de
+        ventana en blanco mientras se construye la UI."""
+        try:
+            self.win.withdraw()
+        except Exception:
+            pass
+        try:
+            self.win.iconbitmap(_resource_path("assets/icon.ico"))
+        except Exception:
+            pass
+
+        def _show_when_ready():
+            try:
+                self.win.update_idletasks()
+                self.win.deiconify()
+            except Exception:
+                pass
+        try:
+            self.win.after_idle(_show_when_ready)
+        except Exception:
+            try:
+                self.win.deiconify()
+            except Exception:
+                pass
+
+    # -----------------------------
+    def _build_ui(self):
+        self.win.configure(bg=COLOR_BG)
+
+        # Panel de controles (arriba)
+        ctrl = ttk.Frame(self.win, padding=10)
+        ctrl.pack(side=tk.TOP, fill=tk.X)
+
+        # --- Fila 1: Source, W, RBW, Window, Y scale ---
+        row1 = ttk.Frame(ctrl)
+        row1.pack(fill=tk.X, pady=4)
+
+        ttk.Label(row1, text="Source:").pack(side=tk.LEFT)
+        ch_names = [ch["name"] for ch in self.scope.channels]
+        self.source_combo = ttk.Combobox(
+            row1, textvariable=self.source_var,
+            values=ch_names, state="readonly", width=10,
+        )
+        self.source_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.source_combo.bind("<<ComboboxSelected>>",
+                               lambda e: self._on_source_changed())
+
+        ttk.Label(row1, text="W:").pack(side=tk.LEFT)
+        self.w_spin = ttk.Spinbox(
+            row1, from_=0, to=1e9, increment=1,
+            textvariable=self.W_display, width=12,
+            command=lambda: self._on_W_spin_arrow(),
+        )
+        self.w_spin.pack(side=tk.LEFT, padx=(4, 14))
+        self.w_spin.bind("<Return>",   lambda e: self._on_W_typed())
+        self.w_spin.bind("<FocusOut>", lambda e: self._on_W_typed())
+
+        ttk.Label(row1, text="RBW:").pack(side=tk.LEFT)
+        self.rbw_spin = ttk.Spinbox(
+            row1, from_=0, to=1e12, increment=1,
+            textvariable=self.RBW_display, width=12,
+            command=lambda: self._on_RBW_spin_arrow(),
+        )
+        self.rbw_spin.pack(side=tk.LEFT, padx=(4, 14))
+        self.rbw_spin.bind("<Return>",   lambda e: self._on_RBW_typed())
+        self.rbw_spin.bind("<FocusOut>", lambda e: self._on_RBW_typed())
+
+        ttk.Label(row1, text="Window:").pack(side=tk.LEFT)
+        self.win_combo = ttk.Combobox(
+            row1, textvariable=self.window_name,
+            values=list(FFT_WINDOWS.keys()),
+            state="readonly", width=12,
+        )
+        self.win_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.win_combo.bind("<<ComboboxSelected>>", lambda e: self._on_window_changed())
+
+        ttk.Label(row1, text="Y scale:").pack(side=tk.LEFT)
+        self.yscale_combo = ttk.Combobox(
+            row1, textvariable=self.y_scale,
+            values=FFT_Y_SCALES,
+            state="readonly", width=14,
+        )
+        self.yscale_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.yscale_combo.bind("<<ComboboxSelected>>",
+                               lambda e: self._on_yscale_changed())
+
+        # Botón "Reset configuration" — a la derecha de la fila principal.
+        # Restablece todas las preferencias persistidas a sus defaults
+        # (window, y_scale, trace mode, harmonics, cursor, etc.) y las
+        # vuelve a guardar en disco.
+        self.reset_config_btn = ttk.Button(
+            row1, text="Reset configuration",
+            command=self._reset_fft_config,
+        )
+        self.reset_config_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        Tooltip(self.reset_config_btn,
+                "Reset all FFT preferences to defaults\n"
+                "(window, Y scale, trace mode, harmonics, cursor)\n"
+                "Note: W, RBW and frequency ranges are not persisted —\n"
+                "they depend on the loaded file's sample rate and duration.")
+
+        # --- Fila 2: Start, Stop, Center, Span ---
+        row2 = ttk.Frame(ctrl)
+        row2.pack(fill=tk.X, pady=4)
+
+        ttk.Label(row2, text="Start:").pack(side=tk.LEFT)
+        self.start_spin = ttk.Spinbox(
+            row2, from_=0, to=1e12, increment=10,
+            textvariable=self.f_start_display, width=12,
+            command=lambda: self._on_freq_spin_arrow("start"),
+        )
+        self.start_spin.pack(side=tk.LEFT, padx=(4, 14))
+        self.start_spin.bind("<Return>",   lambda e: self._on_freq_typed("start"))
+        self.start_spin.bind("<FocusOut>", lambda e: self._on_freq_typed("start"))
+
+        ttk.Label(row2, text="Stop:").pack(side=tk.LEFT)
+        self.stop_spin = ttk.Spinbox(
+            row2, from_=0, to=1e12, increment=10,
+            textvariable=self.f_stop_display, width=12,
+            command=lambda: self._on_freq_spin_arrow("stop"),
+        )
+        self.stop_spin.pack(side=tk.LEFT, padx=(4, 14))
+        self.stop_spin.bind("<Return>",   lambda e: self._on_freq_typed("stop"))
+        self.stop_spin.bind("<FocusOut>", lambda e: self._on_freq_typed("stop"))
+
+        ttk.Label(row2, text="Center:").pack(side=tk.LEFT)
+        self.center_spin = ttk.Spinbox(
+            row2, from_=0, to=1e12, increment=10,
+            textvariable=self.f_center_display, width=12,
+            command=lambda: self._on_freq_spin_arrow("center"),
+        )
+        self.center_spin.pack(side=tk.LEFT, padx=(4, 14))
+        self.center_spin.bind("<Return>",   lambda e: self._on_freq_typed("center"))
+        self.center_spin.bind("<FocusOut>", lambda e: self._on_freq_typed("center"))
+
+        ttk.Label(row2, text="Span:").pack(side=tk.LEFT)
+        self.span_spin = ttk.Spinbox(
+            row2, from_=0, to=1e12, increment=10,
+            textvariable=self.f_span_display, width=12,
+            command=lambda: self._on_freq_spin_arrow("span"),
+        )
+        self.span_spin.pack(side=tk.LEFT, padx=(4, 14))
+        self.span_spin.bind("<Return>",   lambda e: self._on_freq_typed("span"))
+        self.span_spin.bind("<FocusOut>", lambda e: self._on_freq_typed("span"))
+
+        # --- Fila 3: botones + cursor ---
+        row3 = ttk.Frame(ctrl)
+        row3.pack(fill=tk.X, pady=(4, 2))
+
+        ttk.Button(row3, text="Recompute", command=self._recompute,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=2)
+        ttk.Button(row3, text="Auto-scale Y", command=self._auto_scale_y).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row3, text="Reset zoom", command=self._reset_zoom).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row3, text="Full span", command=self._full_span).pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(row3, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        ttk.Checkbutton(
+            row3, text="Cursor",
+            variable=self.cursor_enabled,
+            command=self._on_cursor_toggle
+        ).pack(side=tk.LEFT, padx=(4, 4))
+
+        ttk.Button(row3, text="Snap to max", command=self._cursor_snap_to_max).pack(side=tk.LEFT, padx=2)
+
+        self.info_label = tk.Label(
+            row3, text="",
+            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            font=("Consolas", 9)
+        )
+        self.info_label.pack(side=tk.RIGHT, padx=10)
+
+        # --- Fila 4: Trace mode (Live/Avg/Max-hold/Min-hold) + Harmonics + THD ---
+        row4 = ttk.Frame(ctrl)
+        row4.pack(fill=tk.X, pady=(4, 2))
+
+        ttk.Label(row4, text="Trace:").pack(side=tk.LEFT)
+        self.trace_mode_combo = ttk.Combobox(
+            row4, textvariable=self.trace_mode,
+            values=["Live", "Average", "Max-hold", "Min-hold"],
+            state="readonly", width=10,
+        )
+        self.trace_mode_combo.pack(side=tk.LEFT, padx=(4, 8))
+        self.trace_mode_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_trace_mode_changed()
+        )
+        Tooltip(self.trace_mode_combo,
+                "Trace accumulation:\n"
+                "  Live — show every recompute\n"
+                "  Average — RMS average of N spectra (lower noise)\n"
+                "  Max-hold — keep maximum per bin (catches transients)\n"
+                "  Min-hold — keep minimum per bin (reveals constant tones)")
+
+        ttk.Label(row4, text="N avg:").pack(side=tk.LEFT)
+        self.avg_n_combo = ttk.Combobox(
+            row4, textvariable=self.avg_n,
+            values=[2, 4, 8, 16, 32, 64, 128],
+            state="readonly", width=5,
+        )
+        self.avg_n_combo.pack(side=tk.LEFT, padx=(4, 8))
+        self.avg_n_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_avg_n_changed()
+        )
+        Tooltip(self.avg_n_combo,
+                "Number of spectra to average (RMS averaging)\n"
+                "Larger N → less noise but slower response")
+
+        self.reset_trace_btn = ttk.Button(
+            row4, text="Reset trace", command=self._reset_trace_buffers
+        )
+        self.reset_trace_btn.pack(side=tk.LEFT, padx=(0, 14))
+        Tooltip(self.reset_trace_btn,
+                "Clear the averaging / max-hold / min-hold accumulators")
+
+        ttk.Separator(row4, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=4)
+
+        self.harmonics_check = ttk.Checkbutton(
+            row4, text="Show harmonics",
+            variable=self.show_harmonics,
+            command=lambda: self._on_harmonics_toggle()
+        )
+        self.harmonics_check.pack(side=tk.LEFT, padx=(8, 4))
+        Tooltip(self.harmonics_check,
+                "Detect the fundamental (largest peak) and mark its harmonics.\n"
+                "THD is also computed and displayed on the right.")
+
+        ttk.Label(row4, text="N:").pack(side=tk.LEFT)
+        self.n_harm_combo = ttk.Combobox(
+            row4, textvariable=self.n_harmonics,
+            values=[3, 5, 7, 9, 11, 15, 21],
+            state="readonly", width=4,
+        )
+        self.n_harm_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.n_harm_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._on_n_harmonics_changed()
+        )
+        Tooltip(self.n_harm_combo,
+                "How many harmonics to mark (including fundamental).\n"
+                "Standard THD uses 5-9.")
+
+        self.thd_label = tk.Label(
+            row4, text="",
+            fg="#ffcc00", bg=COLOR_BG,
+            font=("Consolas", 10, "bold")
+        )
+        self.thd_label.pack(side=tk.RIGHT, padx=10)
+        Tooltip(self.thd_label,
+                "THD: Total Harmonic Distortion\n"
+                "Computed as sqrt(Σ V_h²) / V_1 across the marked harmonics.\n"
+                "Lower is better (clean sine ≈ -60 dB or 0.1%).")
+
+        # --- Plot ---
+        plot_frame = ttk.Frame(self.win)
+        plot_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Colores del plot según el tema activo (PLOT_BG, PLOT_GRID,
+        # PLOT_TEXT). En vez de hardcodear "black"/"white" leemos del tema.
+        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_bg   = plot_theme["PLOT_BG"]
+        plot_text = plot_theme["PLOT_TEXT"]
+
+        self.fig, self.ax = plt.subplots(figsize=(10, 5))
+        self.fig.patch.set_facecolor(plot_bg)
+        self.ax.set_facecolor(plot_bg)
+
+        # Label del cursor: texto sobre la figura (esquina inferior izquierda)
+        self.cursor_label = self.fig.text(
+            0.02, 0.02,
+            "",
+            ha="left",
+            va="bottom",
+            fontsize=10,
+            color="yellow",
+            family="monospace",
+            bbox=dict(
+                facecolor=plot_bg,
+                edgecolor=COLOR_BORDER,
+                alpha=0.9,
+                boxstyle="round,pad=0.3"
+            )
+        )
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Conectar eventos de ratón para drag vertical
+        self.canvas.mpl_connect("button_press_event",   self._on_mouse_press)
+        self.canvas.mpl_connect("button_release_event", self._on_mouse_release)
+        self.canvas.mpl_connect("motion_notify_event",  self._on_mouse_move)
+
+    # -----------------------------
+    # Lógica de parámetros
+    # -----------------------------
+    def _compute_rbw(self):
+        """RBW = ENBW * fs / N  donde N = W * fs."""
+        W_s = self.W.get() / 1000.0
+        N = max(2, int(round(W_s * self.fs)))
+        enbw = FFT_WINDOWS[self.window_name.get()]["enbw"]
+        return enbw * self.fs / N
+
+    def _compute_W_from_RBW(self):
+        """W (ms) = ENBW / RBW * 1000."""
+        rbw = max(self.RBW.get(), 1e-9)
+        enbw = FFT_WINDOWS[self.window_name.get()]["enbw"]
+        N = enbw * self.fs / rbw
+        W_s = N / self.fs
+        return W_s * 1000.0
+
+    # -----------------------------
+    # Sincronización displays <-> valores numéricos
+    # -----------------------------
+    def _sync_fft_displays(self):
+        """Actualiza todos los StringVar de display desde los numéricos."""
+        self.W_display.set(format_si(self.W.get() / 1000.0, "s"))
+        self.RBW_display.set(format_si(self.RBW.get(), "Hz"))
+        self.f_start_display.set(format_si(self.f_start.get(), "Hz"))
+        self.f_stop_display.set(format_si(self.f_stop.get(), "Hz"))
+        self.f_center_display.set(format_si(self.f_center.get(), "Hz"))
+        self.f_span_display.set(format_si(self.f_span.get(), "Hz"))
+
+    # -----------------------------
+    # Handlers de spinbox: flechas (incrementar/decrementar) + tipear
+    # -----------------------------
+    def _spin_direction(self, display_var, current_value, unit):
+        """Deduce si el spinbox fue pulsado ↑ o ↓ comparando el texto nuevo
+        con el valor numérico actual. Devuelve 'up', 'down' o None."""
+        parsed = parse_si(display_var.get(), unit)
+        if parsed is None:
+            return None
+        if parsed > current_value * 1.0000001:
+            return "up"
+        if parsed < current_value * 0.9999999:
+            return "down"
+        return None
+
+    def _step_value_decade(self, value, direction):
+        """Avanza un valor por los pasos 1-2-5 × 10^n (estilo osciloscopio).
+        Si el valor está fuera de la escalera, se acopla al más cercano primero."""
+        if value <= 0:
+            return max(1e-12, 1.0 if direction == "up" else value / 2)
+        exp = int(np.floor(np.log10(value)))
+        base = 10 ** exp
+        mant = value / base
+        # Elegir siguiente mantisa según dirección
+        ladder = [1, 2, 5, 10]
+        if direction == "up":
+            # Buscar el primer escalón estrictamente mayor
+            for m in ladder:
+                if m > mant * 1.0001:
+                    return m * base
+            return 10 * base  # si ya estaba en 10, sube una década
+        else:
+            for m in reversed(ladder):
+                if m < mant * 0.9999:
+                    return m * base
+            # Estaba en 1, bajar una década al 5
+            return 5 * base / 10
+
+    def _on_W_spin_arrow(self):
+        """↑/↓ del spinbox W. Paso 1-2-5 en segundos sobre W en ms."""
+        current_W_s = self.W.get() / 1000.0
+        direction = self._spin_direction(self.W_display, current_W_s, "s")
+        if direction is None:
+            # Texto inválido: restaurar
+            self.W_display.set(format_si(current_W_s, "s"))
+            return
+        new_W_s = self._step_value_decade(current_W_s, direction)
+        # Limitar al tramo disponible
+        max_W_s = self.time[-1] - self.t_segment_start
+        new_W_s = min(new_W_s, max_W_s)
+        if new_W_s <= 0:
+            new_W_s = current_W_s
+        self.W.set(new_W_s * 1000.0)
+        self.RBW.set(self._compute_rbw())
+        self._sync_fft_displays()
+        self._recompute()
+
+    def _on_W_typed(self):
+        val_s = parse_si(self.W_display.get(), "s")
+        if val_s is None or val_s <= 0:
+            self.W_display.set(format_si(self.W.get() / 1000.0, "s"))
+            return
+        max_W_s = self.time[-1] - self.t_segment_start
+        val_s = min(val_s, max_W_s)
+        self.W.set(val_s * 1000.0)
+        self.RBW.set(self._compute_rbw())
+        self._sync_fft_displays()
+        self._recompute()
+
+    def _on_RBW_spin_arrow(self):
+        current = self.RBW.get()
+        direction = self._spin_direction(self.RBW_display, current, "Hz")
+        if direction is None:
+            self.RBW_display.set(format_si(current, "Hz"))
+            return
+        # Intuición: ↑ pedir MENOS resolución (RBW mayor) NO es lo típico
+        # en un SA. Aquí respetamos la semántica matemática: ↑ = RBW mayor.
+        new_rbw = self._step_value_decade(current, direction)
+        self.RBW.set(new_rbw)
+        # Recalcular W coherente
+        new_W_ms = self._compute_W_from_RBW()
+        max_W_ms = (self.time[-1] - self.t_segment_start) * 1000.0
+        new_W_ms = min(new_W_ms, max_W_ms)
+        self.W.set(new_W_ms)
+        # RBW real tras la limitación
+        self.RBW.set(self._compute_rbw())
+        self._sync_fft_displays()
+        self._recompute()
+
+    def _on_RBW_typed(self):
+        val = parse_si(self.RBW_display.get(), "Hz")
+        if val is None or val <= 0:
+            self.RBW_display.set(format_si(self.RBW.get(), "Hz"))
+            return
+        self.RBW.set(val)
+        new_W_ms = self._compute_W_from_RBW()
+        max_W_ms = (self.time[-1] - self.t_segment_start) * 1000.0
+        new_W_ms = min(new_W_ms, max_W_ms)
+        self.W.set(new_W_ms)
+        self.RBW.set(self._compute_rbw())
+        self._sync_fft_displays()
+        self._recompute()
+
+    def _on_freq_spin_arrow(self, which):
+        """which ∈ {'start','stop','center','span'}."""
+        mapping = {
+            "start":  (self.f_start,  self.f_start_display),
+            "stop":   (self.f_stop,   self.f_stop_display),
+            "center": (self.f_center, self.f_center_display),
+            "span":   (self.f_span,   self.f_span_display),
+        }
+        var, disp = mapping[which]
+        current = var.get()
+        direction = self._spin_direction(disp, current, "Hz")
+        if direction is None:
+            disp.set(format_si(current, "Hz"))
+            return
+        new_val = self._step_value_decade(max(current, 1e-12), direction)
+        if which == "start":
+            new_val = max(0.0, new_val)
+        var.set(new_val)
+
+        # Propagar el cambio a la lógica existente
+        if which in ("start", "stop"):
+            self._on_start_stop_changed()
+        else:
+            self._on_center_span_changed()
+        self._sync_fft_displays()
+
+    def _on_freq_typed(self, which):
+        mapping = {
+            "start":  (self.f_start,  self.f_start_display),
+            "stop":   (self.f_stop,   self.f_stop_display),
+            "center": (self.f_center, self.f_center_display),
+            "span":   (self.f_span,   self.f_span_display),
+        }
+        var, disp = mapping[which]
+        val = parse_si(disp.get(), "Hz")
+        if val is None:
+            disp.set(format_si(var.get(), "Hz"))
+            return
+        if which == "start":
+            val = max(0.0, val)
+        var.set(val)
+        if which in ("start", "stop"):
+            self._on_start_stop_changed()
+        else:
+            self._on_center_span_changed()
+        self._sync_fft_displays()
+
+    def _on_W_changed(self):
+        # Reajustar el RBW para que sea coherente
+        try:
+            self.RBW.set(round(self._compute_rbw(), 6))
+        except Exception:
+            return
+        # Cambia el tamaño de los bins → invalida acumuladores
+        self._reset_trace_buffers(silent=True)
+        self._recompute()
+
+    def _on_RBW_changed(self):
+        # Recalcular W para que coincida con el RBW pedido
+        try:
+            new_W = self._compute_W_from_RBW()
+        except Exception:
+            return
+        # Limitar W al tramo disponible del CSV
+        max_W_ms = (self.time[-1] - self.t_segment_start) * 1000.0
+        new_W = min(new_W, max_W_ms)
+        self.W.set(round(new_W, 6))
+        # Reajustar RBW al valor real que se va a aplicar (puede diferir por la limitación)
+        self.RBW.set(round(self._compute_rbw(), 6))
+        self._sync_fft_displays()
+        self._reset_trace_buffers(silent=True)
+        self._recompute()
+
+    def _on_source_changed(self):
+        """Cambio de canal fuente → recomputa la FFT sobre el nuevo canal."""
+        name = self.source_var.get()
+        for i, ch in enumerate(self.scope.channels):
+            if ch["name"] == name:
+                self.source_idx = i
+                self.voltage = ch["voltage"]
+                break
+        # Canal distinto → acumuladores ya no son válidos
+        self._reset_trace_buffers(silent=True)
+        self._recompute()
+
+    def _on_window_changed(self):
+        # Al cambiar la ventana, RBW cambia aunque W sea el mismo
+        self.RBW.set(round(self._compute_rbw(), 6))
+        self._sync_fft_displays()
+        # Cambia la corrección ENBW → bins no comparables con los previos
+        self._reset_trace_buffers(silent=True)
+        self._save_fft_config()
+        self._recompute()
+
+    # -----------------------------
+    # Lógica de zoom de frecuencia
+    # -----------------------------
+    def _on_start_stop_changed(self):
+        if self._updating_freq:
+            return
+        self._updating_freq = True
+        try:
+            start = max(0.0, self.f_start.get())
+            stop  = max(start + 1e-9, self.f_stop.get())
+            self.f_start.set(start)
+            self.f_stop.set(stop)
+            self.f_center.set((start + stop) / 2.0)
+            self.f_span.set(stop - start)
+        finally:
+            self._updating_freq = False
+        self._apply_zoom()
+
+    def _on_center_span_changed(self):
+        if self._updating_freq:
+            return
+        self._updating_freq = True
+        try:
+            center = max(0.0, self.f_center.get())
+            span   = max(1e-9, self.f_span.get())
+            start = max(0.0, center - span / 2.0)
+            stop  = center + span / 2.0
+            self.f_start.set(start)
+            self.f_stop.set(stop)
+            # Si center era menor que span/2, se ha recortado; ajustamos
+            self.f_center.set((start + stop) / 2.0)
+        finally:
+            self._updating_freq = False
+        self._apply_zoom()
+
+    def _apply_zoom(self):
+        """Aplica el zoom de frecuencia (solo cambia xlim, no recalcula)."""
+        if self.freq is None:
+            return
+        self.ax.set_xlim(self.f_start.get(), self.f_stop.get())
+        self._update_xticks()
+        self.canvas.draw_idle()
+
+    def _reset_zoom(self):
+        # Reset X + Y offset
+        self.y_offset = 0.0
+        self._updating_freq = True
+        self.f_start.set(0.0)
+        self.f_stop.set(self.fs / 2.0)
+        self.f_center.set(self.fs / 4.0)
+        self.f_span.set(self.fs / 2.0)
+        self._updating_freq = False
+        self._sync_fft_displays()
+        self._redraw()
+
+    def _full_span(self):
+        """Mantiene el Y actual, pero vuelve a todo el rango en X."""
+        self._updating_freq = True
+        self.f_start.set(0.0)
+        self.f_stop.set(self.fs / 2.0)
+        self.f_center.set(self.fs / 4.0)
+        self.f_span.set(self.fs / 2.0)
+        self._updating_freq = False
+        self._sync_fft_displays()
+        self._apply_zoom()
+
+    # -----------------------------
+    # Cálculo y dibujo
+    # -----------------------------
+    def _recompute(self):
+        """Extrae el segmento de datos, aplica ventana, calcula FFT en Vrms."""
+        # Longitud en muestras
+        W_s = self.W.get() / 1000.0
+        N = max(2, int(round(W_s * self.fs)))
+
+        # Tomar N muestras empezando en t_segment_start
+        i0 = int(np.searchsorted(self.time, self.t_segment_start))
+        i1 = i0 + N
+        if i1 > len(self.voltage):
+            i1 = len(self.voltage)
+            N = i1 - i0
+            if N < 2:
+                return
+
+        v = self.voltage[i0:i1].astype(float)
+        v = v - np.mean(v)   # quitar DC
+
+        # Aplicar ventana
+        v_win, cg = apply_window(v, self.window_name.get())
+
+        # FFT
+        spectrum = np.fft.rfft(v_win)
+        freq = np.fft.rfftfreq(N, d=self.dt)
+
+        # Magnitud → Vrms, compensando la ganancia coherente de la ventana
+        mag = np.abs(spectrum) * 2.0 / (N * np.sqrt(2)) / cg
+        # Corrección DC y Nyquist
+        mag[0] /= 2.0
+        if N % 2 == 0:
+            mag[-1] /= 2.0
+
+        self.freq = freq
+        self.mag_vrms = mag
+
+        # Actualizar acumuladores para Average / Max-hold / Min-hold.
+        # Si el tamaño no coincide (cambió N, ventana, etc.), reseteamos.
+        self._update_trace_buffers(mag)
+
+        # Si start/stop no se han tocado, poner por defecto todo el rango
+        if self.f_stop.get() > freq[-1]:
+            self._updating_freq = True
+            self.f_stop.set(freq[-1])
+            self.f_span.set(freq[-1] - self.f_start.get())
+            self.f_center.set((self.f_start.get() + self.f_stop.get()) / 2.0)
+            self._updating_freq = False
+
+        self._sync_fft_displays()
+        self._redraw()
+
+    def _update_trace_buffers(self, mag):
+        """Actualiza los acumuladores Avg / Max-hold / Min-hold con el
+        espectro recién calculado `mag` (en Vrms).
+
+        Si el tamaño de mag difiere del previo (cambio de N, RBW, ventana...),
+        los buffers se reinician — no tendría sentido promediar bins distintos.
+        """
+        if self._avg_sum_sq is not None and self._avg_sum_sq.shape != mag.shape:
+            self._reset_trace_buffers(silent=True)
+
+        # Average (RMS): acumular |X|^2, después al usar dividimos por N y sqrt.
+        if self._avg_sum_sq is None:
+            self._avg_sum_sq = mag.astype(np.float64) ** 2
+            self._avg_count = 1
+        else:
+            target_n = max(1, int(self.avg_n.get()))
+            if self._avg_count < target_n:
+                self._avg_sum_sq += mag.astype(np.float64) ** 2
+                self._avg_count += 1
+            else:
+                # Media exponencial ligera para que siga respondiendo si la
+                # señal cambia tras llegar a N. Pongo alpha = 1/N.
+                alpha = 1.0 / target_n
+                self._avg_sum_sq = (1 - alpha) * self._avg_sum_sq + alpha * (mag.astype(np.float64) ** 2) * target_n
+                # OJO: aquí mantengo la "energía" como si fueran N muestras
+                # para que el `/ count` luego dé media razonable.
+
+        # Max-hold
+        if self._max_hold is None:
+            self._max_hold = mag.copy()
+        else:
+            np.maximum(self._max_hold, mag, out=self._max_hold)
+
+        # Min-hold (ignora ceros para no quedar pegado a cero por overflow numérico)
+        if self._min_hold is None:
+            self._min_hold = mag.copy()
+        else:
+            np.minimum(self._min_hold, mag, out=self._min_hold)
+
+    def _reset_trace_buffers(self, silent=False):
+        """Limpia los acumuladores. Se llama:
+        - Al hacer click en "Reset trace".
+        - Automáticamente cuando cambia algo estructural (W, RBW, ventana,
+          canal fuente) que invalida la comparabilidad de los espectros.
+        - Por el menú contextual (botón derecho)."""
+        self._avg_sum_sq = None
+        self._avg_count = 0
+        self._max_hold = None
+        self._min_hold = None
+        if not silent:
+            # Solo redraw si la app está construida (evita problemas en init)
+            if hasattr(self, "canvas"):
+                self._redraw()
+
+    def _on_trace_mode_changed(self):
+        """Llamado al cambiar el combo Trace. Solo redibuja — los buffers
+        siguen llenándose en background."""
+        self._save_fft_config()
+        self._redraw()
+
+    def _on_avg_n_changed(self):
+        """Cambiar N reinicia el acumulador de average (los promedios actuales
+        no son válidos para el nuevo N)."""
+        self._avg_sum_sq = None
+        self._avg_count = 0
+        self._save_fft_config()
+        self._redraw()
+
+    def _on_yscale_changed(self):
+        """Cambia la escala vertical (Linear, dBV, dBm, dBµV) y persiste."""
+        self._save_fft_config()
+        self._redraw()
+
+    def _on_harmonics_toggle(self):
+        """Activa/desactiva el marcado de armónicos y persiste."""
+        self._save_fft_config()
+        self._redraw()
+
+    def _on_n_harmonics_changed(self):
+        """Cambia el número de armónicos a mostrar y persiste."""
+        self._save_fft_config()
+        self._redraw()
+
+    def _get_display_trace(self):
+        """Devuelve el array Vrms que toca dibujar según trace_mode.
+        Cae a Live si el acumulador correspondiente no está listo."""
+        mode = self.trace_mode.get()
+        if mode == "Average" and self._avg_sum_sq is not None and self._avg_count > 0:
+            return np.sqrt(self._avg_sum_sq / self._avg_count)
+        if mode == "Max-hold" and self._max_hold is not None:
+            return self._max_hold
+        if mode == "Min-hold" and self._min_hold is not None:
+            return self._min_hold
+        return self.mag_vrms
+
+    # -----------------------------
+    # Detección de armónicos y THD
+    # -----------------------------
+    def _detect_fundamental(self, freq, mag):
+        """Encuentra el bin de máxima magnitud dentro del rango visible
+        (excluyendo DC). Devuelve (f0, idx) o (None, None).
+
+        Restringimos a la ventana visible para no detectar armónicos como
+        fundamental si el usuario hace zoom alrededor del armónico real.
+        """
+        if freq is None or len(freq) < 3:
+            return None, None
+        f_lo = max(self.f_start.get(), freq[1])  # excluir DC
+        f_hi = self.f_stop.get()
+        if f_hi <= f_lo:
+            return None, None
+        mask = (freq >= f_lo) & (freq <= f_hi)
+        if not np.any(mask):
+            return None, None
+        idxs = np.where(mask)[0]
+        sub = mag[idxs]
+        i_local = int(np.argmax(sub))
+        idx_global = int(idxs[i_local])
+        return float(freq[idx_global]), idx_global
+
+    def _amplitude_at(self, freq, mag, f_target, search_bins=2):
+        """Devuelve la magnitud (Vrms) del pico cerca de f_target. Busca el
+        máximo local en una ventana de ±search_bins alrededor del bin más
+        cercano — robustece frente a leakage / pequeñas desviaciones del
+        múltiplo exacto."""
+        if freq is None or f_target <= 0 or f_target > freq[-1]:
+            return 0.0
+        # Encontrar el bin más cercano
+        idx_center = int(np.argmin(np.abs(freq - f_target)))
+        lo = max(0, idx_center - search_bins)
+        hi = min(len(mag), idx_center + search_bins + 1)
+        if hi <= lo:
+            return 0.0
+        return float(np.max(mag[lo:hi]))
+
+    def _compute_thd(self, freq, mag, f0, n_harmonics):
+        """Calcula THD a partir del fundamental f0 y los siguientes
+        n_harmonics-1 armónicos (2f0, 3f0, ...).
+
+        Devuelve dict {pct, db, amplitudes} con:
+          pct: THD en porcentaje
+          db:  THD en dB (20·log10(THD_ratio))
+          amplitudes: lista [(k, freq_k, vrms_k)] para todos los k=1..N
+
+        Si V_1 ≈ 0 o no hay armónicos válidos, devuelve None en pct/db.
+        """
+        amplitudes = []
+        f_nyquist = freq[-1]
+        for k in range(1, n_harmonics + 1):
+            fk = f0 * k
+            if fk > f_nyquist:
+                break
+            vk = self._amplitude_at(freq, mag, fk)
+            amplitudes.append((k, fk, vk))
+
+        if not amplitudes or amplitudes[0][2] <= 1e-15:
+            return {"pct": None, "db": None, "amplitudes": amplitudes}
+
+        v1 = amplitudes[0][2]
+        sum_sq = sum(v ** 2 for _k, _f, v in amplitudes[1:])
+        if sum_sq <= 0:
+            return {"pct": 0.0, "db": -np.inf, "amplitudes": amplitudes}
+        thd_ratio = np.sqrt(sum_sq) / v1
+        pct = thd_ratio * 100.0
+        db = 20.0 * np.log10(thd_ratio)
+        return {"pct": pct, "db": db, "amplitudes": amplitudes}
+
+    def _draw_harmonics(self, freq, mag_display):
+        """Dibuja líneas verticales y etiquetas para los armónicos detectados.
+
+        Solo dibuja si `show_harmonics` está activo y se ha podido detectar
+        un fundamental. Actualiza self._f0_detected, self._thd_pct, self._thd_db.
+
+        Args:
+            freq: array de frecuencias
+            mag_display: array Vrms del modo de traza visible (para que los
+                         armónicos se midan sobre la traza realmente mostrada,
+                         no sobre el último Live).
+        """
+        # Limpiar artists previos
+        for a in self._harmonic_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._harmonic_artists = []
+        self._f0_detected = None
+        self._thd_pct = None
+        self._thd_db = None
+
+        if not self.show_harmonics.get():
+            self.thd_label.config(text="")
+            return
+
+        f0, idx0 = self._detect_fundamental(freq, mag_display)
+        if f0 is None:
+            self.thd_label.config(text="THD: —")
+            return
+        self._f0_detected = f0
+
+        n_h = max(2, int(self.n_harmonics.get()))
+        thd = self._compute_thd(freq, mag_display, f0, n_h)
+        self._thd_pct = thd["pct"]
+        self._thd_db = thd["db"]
+        amplitudes = thd["amplitudes"]
+
+        # Color de las líneas: contrasta tanto en dark como en light
+        line_color = "#ff9933"
+        text_color = "#ffcc66"
+        # Convertir a unidad de pantalla actual
+        y_unit_func = lambda v_arr: vrms_to_scale(v_arr, self.y_scale.get())
+
+        # Para colocar etiquetas: usar el límite Y actual
+        y_lo, y_hi = self.ax.get_ylim()
+        y_top = y_hi - 0.04 * (y_hi - y_lo)
+
+        for k, fk, vk in amplitudes:
+            if vk <= 1e-15:
+                continue
+            # Línea vertical
+            ln = self.ax.axvline(
+                fk, color=line_color,
+                linestyle=(0, (4, 3)),
+                linewidth=1.0 if k == 1 else 0.7,
+                alpha=0.6 if k > 1 else 0.85,
+                zorder=2,
+            )
+            self._harmonic_artists.append(ln)
+
+            # Etiqueta arriba: "f0" para el primero, "2H", "3H"... para el resto
+            tag = "f₀" if k == 1 else f"{k}H"
+            txt = self.ax.text(
+                fk, y_top, tag,
+                color=text_color,
+                fontsize=8 if k > 1 else 9,
+                fontweight="bold" if k == 1 else "normal",
+                ha="center", va="top",
+                zorder=6,
+                bbox=dict(facecolor="#000000", edgecolor="none",
+                          alpha=0.5, boxstyle="round,pad=0.15"),
+            )
+            self._harmonic_artists.append(txt)
+
+        # THD label arriba a la derecha
+        if self._thd_pct is None:
+            self.thd_label.config(text=f"f₀={format_si(f0, 'Hz')}  THD: —")
+        else:
+            self.thd_label.config(
+                text=f"f₀={format_si(f0, 'Hz')}  "
+                     f"THD: {self._thd_pct:.3f}%  ({self._thd_db:+.1f} dB)"
+            )
+
+    def _redraw(self):
+        """Dibuja la traza con el estilo y escala actuales."""
+        if self.freq is None:
+            return
+
+        self.ax.clear()
+        # ax.clear() elimina los artists → invalidamos las referencias
+        self._cursor_line = None
+        self._cursor_marker = None
+        # Los armónicos también dependen del ax — al limpiarse el ax sus
+        # artists quedan inválidos. Reseteamos la lista (re-poblamos abajo).
+        self._harmonic_artists = []
+
+        # Colores del plot según el tema activo. Se releen en cada redraw
+        # para que un cambio de tema en runtime se refleje al siguiente
+        # repaint del FFT.
+        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_bg   = plot_theme["PLOT_BG"]
+        plot_grid = plot_theme["PLOT_GRID"]
+        plot_text = plot_theme["PLOT_TEXT"]
+
+        self.fig.patch.set_facecolor(plot_bg)
+        self.ax.set_facecolor(plot_bg)
+
+        # Trace: live, average, max-hold, min-hold
+        mag_display = self._get_display_trace()
+        y = vrms_to_scale(mag_display, self.y_scale.get())
+        # Color del canal seleccionado
+        trace_color = "cyan"
+        if 0 <= self.source_idx < len(self.scope.channels):
+            trace_color = self.scope.channels[self.source_idx]["color"]
+        self.ax.plot(self.freq, y, color=trace_color, linewidth=0.9)
+
+        # En Average / Max-hold / Min-hold también superponemos el Live
+        # en gris tenue como referencia (útil para ver dónde "vive" cada bin).
+        if self.trace_mode.get() != "Live":
+            y_live = vrms_to_scale(self.mag_vrms, self.y_scale.get())
+            self.ax.plot(self.freq, y_live, color="#666666",
+                         linewidth=0.6, alpha=0.5, zorder=1)
+
+        self.ax.grid(True, color=plot_grid, linewidth=0.6)
+        for spine in self.ax.spines.values():
+            spine.set_color(COLOR_BORDER)
+        self.ax.tick_params(colors=plot_text)
+
+        self.ax.set_xlabel("Frequency", color=plot_text)
+        self.ax.set_ylabel(scale_unit(self.y_scale.get()), color=plot_text)
+        for lbl in self.ax.get_xticklabels() + self.ax.get_yticklabels():
+            lbl.set_color(plot_text)
+
+        # Rango X
+        self.ax.set_xlim(self.f_start.get(), self.f_stop.get())
+        self._update_xticks()
+
+        # Rango Y: autoscale y luego aplicar offset
+        self._autoscale_y_axis()
+        y_lo, y_hi = self.ax.get_ylim()
+        self.ax.set_ylim(y_lo + self.y_offset, y_hi + self.y_offset)
+
+        # Título informativo
+        mode_tag = ""
+        if self.trace_mode.get() == "Average":
+            mode_tag = f"   [Avg {self._avg_count}/{self.avg_n.get()}]"
+        elif self.trace_mode.get() in ("Max-hold", "Min-hold"):
+            mode_tag = f"   [{self.trace_mode.get()}]"
+        self.info_label.config(
+            text=(
+                f"fs = {format_si(self.fs, 'Hz')}   "
+                f"N = {len(self.mag_vrms)*2 - 2}   "
+                f"ENBW = {FFT_WINDOWS[self.window_name.get()]['enbw']:.4f} bins"
+                f"{mode_tag}"
+            )
+        )
+
+        # Armónicos y THD (sobre el trace mostrado)
+        self._draw_harmonics(self.freq, mag_display)
+
+        # Repintar el cursor si estaba activo
+        if self.cursor_enabled.get() and self.cursor_freq is not None:
+            self._update_cursor_artists()
+
+        self.canvas.draw_idle()
+
+    def _update_xticks(self):
+        """Ticks con unidades SI, calculados sobre el rango visible.
+        Usa valores 'limpios' (1, 2, 5 · 10^n) y ~6 divisiones para no aglomerar."""
+        xlo, xhi = self.ax.get_xlim()
+        span = xhi - xlo
+        if span <= 0:
+            return
+
+        # Paso "nice": potencia de 10 × (1, 2 o 5), apuntando a ~6 divisiones
+        target_divs = 6
+        raw = span / target_divs
+        exp = np.floor(np.log10(raw))
+        base = 10 ** exp
+        frac = raw / base
+        if frac <= 1.5:
+            nice = 1 * base
+        elif frac <= 3.5:
+            nice = 2 * base
+        elif frac <= 7.5:
+            nice = 5 * base
+        else:
+            nice = 10 * base
+
+        start = np.ceil(xlo / nice) * nice
+        xticks = np.arange(start, xhi + nice * 0.5, nice)
+        # Incluir xlo al principio si no está, para que el eje arranque en el valor exacto
+        if len(xticks) == 0 or xticks[0] > xlo + nice * 0.01:
+            xticks = np.concatenate(([xlo], xticks))
+
+        self.ax.set_xticks(xticks)
+        self.ax.set_xticklabels([format_si(x, "Hz") for x in xticks])
+        plot_text = THEMES[CURRENT_THEME_NAME]["PLOT_TEXT"]
+        for lbl in self.ax.get_xticklabels():
+            lbl.set_color(plot_text)
+
+    def _autoscale_y_axis(self):
+        """Autoscale Y en la banda visible."""
+        if self.freq is None:
+            return
+        xlo, xhi = self.f_start.get(), self.f_stop.get()
+        mask = (self.freq >= xlo) & (self.freq <= xhi)
+        if not np.any(mask):
+            return
+        y = vrms_to_scale(self.mag_vrms[mask], self.y_scale.get())
+        y_min, y_max = float(np.min(y)), float(np.max(y))
+        if y_min == y_max:
+            y_min -= 1.0
+            y_max += 1.0
+        margin = (y_max - y_min) * 0.08
+        self.ax.set_ylim(y_min - margin, y_max + margin)
+
+    def _auto_scale_y(self):
+        """Botón explícito: resetea el offset y hace autoscale."""
+        self.y_offset = 0.0
+        self._redraw()
+
+    # -----------------------------
+    # Drag vertical (solo offset) + cursor vertical
+    # -----------------------------
+    def _on_mouse_press(self, event):
+        if event.inaxes != self.ax:
+            return
+
+        # --- Cursor vertical (click izquierdo cuando está activo) ---
+        if self.cursor_enabled.get() and event.button == 1:
+            if event.xdata is None:
+                return
+            # Al hacer click, enganchar al pico local cercano
+            f = self._snap_to_local_peak(event.xdata)
+            self.cursor_freq = f
+            self._cursor_dragging = True
+            self._update_cursor_artists()
+            return
+
+        # --- Botón derecho: menú contextual (cuando cursor NO está activo) ---
+        # Con cursor activo, el derecho sigue siendo el botón de pan vertical
+        # (mantiene la convención previa). Sin cursor, el derecho abre menú
+        # con Save image / Reset trace / ... — patrón estándar.
+        if event.button == 3 and not self.cursor_enabled.get():
+            self._show_context_menu(event)
+            return
+
+        # --- Pan vertical ---
+        # - Si el cursor está activo, pan con botón derecho (3)
+        # - Si no, pan con botón izquierdo (1) como siempre
+        pan_button = 3 if self.cursor_enabled.get() else 1
+        if event.button != pan_button:
+            return
+        self._dragging = True
+        self._drag_start_y = event.ydata
+        self._drag_start_offset = self.y_offset
+
+    def _show_context_menu(self, event):
+        """Menú contextual del plot de la FFT. Acciones: guardar imagen,
+        resetear acumuladores."""
+        menu = tk.Menu(self.win, tearoff=0, bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                       activebackground=COLOR_ACCENT, activeforeground="#000000",
+                       bd=0)
+
+        menu.add_command(label="Save image as PNG…",
+                         command=self._save_image_dialog)
+        menu.add_command(label="Save image as SVG…",
+                         command=lambda: self._save_image_dialog(fmt="svg"))
+        menu.add_separator()
+        menu.add_command(label="Reset trace accumulators",
+                         command=self._reset_trace_buffers,
+                         state="normal" if (
+                             self._avg_sum_sq is not None or
+                             self._max_hold is not None
+                         ) else "disabled")
+        menu.add_separator()
+        menu.add_command(label="Copy peak data to clipboard",
+                         command=self._copy_peak_to_clipboard,
+                         state="normal" if self._f0_detected is not None else "disabled")
+
+        # Posicionar el menú donde está el cursor del ratón
+        try:
+            x_root = self.win.winfo_pointerx()
+            y_root = self.win.winfo_pointery()
+            menu.tk_popup(x_root, y_root)
+        finally:
+            menu.grab_release()
+
+    def _save_image_dialog(self, fmt="png"):
+        """Guarda la imagen actual del plot FFT. fmt: 'png' o 'svg'."""
+        from tkinter import filedialog
+        defext = f".{fmt}"
+        filetypes = [(f"{fmt.upper()} image", f"*{defext}"), ("All files", "*.*")]
+        # Sugerencia de nombre: incluir canal y unidad
+        ch_name = ""
+        if 0 <= self.source_idx < len(self.scope.channels):
+            ch_name = self.scope.channels[self.source_idx]["name"]
+        default = f"fft_{ch_name}_{self.window_name.get()}{defext}"
+        path = filedialog.asksaveasfilename(
+            parent=self.win,
+            title=f"Save FFT image as {fmt.upper()}",
+            defaultextension=defext,
+            initialfile=default,
+            filetypes=filetypes,
+        )
+        if not path:
+            return
+        try:
+            # Mantener el fondo negro al guardar (por defecto matplotlib usa
+            # facecolor del rcparam, no de la fig).
+            self.fig.savefig(path, dpi=150,
+                             facecolor=self.fig.get_facecolor(),
+                             edgecolor="none")
+        except Exception as e:
+            try:
+                self.scope._show_toast(f"Save failed: {e}")
+            except Exception:
+                pass
+            return
+        try:
+            self.scope._show_toast(f"Saved: {path}")
+        except Exception:
+            pass
+
+    def _copy_peak_to_clipboard(self):
+        """Copia al portapapeles la información de la fundamental y armónicos."""
+        if self._f0_detected is None:
+            return
+        lines = [f"FFT peak data — {self.window_name.get()} window"]
+        lines.append(f"Fundamental f0 = {format_si(self._f0_detected, 'Hz')}")
+        if self._thd_pct is not None:
+            lines.append(f"THD = {self._thd_pct:.4f} %  ({self._thd_db:+.2f} dB)")
+        # Las amplitudes están en _draw_harmonics; las recalculo aquí para
+        # asegurar coherencia con lo dibujado.
+        if self.freq is not None:
+            mag_display = self._get_display_trace()
+            thd = self._compute_thd(self.freq, mag_display,
+                                    self._f0_detected,
+                                    max(2, int(self.n_harmonics.get())))
+            # Unit del canal source (v1.29): refleja la unidad seleccionada.
+            try:
+                src_unit = self.scope.channels[self.source_idx].get("unit", DEFAULT_UNIT)
+            except Exception:
+                src_unit = DEFAULT_UNIT
+            lines.append(f"Harmonic    Frequency     {src_unit}rms")
+            for k, fk, vk in thd["amplitudes"]:
+                tag = "f0" if k == 1 else f"{k}H"
+                lines.append(f"  {tag:>3}    {format_si(fk, 'Hz'):>12}    "
+                             f"{format_si(vk, src_unit):>10}")
+        text = "\n".join(lines)
+        try:
+            self.win.clipboard_clear()
+            self.win.clipboard_append(text)
+            self.win.update()  # forzar que el clipboard se mantenga tras cerrar
+            self.scope._show_toast("Peak data copied to clipboard")
+        except Exception:
+            pass
+
+    def _on_mouse_release(self, event):
+        # Si estábamos arrastrando el cursor, al soltar hacemos snap al pico
+        if self._cursor_dragging and self.cursor_freq is not None:
+            self.cursor_freq = self._snap_to_local_peak(self.cursor_freq)
+            self._update_cursor_artists()
+        self._dragging = False
+        self._cursor_dragging = False
+
+    def _on_mouse_move(self, event):
+        if event.inaxes != self.ax:
+            return
+
+        # --- Cursor siendo arrastrado (sin snap, seguimiento libre) ---
+        if self._cursor_dragging and event.xdata is not None:
+            # Durante el drag, seguir al ratón; el snap se aplica solo al soltar
+            self.cursor_freq = max(0.0, event.xdata)
+            self._update_cursor_artists()
+            return
+
+        # --- Pan vertical ---
+        if not self._dragging or event.ydata is None:
+            return
+        dy = event.ydata - self._drag_start_y
+        self.y_offset = self._drag_start_offset - dy
+
+        self._autoscale_y_axis()
+        y_lo, y_hi = self.ax.get_ylim()
+        self.ax.set_ylim(y_lo + self.y_offset, y_hi + self.y_offset)
+        self.canvas.draw_idle()
+
+    # -----------------------------
+    # Cursor vertical: lógica
+    # -----------------------------
+    def _on_cursor_toggle(self):
+        if self.cursor_enabled.get():
+            # Primera activación: colocar en el pico máximo visible
+            if self.cursor_freq is None:
+                self._cursor_snap_to_max()
+            else:
+                self._update_cursor_artists()
+        else:
+            # Desactivar: borrar artists
+            if self._cursor_line is not None:
+                self._cursor_line.remove()
+                self._cursor_line = None
+            if self._cursor_marker is not None:
+                self._cursor_marker.remove()
+                self._cursor_marker = None
+            self.cursor_label.set_text("")
+            self.canvas.draw_idle()
+        # Persistir estado del cursor (on/off) tras el toggle
+        self._save_fft_config()
+
+    def _snap_to_local_peak(self, f_click):
+        """Devuelve la frecuencia del máximo local alrededor de f_click.
+        Busca en una ventana de ±2% del span visible o, como mínimo, varios bins."""
+        if self.freq is None or len(self.freq) < 2:
+            return f_click
+
+        xlo, xhi = self.f_start.get(), self.f_stop.get()
+        span = max(xhi - xlo, self.freq[1] - self.freq[0])
+        df = max(span * 0.02, (self.freq[1] - self.freq[0]) * 5)
+
+        f_lo = max(0.0, f_click - df)
+        f_hi = f_click + df
+        mask = (self.freq >= f_lo) & (self.freq <= f_hi)
+        if not np.any(mask):
+            return f_click
+
+        # Trabajamos en la escala Y seleccionada (así el "pico" coincide con el visual)
+        y_region = vrms_to_scale(self.mag_vrms[mask], self.y_scale.get())
+        freq_region = self.freq[mask]
+        i_max = int(np.argmax(y_region))
+        return float(freq_region[i_max])
+
+    def _cursor_snap_to_max(self):
+        """Salta el cursor al máximo global de la banda visible."""
+        if self.freq is None or self.mag_vrms is None:
+            return
+        xlo, xhi = self.f_start.get(), self.f_stop.get()
+        mask = (self.freq >= xlo) & (self.freq <= xhi)
+        if not np.any(mask):
+            return
+
+        y_region = vrms_to_scale(self.mag_vrms[mask], self.y_scale.get())
+        freq_region = self.freq[mask]
+        i_max = int(np.argmax(y_region))
+        self.cursor_freq = float(freq_region[i_max])
+
+        # Si estaba desactivado, lo activamos para que se vea
+        if not self.cursor_enabled.get():
+            self.cursor_enabled.set(True)
+        self._update_cursor_artists()
+
+    def _cursor_value_at(self, f):
+        """Devuelve (freq_real, vrms, y_scaled) del bin más próximo a f.
+        None si no hay datos o f cae fuera."""
+        if self.freq is None or self.mag_vrms is None or f is None:
+            return None
+        if f < self.freq[0] or f > self.freq[-1]:
+            return None
+        i = int(np.argmin(np.abs(self.freq - f)))
+        f_real = float(self.freq[i])
+        vrms = float(self.mag_vrms[i])
+        y_sc = float(vrms_to_scale(np.array([vrms]), self.y_scale.get())[0])
+        return f_real, vrms, y_sc
+
+    def _update_cursor_artists(self):
+        """Redibuja (o crea) la línea vertical y el marcador del cursor, y actualiza el label."""
+        if not self.cursor_enabled.get() or self.cursor_freq is None:
+            return
+
+        data = self._cursor_value_at(self.cursor_freq)
+        if data is None:
+            return
+        f_real, vrms, y_sc = data
+
+        # Línea vertical
+        if self._cursor_line is None:
+            self._cursor_line = self.ax.axvline(
+                f_real, color="yellow", linestyle=(0, (5, 5)),
+                linewidth=1.0, alpha=0.9
+            )
+        else:
+            self._cursor_line.set_xdata([f_real, f_real])
+
+        # Marcador sobre la traza: X amarilla mediana, line width fino
+        if self._cursor_marker is None:
+            (self._cursor_marker,) = self.ax.plot(
+                [f_real], [y_sc],
+                marker="x", color="yellow",
+                markersize=10, markeredgewidth=1.2
+            )
+        else:
+            self._cursor_marker.set_data([f_real], [y_sc])
+
+        unit = scale_unit(self.y_scale.get())
+        self.cursor_label.set_text(
+            f"f = {format_si(f_real, 'Hz')}    Level = {y_sc:.3f} {unit}    ({format_si(vrms, 'Vrms')})"
+        )
+        self.canvas.draw_idle()
+
+
+# =====================================================
+# Eye Diagram
+# =====================================================
+class EyeDiagramWindow:
+    """Diagrama de ojos: superpone N "slices" de la señal alineados por
+    cruces del threshold para mostrar la apertura del ojo y permitir medir
+    jitter, eye height, eye width, ISI…
+
+    Parámetros expuestos en UI:
+      - Source channel
+      - UI duration (segundos por bit; sugerencia auto)
+      - UIs per view (1, 2, 3 — 2 es el estándar)
+      - Threshold (% entre min y max, o valor absoluto)
+      - Slope (rising / falling / both)
+      - Max traces (límite para no morir con señales de muchos millones de
+        cruces)
+      - Display mode (lines superpuestas / heatmap por densidad)
+
+    Métricas reportadas (cuando hay slices suficientes):
+      - Eye height (V): max bajo − min alto en el centro del UI
+      - Eye width (s): horizontal del ojo a la altura del threshold
+      - Jitter pk-pk (s): anchura del cruce a threshold
+      - High level / Low level (V): top/base por histograma bimodal
+
+    Notas de implementación:
+    - "Cruce" = punto donde la señal pasa por el threshold con la pendiente
+      pedida. Localizamos los cruces y usamos cada uno como t0 de un slice
+      de duración UIs_per_view * UI.
+    - Para mantener el plot fluido con muchos cruces, limitamos a
+      `max_traces` (por defecto 500): tomamos una muestra uniforme.
+    - Los slices se interpolan a una rejilla común de tiempo (relativa al
+      cruce) para que las métricas sobre las trazas alineadas sean baratas.
+
+    Filosofía: no se almacena un Line2D por slice (sería caro). En su lugar,
+    creamos UN solo LineCollection con todos los segmentos — matplotlib lo
+    renderiza mucho más rápido.
+    """
+
+    # Resolución temporal de la rejilla común (puntos por slice). 200 es un
+    # buen compromiso entre fidelidad y velocidad: el ojo se ve bien y las
+    # métricas tienen suficiente granularidad horizontal.
+    SLICE_RESOLUTION = 200
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.time = scope.time
+
+        # Canal de entrada (por defecto, el activo)
+        self.source_idx = scope.active_channel_idx
+        self.voltage = scope.channels[self.source_idx]["voltage"]
+
+        # --- Parámetros (StringVar para ediciones SI) ---
+        # Inicializamos UI con una estimación basada en el período medio
+        # entre cruces por la mediana, si hay actividad.
+        ui_guess = self._guess_ui()
+        self.ui_duration = tk.DoubleVar(value=ui_guess)
+        self.ui_display = tk.StringVar(value=format_si(ui_guess, "s"))
+
+        self.uis_per_view = tk.IntVar(value=2)
+        self.threshold_pct = tk.DoubleVar(value=50.0)   # 0..100
+        self.slope = tk.StringVar(value="both")          # rising | falling | both
+        self.max_traces = tk.IntVar(value=500)
+        self.display_mode = tk.StringVar(value="Lines")  # Lines | Heatmap
+
+        # Sources combo
+        self.source_var = tk.StringVar(
+            value=scope.channels[self.source_idx]["name"]
+        )
+
+        # Resultados computados
+        self.slices = None              # array (n_slices, SLICE_RESOLUTION)
+        self.slice_time = None          # array (SLICE_RESOLUTION,) relativo
+        self.metrics = {}               # dict con eye_height, eye_width, jitter...
+
+        # --- UI ---
+        self.win = tk.Toplevel(scope.root)
+        self.win.withdraw()  # anti-flash
+        self.win.title("Eye diagram")
+        self.win.protocol("WM_DELETE_WINDOW", self.win.destroy)
+        # Geometry PRIMERO (centra), chrome (transient) DESPUÉS (evita fantasma).
+        # Centrado sobre la ventana principal (importante en multimonitor:
+        # _center_dialog usa coords absolutas de root, no la pantalla
+        # primaria). En lugar de geometry("1100x720") fijo.
+        scope._center_dialog(self.win, 1100, 720)
+        # Hereda icono de la ventana raíz y se marca transient para que en
+        # Windows no aparezca como entrada propia en la taskbar.
+        scope._apply_window_chrome(self.win)
+
+        self._build_ui()
+        self._recompute()
+
+    # -----------------------------
+    # Construcción de UI
+    # -----------------------------
+    def _build_ui(self):
+        self.win.configure(bg=COLOR_BG)
+
+        ctrl = ttk.Frame(self.win, padding=10)
+        ctrl.pack(side=tk.TOP, fill=tk.X)
+
+        # Fila 1: Source, UI, UIs/view
+        row1 = ttk.Frame(ctrl)
+        row1.pack(fill=tk.X, pady=4)
+
+        ttk.Label(row1, text="Source:").pack(side=tk.LEFT)
+        ch_names = [ch["name"] for ch in self.scope.channels]
+        self.source_combo = ttk.Combobox(
+            row1, textvariable=self.source_var,
+            values=ch_names, state="readonly", width=10,
+        )
+        self.source_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.source_combo.bind("<<ComboboxSelected>>",
+                               lambda e: self._on_source_changed())
+        Tooltip(self.source_combo, "Channel to analyze")
+
+        ttk.Label(row1, text="UI (bit time):").pack(side=tk.LEFT)
+        self.ui_entry = ttk.Entry(
+            row1, textvariable=self.ui_display, width=12
+        )
+        self.ui_entry.pack(side=tk.LEFT, padx=(4, 0))
+        self.ui_entry.bind("<Return>",   lambda e: self._on_ui_typed())
+        self.ui_entry.bind("<FocusOut>", lambda e: self._on_ui_typed())
+        Tooltip(self.ui_entry,
+                "Unit Interval — duration of one bit.\n"
+                "Edit and press Enter. Examples: '10 us', '1 ms', '125 ns'.")
+
+        # Botones de escala (1-2-5 series) — útil cuando no se sabe la UI
+        # exacta y se quiere "barrer" escalas rápido hasta que el ojo se abra.
+        ui_up = tk.Button(
+            row1, text="⯅",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 8, "bold"),
+            padx=4, pady=0,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=lambda: self._step_ui("up"),
+        )
+        ui_up.pack(side=tk.LEFT, padx=(2, 0))
+        self.scope._add_hover_shadow(ui_up)
+        Tooltip(ui_up, "Increase UI (1-2-5 series)")
+
+        ui_dn = tk.Button(
+            row1, text="⯆",
+            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            activebackground=COLOR_BG_HOVER,
+            bd=1, relief="flat",
+            font=("Segoe UI", 8, "bold"),
+            padx=4, pady=0,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=lambda: self._step_ui("down"),
+        )
+        ui_dn.pack(side=tk.LEFT, padx=(0, 4))
+        self.scope._add_hover_shadow(ui_dn)
+        Tooltip(ui_dn, "Decrease UI (1-2-5 series)")
+
+        self.auto_btn = ttk.Button(row1, text="Auto", command=self._auto_ui)
+        self.auto_btn.pack(side=tk.LEFT, padx=(0, 14))
+        Tooltip(self.auto_btn,
+                "Auto-estimate UI from the average period between threshold "
+                "crossings of the signal")
+
+        ttk.Label(row1, text="UIs/view:").pack(side=tk.LEFT)
+        self.uis_combo = ttk.Combobox(
+            row1, textvariable=self.uis_per_view,
+            values=[1, 2, 3], state="readonly", width=4,
+        )
+        self.uis_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.uis_combo.bind("<<ComboboxSelected>>",
+                            lambda e: self._recompute())
+        Tooltip(self.uis_combo,
+                "How many UIs to show per slice. 2 is the standard\n"
+                "(shows the full bit eye plus a transition either side).")
+
+        # Fila 2: Threshold, Slope, Max traces, Display
+        row2 = ttk.Frame(ctrl)
+        row2.pack(fill=tk.X, pady=4)
+
+        ttk.Label(row2, text="Threshold:").pack(side=tk.LEFT)
+        self.thr_spin = ttk.Spinbox(
+            row2, from_=5, to=95, increment=5,
+            textvariable=self.threshold_pct, width=6,
+            command=lambda: self._recompute(),
+        )
+        self.thr_spin.pack(side=tk.LEFT, padx=(4, 2))
+        ttk.Label(row2, text="%").pack(side=tk.LEFT, padx=(0, 14))
+        self.thr_spin.bind("<Return>",   lambda e: self._recompute())
+        self.thr_spin.bind("<FocusOut>", lambda e: self._recompute())
+        Tooltip(self.thr_spin,
+                "Crossing threshold between low and high levels (in % of swing).\n"
+                "50% is standard for symmetric signals.")
+
+        ttk.Label(row2, text="Slope:").pack(side=tk.LEFT)
+        self.slope_combo = ttk.Combobox(
+            row2, textvariable=self.slope,
+            values=["rising", "falling", "both"],
+            state="readonly", width=8,
+        )
+        self.slope_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.slope_combo.bind("<<ComboboxSelected>>",
+                              lambda e: self._recompute())
+        Tooltip(self.slope_combo,
+                "Which crossings to use as t=0 alignment for each slice.\n"
+                "'both' uses every crossing (most slices).")
+
+        ttk.Label(row2, text="Max traces:").pack(side=tk.LEFT)
+        self.max_combo = ttk.Combobox(
+            row2, textvariable=self.max_traces,
+            values=[100, 250, 500, 1000, 2500, 5000],
+            state="readonly", width=6,
+        )
+        self.max_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.max_combo.bind("<<ComboboxSelected>>",
+                            lambda e: self._recompute())
+        Tooltip(self.max_combo,
+                "Cap on number of slices to overlay. If the signal has more\n"
+                "crossings, a uniform sample is taken.")
+
+        ttk.Label(row2, text="Display:").pack(side=tk.LEFT)
+        self.disp_combo = ttk.Combobox(
+            row2, textvariable=self.display_mode,
+            values=["Lines", "Heatmap"],
+            state="readonly", width=8,
+        )
+        self.disp_combo.pack(side=tk.LEFT, padx=(4, 14))
+        self.disp_combo.bind("<<ComboboxSelected>>",
+                             lambda e: self._redraw())
+        Tooltip(self.disp_combo,
+                "Lines — overlay transparent traces.\n"
+                "Heatmap — 2D density (better with many slices, reveals\n"
+                "rare excursions vs. typical paths).")
+
+        # Fila 3: botones + métricas
+        row3 = ttk.Frame(ctrl)
+        row3.pack(fill=tk.X, pady=(4, 2))
+
+        recompute_btn = ttk.Button(row3, text="Recompute",
+                                   style="Accent.TButton",
+                                   command=self._recompute)
+        recompute_btn.pack(side=tk.LEFT, padx=2)
+        Tooltip(recompute_btn,
+                "Recompute the eye diagram with the current parameters")
+
+        save_btn = ttk.Button(row3, text="Save image…",
+                              command=self._save_image_dialog)
+        save_btn.pack(side=tk.LEFT, padx=2)
+        Tooltip(save_btn, "Save the current eye plot as PNG")
+
+        # Métrics label a la derecha
+        self.metrics_label = tk.Label(
+            row3, text="",
+            fg="#ffcc00", bg=COLOR_BG,
+            font=("Consolas", 10, "bold"),
+            justify="right",
+        )
+        self.metrics_label.pack(side=tk.RIGHT, padx=10)
+
+        # --- Plot ---
+        plot_frame = ttk.Frame(self.win)
+        plot_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Colores del plot según el tema activo. _redraw los relee en cada
+        # pintado para que un cambio de tema en runtime se aplique al ojo.
+        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_bg = plot_theme["PLOT_BG"]
+
+        self.fig, self.ax = plt.subplots(figsize=(10, 5))
+        self.fig.patch.set_facecolor(plot_bg)
+        self.ax.set_facecolor(plot_bg)
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    # -----------------------------
+    # Lógica de eventos
+    # -----------------------------
+    def _on_source_changed(self):
+        name = self.source_var.get()
+        for i, ch in enumerate(self.scope.channels):
+            if ch["name"] == name:
+                self.source_idx = i
+                self.voltage = ch["voltage"]
+                break
+        self._recompute()
+
+    def _on_ui_typed(self):
+        """Parse del campo de UI con sufijos SI."""
+        s = self.ui_display.get().strip()
+        val = parse_si(s, "s")
+        if val is None or val <= 0:
+            # No válido → restaurar display al último válido
+            self.ui_display.set(format_si(self.ui_duration.get(), "s"))
+            return
+        self.ui_duration.set(val)
+        # Re-formatear con unidad SI estándar
+        self.ui_display.set(format_si(val, "s"))
+        self._recompute()
+
+    def _auto_ui(self):
+        """Re-estima UI a partir de los cruces y refresca."""
+        v = self._guess_ui()
+        self.ui_duration.set(v)
+        self.ui_display.set(format_si(v, "s"))
+        self._recompute()
+
+    def _step_ui(self, direction):
+        """Incrementa o decrementa el UI por la serie 1-2-5.
+        Útil para barrer escalas cuando no se sabe el bit_time exacto.
+
+        direction: "up" o "down".
+        """
+        # Serie canónica 1-2-5 con prefijos SI: 1ns, 2ns, 5ns, 10ns, ...
+        SERIES = []
+        for exp in range(-12, 4):  # 1 ps a 10 ks
+            for m in (1, 2, 5):
+                SERIES.append(m * (10 ** exp))
+        cur = float(self.ui_duration.get())
+        # Buscar el step más cercano al actual
+        idx = min(range(len(SERIES)),
+                  key=lambda i: abs(np.log10(SERIES[i]) - np.log10(max(cur, 1e-15))))
+        if direction == "up" and idx + 1 < len(SERIES):
+            new_v = SERIES[idx + 1]
+        elif direction == "down" and idx > 0:
+            new_v = SERIES[idx - 1]
+        else:
+            return
+        self.ui_duration.set(new_v)
+        self.ui_display.set(format_si(new_v, "s"))
+        self._recompute()
+
+    def _guess_ui(self):
+        """Estima la duración de un UI a partir del tiempo entre cruces del
+        threshold con histéresis.
+
+        Estrategias en orden:
+          1) Muestreo estratificado: 3 ventanas (inicio, medio, fin) de hasta
+             50k muestras cada una. Buscamos cruces en todas y usamos la
+             MEDIANA global. Esto es robusto si la señal empieza/termina
+             en reposo o si la actividad está concentrada en el medio.
+          2) Si no hay cruces en una ventana, se busca en otra (no abandonamos
+             como antes).
+          3) Histéresis del 20% del swing — evita contar glitches por ruido
+             como cruces.
+          4) Fallback final: t_total/100 — al menos algo razonable que muestre
+             la traza en un eye en vez del valor fijo 1ms que podía estar
+             muy lejos de la escala real.
+
+        Devuelve un float > 0 siempre.
+        """
+        t = self.time
+        v = self.voltage
+        if v is None or len(v) < 10:
+            return 1e-3
+
+        # Vmin/Vmax sobre TODA la señal (más fiable para threshold global).
+        # Quantiles para no pegarnos a outliers.
+        vmin = float(np.quantile(v, 0.05))
+        vmax = float(np.quantile(v, 0.95))
+        if vmax - vmin < 1e-9:
+            return self._fallback_ui()
+        thr = (vmin + vmax) / 2.0
+        hyst = (vmax - vmin) * 0.20
+
+        # Schmitt trigger sobre 3 ventanas estratificadas
+        n_total = len(v)
+        win_size = min(50_000, n_total)
+        all_cross_t = []
+        offsets_to_try = [0,
+                          max(0, (n_total - win_size) // 2),
+                          max(0, n_total - win_size)]
+        seen_offsets = set()
+        for off in offsets_to_try:
+            if off in seen_offsets:
+                continue
+            seen_offsets.add(off)
+            end = min(off + win_size, n_total)
+            vw = v[off:end]
+            tw = t[off:end]
+            # Schmitt simplificado: estado binario tipo histeresis
+            hi = thr + hyst / 2.0
+            lo = thr - hyst / 2.0
+            state = 1 if vw[0] > thr else 0
+            for i in range(1, len(vw)):
+                new_state = state
+                if state == 0 and vw[i] > hi:
+                    new_state = 1
+                elif state == 1 and vw[i] < lo:
+                    new_state = 0
+                if new_state != state:
+                    # Interpolar cruce
+                    v0, v1 = vw[i-1], vw[i]
+                    if abs(v1 - v0) > 1e-15:
+                        frac = (thr - v0) / (v1 - v0)
+                        tc = tw[i-1] + frac * (tw[i] - tw[i-1])
+                    else:
+                        tc = tw[i]
+                    all_cross_t.append(tc)
+                    state = new_state
+            if len(all_cross_t) >= 20:
+                # Suficientes — no necesitamos seguir
+                break
+
+        if len(all_cross_t) < 4:
+            return self._fallback_ui()
+
+        diffs = np.diff(sorted(all_cross_t))
+        # Filtrar diffs anómalos (mucho más grandes que la mediana — idle gaps)
+        med = float(np.median(diffs))
+        # Considerar solo diffs ≤ 3× mediana → activity-like
+        clean = [d for d in diffs if d <= 3 * med]
+        if clean:
+            med = float(np.median(clean))
+        return max(med, 1e-9)
+
+    def _fallback_ui(self):
+        """UI por defecto cuando no se puede estimar. Usa t_total/100 si está
+        disponible — algo razonable para que el eye se vea aunque sea con
+        slices "grandes". Si no, 1 ms."""
+        if self.time is not None and len(self.time) > 1:
+            dur = float(self.time[-1] - self.time[0])
+            if dur > 0:
+                return dur / 100.0
+        return 1e-3
+
+    # -----------------------------
+    # Cálculo del eye
+    # -----------------------------
+    def _find_crossings(self, thr, slope):
+        """Devuelve un array con los tiempos (interpolados) de los cruces
+        del threshold según slope.
+
+        slope: 'rising', 'falling', 'both'.
+        """
+        v = self.voltage
+        t = self.time
+        if len(v) < 2:
+            return np.array([])
+        diff_sign = np.diff(np.sign(v - thr))
+        if slope == "rising":
+            idx = np.where(diff_sign > 0)[0]
+        elif slope == "falling":
+            idx = np.where(diff_sign < 0)[0]
+        else:
+            idx = np.where(diff_sign != 0)[0]
+        if len(idx) == 0:
+            return np.array([])
+        # Interpolación lineal de los cruces
+        v0 = v[idx]
+        v1 = v[idx + 1]
+        t0 = t[idx]
+        t1 = t[idx + 1]
+        dv = v1 - v0
+        # Evitar div por cero
+        frac = np.where(np.abs(dv) > 1e-15, (thr - v0) / dv, 0.5)
+        return t0 + frac * (t1 - t0)
+
+    def _recompute(self):
+        """Calcula los slices del eye diagram con los parámetros actuales."""
+        if self.voltage is None or len(self.voltage) < 100:
+            self.slices = None
+            self._redraw()
+            return
+
+        ui = float(self.ui_duration.get())
+        n_ui = max(1, int(self.uis_per_view.get()))
+        win_dur = ui * n_ui
+        # Centrar la ventana en t=0 del slice: medio UI antes, medio después
+        # para que la transición caiga en el centro.
+        half = win_dur / 2.0
+
+        # Nivel del threshold
+        vmin = float(np.min(self.voltage))
+        vmax = float(np.max(self.voltage))
+        if vmax - vmin < 1e-12:
+            self.slices = None
+            self._redraw()
+            return
+        thr = vmin + (vmax - vmin) * (float(self.threshold_pct.get()) / 100.0)
+
+        # Cruces
+        crossings = self._find_crossings(thr, self.slope.get())
+        # Filtrar cruces demasiado cerca de los bordes (no cabe el slice)
+        t_first = self.time[0]
+        t_last = self.time[-1]
+        crossings = crossings[
+            (crossings >= t_first + half) & (crossings <= t_last - half)
+        ]
+        if len(crossings) < 2:
+            self.slices = None
+            self.metrics = {"n_slices": len(crossings), "thr": thr,
+                            "vmin": vmin, "vmax": vmax}
+            self._redraw()
+            return
+
+        # Muestreo uniforme si hay demasiados
+        max_n = int(self.max_traces.get())
+        if len(crossings) > max_n:
+            idxs = np.linspace(0, len(crossings) - 1, max_n).astype(int)
+            crossings = crossings[idxs]
+
+        # Rejilla común
+        rel_t = np.linspace(-half, +half, self.SLICE_RESOLUTION)
+
+        # Para cada cruce, interpolar la voltaje en (cruce + rel_t)
+        slices = np.empty((len(crossings), self.SLICE_RESOLUTION),
+                          dtype=np.float64)
+        for i, c in enumerate(crossings):
+            sample_t = c + rel_t
+            # np.interp es vectorizado y rápido; con un solo paso queda en O(N log N)
+            slices[i] = np.interp(sample_t, self.time, self.voltage)
+
+        self.slices = slices
+        self.slice_time = rel_t
+        self._compute_metrics(thr, vmin, vmax)
+        self._redraw()
+
+    def _compute_metrics(self, thr, vmin, vmax):
+        """Calcula las métricas estándar del eye sobre self.slices."""
+        s = self.slices
+        if s is None or len(s) < 2:
+            self.metrics = {}
+            return
+
+        n_slices, n_pts = s.shape
+        rel_t = self.slice_time
+        center_idx = n_pts // 2     # centro del UI (donde idealmente se decide)
+
+        # === Top / Base por histograma bimodal sobre TODAS las muestras
+        # del eye (clásico: dos picos en bajo y alto). Usamos quantiles
+        # 5/95 como aproximación rápida y robusta.
+        all_v = s.ravel()
+        v_low  = float(np.quantile(all_v, 0.10))
+        v_high = float(np.quantile(all_v, 0.90))
+
+        # === Eye height: en el centro del UI, ¿cuán abierto está el ojo?
+        # min de las muestras "altas" − max de las muestras "bajas" en el centro.
+        center_vals = s[:, center_idx]
+        # Clasificar centro por encima/debajo del threshold
+        above = center_vals[center_vals > thr]
+        below = center_vals[center_vals < thr]
+        if len(above) > 0 and len(below) > 0:
+            eye_height = float(np.min(above) - np.max(below))
+        else:
+            eye_height = 0.0
+
+        # === Cruces por threshold por slice → jitter pk-pk
+        # Cada slice está alineado con su cruce principal en rel_t=0. Por
+        # construcción ese cruce no aporta información de jitter (siempre cae
+        # cerca de 0). El jitter REAL aparece en los cruces SIGUIENTES dentro
+        # del slice, que con UIs/view ≥ 2 deberían existir cerca de ±UI.
+        #
+        # Estrategia: para cada slice, buscar el cruce más cercano a +UI
+        # (o -UI). Como UIs/view puede ser 1 (no hay otro cruce visible),
+        # caemos a "no jitter computable" en ese caso.
+        ui = float(self.ui_duration.get())
+        n_ui = int(self.uis_per_view.get())
+        crossings_t = []
+        if n_ui >= 2:
+            # Zona donde miramos: cualquier rel_t alejado >UI/4 del centro
+            far_mask = np.abs(rel_t) > ui * 0.25
+            for i in range(n_slices):
+                diff_sign = np.diff(np.sign(s[i] - thr))
+                idxs = np.where(diff_sign != 0)[0]
+                if len(idxs) == 0:
+                    continue
+                # Filtrar a cruces lejos del centro
+                idxs_far = [j for j in idxs if far_mask[j]]
+                if not idxs_far:
+                    continue
+                # El cruce más cercano a +UI (el "siguiente bit")
+                target = ui  # alternativa: -ui si quisiéramos el previo
+                # Considerar también -UI si solo hay cruces a la izquierda
+                # del centro (depende del patrón de bits)
+                if any(rel_t[j] > 0 for j in idxs_far):
+                    candidates = [j for j in idxs_far if rel_t[j] > 0]
+                    best_idx = candidates[
+                        int(np.argmin(np.abs(rel_t[candidates] - target)))
+                    ]
+                else:
+                    candidates = [j for j in idxs_far if rel_t[j] < 0]
+                    best_idx = candidates[
+                        int(np.argmin(np.abs(rel_t[candidates] - (-target))))
+                    ]
+                v0 = s[i, best_idx]
+                v1 = s[i, best_idx + 1]
+                if abs(v1 - v0) > 1e-15:
+                    frac = (thr - v0) / (v1 - v0)
+                    tc = rel_t[best_idx] + frac * (rel_t[best_idx + 1] - rel_t[best_idx])
+                else:
+                    tc = rel_t[best_idx]
+                # Normalizamos al valor absoluto del cruce-aproximado-en-UI
+                # para que crossings a +UI y -UI se promedien juntos en
+                # términos de desviación respecto al UI ideal.
+                crossings_t.append(abs(tc) - ui)
+        if crossings_t:
+            crossings_t = np.array(crossings_t)
+            jitter_pp = float(np.ptp(crossings_t))
+            jitter_rms = float(np.std(crossings_t))
+        else:
+            jitter_pp = 0.0
+            jitter_rms = 0.0
+
+        # === Eye width: a la altura del threshold, hueco en el eje t entre
+        # el cruce más tarde (rising side) y el cruce más temprano (falling).
+        # Aproximación: para cada slice, encontrar primer y último cruce y
+        # tomar el peor caso.
+        # Más simple y robusto: eye width = UI - jitter_pp (aprox).
+        ui = float(self.ui_duration.get())
+        eye_width = max(0.0, ui - jitter_pp)
+
+        # === SNR aproximado
+        # ruido = std de las muestras altas o bajas alejadas del centro.
+        # Usamos un cuarto-UI a cada lado del centro como zona "estable".
+        stable_idx = int(n_pts * 0.10)
+        if stable_idx >= 1:
+            high_samples = s[:, :stable_idx][s[:, :stable_idx] > thr]
+            low_samples  = s[:, :stable_idx][s[:, :stable_idx] < thr]
+            noise_high = float(np.std(high_samples)) if len(high_samples) > 10 else 0.0
+            noise_low  = float(np.std(low_samples))  if len(low_samples)  > 10 else 0.0
+            noise = (noise_high + noise_low) / 2.0
+            snr = (eye_height / noise) if noise > 1e-12 else float("inf")
+        else:
+            snr = float("inf")
+
+        self.metrics = {
+            "n_slices":    n_slices,
+            "vmin":        vmin,
+            "vmax":        vmax,
+            "thr":         thr,
+            "v_low":       v_low,
+            "v_high":      v_high,
+            "eye_height":  eye_height,
+            "eye_width":   eye_width,
+            "jitter_pp":   jitter_pp,
+            "jitter_rms":  jitter_rms,
+            "snr":         snr,
+        }
+
+    # -----------------------------
+    # Render
+    # -----------------------------
+    def _redraw(self):
+        """Pinta el eye con el modo actual + métricas en el label."""
+        ax = self.ax
+        ax.clear()
+
+        # Colores del plot según el tema activo. Releídos en cada redraw
+        # para que un cambio de tema en runtime se aplique al eye sin
+        # tener que cerrarlo y reabrirlo.
+        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_bg   = plot_theme["PLOT_BG"]
+        plot_grid = plot_theme["PLOT_GRID"]
+        plot_text = plot_theme["PLOT_TEXT"]
+
+        self.fig.patch.set_facecolor(plot_bg)
+        ax.set_facecolor(plot_bg)
+
+        if self.slices is None or len(self.slices) < 2:
+            ax.text(0.5, 0.5,
+                    "No slices computed.\n"
+                    "Try increasing 'Max traces', adjusting UI, or check "
+                    "that the signal actually crosses the threshold.",
+                    color=COLOR_TEXT_DIM, ha="center", va="center",
+                    transform=ax.transAxes, fontsize=11)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            self.metrics_label.config(text="(no slices)")
+            self.canvas.draw_idle()
+            return
+
+        rel_t = self.slice_time
+        s = self.slices
+        n_slices = s.shape[0]
+
+        mode = self.display_mode.get()
+        if mode == "Heatmap":
+            # 2D histogram: cuenta cuántas trazas pasan por cada celda.
+            # Es muy informativo con muchas trazas — el "ojo" se ve más claro.
+            v_lo = self.metrics.get("vmin", float(np.min(s)))
+            v_hi = self.metrics.get("vmax", float(np.max(s)))
+            margin = 0.1 * (v_hi - v_lo + 1e-12)
+            y_edges = np.linspace(v_lo - margin, v_hi + margin, 200)
+            x_edges = np.linspace(rel_t[0], rel_t[-1], len(rel_t))
+
+            # Flatten todo en xs/ys para hist2d
+            xs = np.broadcast_to(rel_t, s.shape).ravel()
+            ys = s.ravel()
+            ax.hist2d(xs, ys, bins=[x_edges, y_edges], cmap="inferno",
+                      cmin=1)
+        else:
+            # Lines: dibujamos con un LineCollection — UNA llamada para todas
+            # las trazas. Esto es órdenes de magnitud más rápido que un
+            # plot() por slice.
+            from matplotlib.collections import LineCollection
+            # segmentos por trazo: lista de N arrays (resolution, 2)
+            segs = []
+            for i in range(n_slices):
+                segs.append(np.column_stack([rel_t, s[i]]))
+            # Color del canal
+            ch_color = "cyan"
+            if 0 <= self.source_idx < len(self.scope.channels):
+                ch_color = self.scope.channels[self.source_idx]["color"]
+            alpha = max(0.03, min(0.25, 8.0 / n_slices))
+            lc = LineCollection(segs, colors=ch_color, linewidths=0.7,
+                                alpha=alpha)
+            ax.add_collection(lc)
+            ax.set_xlim(rel_t[0], rel_t[-1])
+            v_lo = self.metrics.get("vmin", float(np.min(s)))
+            v_hi = self.metrics.get("vmax", float(np.max(s)))
+            margin = 0.1 * (v_hi - v_lo + 1e-12)
+            ax.set_ylim(v_lo - margin, v_hi + margin)
+
+        # Threshold horizontal
+        thr = self.metrics.get("thr")
+        if thr is not None:
+            ax.axhline(thr, color=COLOR_BORDER, linestyle=(0, (4, 3)),
+                       linewidth=0.8, alpha=0.7)
+
+        # Marcadores verticales en límites de UI
+        ui = float(self.ui_duration.get())
+        n_ui = int(self.uis_per_view.get())
+        for k in range(-n_ui // 2, n_ui // 2 + 1):
+            x = k * ui
+            ax.axvline(x, color=COLOR_BORDER, linestyle=":",
+                       linewidth=0.6, alpha=0.6)
+
+        # Estilo
+        ax.grid(True, color=plot_grid, linewidth=0.4, alpha=0.5)
+        for spine in ax.spines.values():
+            spine.set_color(COLOR_BORDER)
+        ax.tick_params(colors=plot_text)
+
+        # Eje X con formato SI (en segundos)
+        xticks = ax.get_xticks()
+        ax.set_xticklabels([format_si(x, "s", sig_figs=3) for x in xticks])
+
+        ax.set_xlabel("Time (relative to crossing)", color=plot_text)
+        ax.set_ylabel("Voltage", color=plot_text)
+        for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+            lbl.set_color(plot_text)
+
+        # Métricas en el label. Unit del canal source (v1.29).
+        try:
+            src_unit = self.scope.channels[self.source_idx].get("unit", DEFAULT_UNIT)
+        except Exception:
+            src_unit = DEFAULT_UNIT
+        m = self.metrics
+        if m and "eye_height" in m:
+            lines = [
+                f"Slices: {m['n_slices']}",
+                f"Eye height: {format_si(m['eye_height'], src_unit)}",
+                f"Eye width:  {format_si(m['eye_width'], 's')}",
+                f"Jitter pp:  {format_si(m['jitter_pp'], 's')}",
+                f"Jitter rms: {format_si(m['jitter_rms'], 's')}",
+                (f"SNR: {m['snr']:.1f}" if np.isfinite(m['snr'])
+                 else "SNR: ∞"),
+                f"Vₕᵢ: {format_si(m['v_high'], src_unit)}   "
+                f"Vₗₒ:  {format_si(m['v_low'], src_unit)}",
+            ]
+            self.metrics_label.config(text="   ".join(lines[:4]) + "\n" +
+                                            "   ".join(lines[4:]))
+        else:
+            self.metrics_label.config(
+                text=f"Slices: {m.get('n_slices', 0)} (need ≥2)")
+
+        self.canvas.draw_idle()
+
+    # -----------------------------
+    # Save image
+    # -----------------------------
+    def _save_image_dialog(self):
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            parent=self.win,
+            title="Save eye diagram",
+            defaultextension=".png",
+            initialfile="eye_diagram.png",
+            filetypes=[("PNG", "*.png"), ("SVG", "*.svg"), ("All", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            self.fig.savefig(path, dpi=150,
+                             facecolor=self.fig.get_facecolor(),
+                             edgecolor="none")
+            self.scope._show_toast(f"Saved: {path}")
+        except Exception as e:
+            self.scope._show_toast(f"Save failed: {e}")
+
+
+# =====================================================
+# Protocol Decoders
+# =====================================================
+# Arquitectura:
+#   - ProtocolDecoder (clase base abstracta): declara interface y helpers.
+#   - Subclases concretas: UartDecoder, I2CDecoder, SPIDecoder, ...
+#   - DECODER_REGISTRY: lista de subclases disponibles. Añadir un decoder
+#     nuevo es crear la subclase y añadirla aquí; no se toca la UI.
+#
+# Cada decode() devuelve una lista de Frame dicts:
+#   {"t_start": float, "t_end": float, "type": str, "value": int|str,
+#    "label": str, "color": str, "error": bool}
+#
+# La UI (DecoderWindow) los muestra como tabla y se los pasa a la app
+# principal para que los pinte bajo la traza correspondiente.
+
+
+def _binarize(time_arr, voltage_arr, threshold=None, hysteresis=0.0):
+    """Convierte una señal analógica en estados binarios (0/1) usando un
+    threshold con histéresis opcional. Devuelve un array uint8 de la misma
+    longitud que voltage_arr.
+
+    Threshold por defecto: punto medio entre los percentiles 10 y 90 de la
+    señal — robusto frente a outliers y ruido transitorio.
+
+    La histéresis reduce los falsos cambios por ruido cerca del threshold.
+    Si hysteresis=0, equivale a un comparador simple.
+    """
+    v = voltage_arr
+    if threshold is None:
+        p_lo = float(np.quantile(v, 0.10))
+        p_hi = float(np.quantile(v, 0.90))
+        threshold = (p_lo + p_hi) / 2.0
+    if hysteresis <= 0:
+        return (v > threshold).astype(np.uint8)
+    # Schmitt trigger software
+    hi = threshold + hysteresis / 2.0
+    lo = threshold - hysteresis / 2.0
+    out = np.empty(len(v), dtype=np.uint8)
+    state = 1 if v[0] > threshold else 0
+    for i, x in enumerate(v):
+        if state == 0 and x > hi:
+            state = 1
+        elif state == 1 and x < lo:
+            state = 0
+        out[i] = state
+    return out
+
+
+def _find_edges(binary_arr, time_arr, kind="any"):
+    """Devuelve los índices donde el binario cambia.
+    kind: 'rising' | 'falling' | 'any'. Los índices apuntan a la POSICIÓN
+    POST-cambio (primer punto del nuevo estado).
+    """
+    diff = np.diff(binary_arr.astype(np.int8))
+    if kind == "rising":
+        idx = np.where(diff > 0)[0] + 1
+    elif kind == "falling":
+        idx = np.where(diff < 0)[0] + 1
+    else:
+        idx = np.where(diff != 0)[0] + 1
+    return idx
+
+
+def _sample_at(binary_arr, time_arr, t_target):
+    """Devuelve el valor binario muestreado en t_target (búsqueda binaria).
+    Si t_target está fuera de rango, devuelve el extremo más cercano."""
+    if t_target <= time_arr[0]:
+        return int(binary_arr[0])
+    if t_target >= time_arr[-1]:
+        return int(binary_arr[-1])
+    i = int(np.searchsorted(time_arr, t_target))
+    if i >= len(binary_arr):
+        i = len(binary_arr) - 1
+    return int(binary_arr[i])
+
+
+class ProtocolDecoder:
+    """Base abstracta para decoders de protocolo.
+
+    Sub-clases definen:
+      - name:              str visible en la UI.
+      - description:       tooltip corto.
+      - channels_needed:   list[str] de roles OBLIGATORIOS.
+      - channels_optional: list[str] de roles OPCIONALES (default []).
+                           Si el usuario no los mapea, el decoder debe
+                           tolerarlo (None llegará en channel_voltages).
+      - default_params():  dict de parámetros configurables.
+      - decode():          lógica de decodificación.
+      - draw_diagram():    (opcional) dibuja un diagrama explicativo del
+                           frame en un tk.Canvas. Devuelve True si dibujó
+                           algo, False si no implementado.
+
+    channels_optional permite, por ejemplo, que SPI funcione con solo MOSI
+    (sniff half-duplex), o que SDIO acepte DAT1-3 sólo si vas a 4-bit.
+    """
+
+    name = "Base"
+    description = ""
+    channels_needed = []          # ["TX"] / ["SDA", "SCL"] / ...
+    channels_optional = []        # roles opcionales — pueden venir como None
+
+    @classmethod
+    def default_params(cls):
+        """Devuelve dict de parámetros por defecto. Cada uno con
+        (label, default, kind, options). kind: 'int', 'float', 'choice', 'bool'."""
+        return {}
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        """Implementación específica. channel_voltages es un dict
+        {role: np.array | None}. Los roles en channels_needed están
+        garantizados como np.array; los de channels_optional pueden ser
+        None si el usuario no los mapeó. Devuelve lista de Frame dicts."""
+        raise NotImplementedError
+
+    # =====================================================
+    # Diagrama explicativo del frame
+    # =====================================================
+    # Cada decoder puede sobreescribir draw_diagram() para pintar una
+    # explicación visual del formato de su trama. Se muestra en la
+    # DecoderWindow y ayuda al usuario a entender qué hace cada bit.
+    #
+    # Convención: las subclases usan los helpers _dgm_* (definidos abajo)
+    # para mantener consistencia visual entre protocolos.
+    #
+    # `theme` es un dict con claves:
+    #   "bg":     color de fondo del canvas
+    #   "fg":     color de texto/líneas principal
+    #   "dim":    color secundario (etiquetas, ejes)
+    #   "accent": color de énfasis (cajas activas)
+    #   "ok":     verde (campos válidos)
+    #   "err":    rojo (campos de error)
+    #   "data":   azul (campos de datos)
+    #   "ctrl":   gris (campos de control)
+    #   "border": color de bordes
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Dibuja el diagrama del frame del protocolo dentro del rectángulo
+        (x, y, x+w, y+h) del canvas. Devuelve True si dibujó algo.
+        Por defecto: no hace nada (el decoder no expone diagrama)."""
+        return False
+
+    # -----------------------------
+    # Helpers de dibujo reutilizables
+    # -----------------------------
+    # Diseñados para que cada decoder no reinvente la rueda y los
+    # diagramas mantengan estilo consistente (estilo R&S: cajas con
+    # etiqueta, marcas verticales discontinuas, flechas bidi).
+    @staticmethod
+    def _dgm_box(canvas, x0, y0, x1, y1, label="", fill="", outline=None,
+                 text_color=None, font=("Segoe UI", 8, "bold")):
+        """Caja rectangular con etiqueta centrada."""
+        canvas.create_rectangle(x0, y0, x1, y1, fill=fill,
+                                outline=outline, width=1)
+        if label:
+            canvas.create_text((x0 + x1) / 2, (y0 + y1) / 2,
+                               text=label, fill=text_color, font=font)
+
+    @staticmethod
+    def _dgm_signal_step(canvas, points, color, width=2):
+        """Pinta una señal digital como línea quebrada. `points` es lista
+        de (x, y). Ideal para dibujar trazas idle→start→bits→stop."""
+        if len(points) < 2:
+            return
+        flat = []
+        for px, py in points:
+            flat.extend([px, py])
+        canvas.create_line(*flat, fill=color, width=width,
+                           capstyle="round", joinstyle="miter")
+
+    @staticmethod
+    def _dgm_label(canvas, x, y, text, color, font=("Segoe UI", 8),
+                   anchor="center"):
+        """Etiqueta de texto."""
+        return canvas.create_text(x, y, text=text, fill=color,
+                                  font=font, anchor=anchor)
+
+    @staticmethod
+    def _dgm_arrow_h(canvas, x0, x1, y, color, label="", text_color=None,
+                     font=("Segoe UI", 7)):
+        """Flecha horizontal bidireccional con etiqueta opcional encima."""
+        canvas.create_line(x0, y, x1, y, fill=color, width=1,
+                           arrow="both", arrowshape=(6, 7, 3))
+        if label:
+            canvas.create_text((x0 + x1) / 2, y - 8,
+                               text=label, fill=text_color or color,
+                               font=font)
+
+    @staticmethod
+    def _dgm_tick(canvas, x, y_top, y_bot, color, label="", text_color=None,
+                  font=("Segoe UI", 7), label_above=True, dash=(2, 2)):
+        """Línea vertical (opcionalmente discontinua) con etiqueta arriba/abajo."""
+        canvas.create_line(x, y_top, x, y_bot, fill=color, width=1, dash=dash)
+        if label:
+            ty = y_top - 6 if label_above else y_bot + 8
+            anchor = "s" if label_above else "n"
+            canvas.create_text(x, ty, text=label, fill=text_color or color,
+                               font=font, anchor=anchor)
+
+    @staticmethod
+    def _dgm_field_row(canvas, x0, y0, fields, h, theme,
+                       font=("Segoe UI", 8, "bold")):
+        """Fila de cajas con etiqueta (estilo R&S CAN/LIN/MIL-1553/ARINC).
+
+        `fields` es una lista de tuplas (label, width_px, color_key) donde
+        color_key es una clave del dict theme (p.ej. 'data', 'ctrl', 'ok',
+        'err', 'accent'). Cada caja tiene contorno coloreado y texto del
+        mismo color centrado dentro. Devuelve la x final (x0 + sum widths).
+        """
+        cursor = x0
+        for label, w, ck in fields:
+            col = theme.get(ck, theme.get("data", "#5fa8ff"))
+            canvas.create_rectangle(cursor, y0, cursor + w, y0 + h,
+                                    fill="", outline=col, width=1.5)
+            canvas.create_text(cursor + w / 2, y0 + h / 2,
+                               text=label, fill=col, font=font)
+            cursor += w
+        return cursor
+
+    @staticmethod
+    def _dgm_rail_label(canvas, x, y_center, label, theme,
+                        font=("Segoe UI", 8, "bold")):
+        """Etiqueta a la izquierda de un raíl (SCL, SDA, CLK, MOSI…).
+
+        Encapsula el patrón típico: texto en color accent, centrado vertical
+        respecto al raíl. Útil para diagramas multi-raíl como I2C/SPI/I2S."""
+        canvas.create_text(x, y_center, text=label,
+                           fill=theme.get("accent", "#4cc2ff"),
+                           font=font, anchor="e")
+
+
+# -----------------------------
+# UART
+# -----------------------------
+class UartDecoder(ProtocolDecoder):
+    """UART async serial.
+
+    Convención: idle = nivel alto, start = bit bajo, N data bits LSB primero,
+    parity opcional, stop bit(s) alto(s).
+    """
+
+    name = "UART / RS-232 / RS-422 / RS-485"
+    description = (
+        "Async serial. A nivel de bits es idéntico para UART TTL, RS-232, "
+        "RS-422 y RS-485 — solo cambia la capa física (niveles y "
+        "diferencial). Captura la señal ya recuperada en lógica TTL.\n"
+        "RS-232 invertido respecto a TTL: marcar 'Inverted' si vienes con "
+        "sonda directa en línea RS-232 (sin transceiver MAX232)."
+    )
+    channels_needed = ["TX"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "standard":  {"label": "Standard",  "default": "UART (TTL)",
+                          "kind": "choice",
+                          "options": ["UART (TTL)", "RS-232", "RS-422",
+                                      "RS-485"]},
+            "baud":      {"label": "Baud rate", "default": 9600,    "kind": "int"},
+            "data_bits": {"label": "Data bits", "default": 8,       "kind": "choice",
+                          "options": [5, 6, 7, 8, 9]},
+            "parity":    {"label": "Parity",    "default": "none",  "kind": "choice",
+                          "options": ["none", "even", "odd"]},
+            "stop_bits": {"label": "Stop bits", "default": 1,       "kind": "choice",
+                          "options": [1, 2]},
+            "msb_first": {"label": "MSB first", "default": False,   "kind": "bool"},
+            "invert":    {"label": "Inverted",  "default": False,   "kind": "bool"},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        v = channel_voltages["TX"]
+        baud = max(1, int(params["baud"]))
+        data_bits = int(params["data_bits"])
+        parity = params["parity"]
+        stop_bits = int(params["stop_bits"])
+        msb_first = bool(params["msb_first"])
+        invert = bool(params["invert"])
+
+        # Histéresis ~10% del swing — robusta frente a ruido cerca del threshold.
+        # Sin esto, una señal ruidosa produce centenares de cruces espurios.
+        p_lo = float(np.quantile(v, 0.10))
+        p_hi = float(np.quantile(v, 0.90))
+        hyst = (p_hi - p_lo) * 0.10
+        b = _binarize(time_arr, v, hysteresis=hyst)
+        if invert:
+            b = (1 - b).astype(np.uint8)
+
+        bit_time = 1.0 / baud
+        frames = []
+
+        # Buscar flancos de bajada (start bits)
+        # Idle high → start bit es flanco descendente
+        falling = _find_edges(b, time_arr, "falling")
+        i = 0
+        while i < len(falling):
+            idx_start = falling[i]
+            t_start = time_arr[idx_start]
+            # Muestrear el start bit en su mitad
+            t_mid_start = t_start + bit_time * 0.5
+            if _sample_at(b, time_arr, t_mid_start) != 0:
+                # Falso start (glitch) — saltar
+                i += 1
+                continue
+
+            # Decodificar data_bits
+            bits = []
+            for k in range(data_bits):
+                t_sample = t_start + bit_time * (1.5 + k)
+                bits.append(_sample_at(b, time_arr, t_sample))
+
+            if msb_first:
+                bits = bits[::-1]
+            # Reconstruir valor (LSB first por defecto)
+            value = 0
+            for k, bit in enumerate(bits):
+                value |= (bit & 1) << k
+
+            t_data_end = t_start + bit_time * (1 + data_bits)
+
+            # Parity
+            parity_ok = True
+            if parity != "none":
+                t_parity = t_start + bit_time * (1.5 + data_bits)
+                p_bit = _sample_at(b, time_arr, t_parity)
+                ones = bin(value).count("1") + p_bit
+                if parity == "even":
+                    parity_ok = (ones % 2 == 0)
+                else:  # odd
+                    parity_ok = (ones % 2 == 1)
+                t_data_end += bit_time
+
+            # Stop bits
+            stop_ok = True
+            for k in range(stop_bits):
+                t_stop_sample = t_data_end + bit_time * (0.5 + k)
+                if _sample_at(b, time_arr, t_stop_sample) != 1:
+                    stop_ok = False
+                    break
+            t_frame_end = t_data_end + bit_time * stop_bits
+
+            # Construir frames legibles
+            frames.append({
+                "t_start": t_start,
+                "t_end":   t_start + bit_time,
+                "type":    "start",
+                "value":   0,
+                "label":   "S",
+                "color":   "#7fdb7f",
+                "error":   False,
+            })
+            frames.append({
+                "t_start": t_start + bit_time,
+                "t_end":   t_data_end,
+                "type":    "data",
+                "value":   value,
+                "label":   cls._format_byte(value),
+                "color":   "#5fa8ff",
+                "error":   False,
+            })
+            if parity != "none":
+                frames.append({
+                    "t_start": t_data_end - bit_time,
+                    "t_end":   t_data_end,
+                    "type":    "parity",
+                    "value":   int(parity_ok),
+                    "label":   "P" if parity_ok else "!P",
+                    "color":   "#cc99ff" if parity_ok else "#ff6b6b",
+                    "error":   not parity_ok,
+                })
+            frames.append({
+                "t_start": t_data_end,
+                "t_end":   t_frame_end,
+                "type":    "stop",
+                "value":   int(stop_ok),
+                "label":   "T" if stop_ok else "!T",
+                "color":   "#888888" if stop_ok else "#ff6b6b",
+                "error":   not stop_ok,
+            })
+
+            # Avanzar tras el frame para no detectar el mismo start
+            # (saltar al siguiente flanco DENTRO del frame; el flanco que
+            # marca el siguiente start, si cae justo al final del stop, debe
+            # quedar disponible). Usamos strict < y un pequeño margen para
+            # tolerar errores de sincronización.
+            cutoff = t_frame_end - bit_time * 0.5
+            while i < len(falling) and time_arr[falling[i]] < cutoff:
+                i += 1
+            # Si el siguiente flanco está muy cerca del t_frame_end (siguiente
+            # start "pegado"), lo mantenemos para la próxima iteración.
+            # Si no avanzamos nada (puntero atascado), forzar avance:
+            if i < len(falling) and time_arr[falling[i]] <= t_start:
+                i += 1
+
+        return frames
+
+    @staticmethod
+    def _format_byte(v):
+        """Formato legible: hex + ASCII si imprimible."""
+        if 0x20 <= v <= 0x7e:
+            return f"0x{v:02X} '{chr(v)}'"
+        return f"0x{v:02X}"
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama UART: idle → start → 8 data bits (LSB..MSB) →
+        stop bit → idle. Estilo R&S."""
+        # Márgenes internos
+        pad_l, pad_r = 50, 20
+        pad_t, pad_b = 30, 30
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        y_hi = y + pad_t              # nivel alto (idle / stop / bit=1)
+        y_lo = y + h - pad_b          # nivel bajo (start / bit=0)
+
+        plot_w = max(50, x1 - x0)
+
+        # Estructura visual: idle | start | 8 datos | stop | idle
+        # Anchos relativos (en "bits"): idle=1.5, start=1, datos=8x1, stop=1.5, idle=1.5
+        # El patrón de bits 1,0,1,0,1,0,1,0 (LSB first) da una onda cuadrada
+        # bonita y fácil de leer; es solo ilustrativo.
+        segments = [
+            ("idle",  1.5, True,  ""),
+            ("start", 1.0, False, "Start"),
+            ("d0",    1.0, True,  "LSB"),
+            ("d1",    1.0, False, ""),
+            ("d2",    1.0, True,  ""),
+            ("d3",    1.0, False, ""),
+            ("d4",    1.0, True,  ""),
+            ("d5",    1.0, False, ""),
+            ("d6",    1.0, True,  ""),
+            ("d7",    1.0, False, "MSB"),
+            ("stop",  1.5, True,  "Stop"),
+            ("idle",  1.5, True,  ""),
+        ]
+        total = sum(s[1] for s in segments)
+        unit = plot_w / total
+
+        # Título arriba a la izquierda
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "UART frame  (idle high)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+
+        # Construir línea de señal
+        pts = []
+        cursor = x0
+        prev_hi = True
+        for name, span, is_high, _label in segments:
+            seg_w = span * unit
+            this_hi = is_high
+            y_here = y_hi if this_hi else y_lo
+            # transición vertical desde el nivel previo
+            if pts:
+                pts.append((cursor, y_hi if prev_hi else y_lo))
+                pts.append((cursor, y_here))
+            else:
+                pts.append((cursor, y_here))
+            pts.append((cursor + seg_w, y_here))
+            cursor += seg_w
+            prev_hi = this_hi
+        cls._dgm_signal_step(canvas, pts, theme["fg"], width=2)
+
+        # Marcas verticales discontinuas + etiquetas
+        cursor = x0
+        for name, span, is_high, label in segments:
+            seg_w = span * unit
+            cx = cursor + seg_w / 2
+            if label:
+                cls._dgm_label(canvas, cx, y_hi - 8, label,
+                               theme["accent"], font=("Segoe UI", 8, "bold"))
+            # Marcas en bordes de campos no-idle
+            if name in ("start", "stop") or name.startswith("d"):
+                canvas.create_line(cursor, y_hi - 18, cursor, y_lo + 6,
+                                   fill=theme["dim"], width=1, dash=(2, 2))
+            cursor += seg_w
+        # Cierre del stop (posición fin del stop = idle+start+8data+stop)
+        stop_end = x0 + (1.5 + 1.0 + 8.0 + 1.5) * unit
+        canvas.create_line(stop_end, y_hi - 18, stop_end, y_lo + 6,
+                           fill=theme["dim"], width=1, dash=(2, 2))
+
+        # Flecha "Frame" abarcando start → stop
+        start_x = x0 + 1.5 * unit
+        cls._dgm_arrow_h(canvas, start_x, stop_end, y_lo + 22,
+                         theme["dim"], label="Frame",
+                         text_color=theme["fg"])
+
+        # Etiquetas de nivel a la izquierda
+        cls._dgm_label(canvas, x + 8, y_hi, "H", theme["dim"], anchor="w")
+        cls._dgm_label(canvas, x + 8, y_lo, "L", theme["dim"], anchor="w")
+
+        return True
+
+
+# -----------------------------
+# I2C
+# -----------------------------
+class I2CDecoder(ProtocolDecoder):
+    """I2C estándar (7-bit address). No soporta 10-bit ni clock stretching
+    extremo, pero los frames "normales" se decodifican correctamente."""
+
+    name = "I2C"
+    description = (
+        "Inter-Integrated Circuit. Bus de 2 hilos (SDA + SCL), half-duplex, "
+        "multi-master, hasta 5 MHz (Ultra Fast). Soporta 7-bit address y "
+        "8-bit (address+R/W combinado)."
+    )
+    channels_needed = ["SDA", "SCL"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "address_format": {"label": "Address fmt",
+                               "default": "7-bit",
+                               "kind": "choice",
+                               "options": ["7-bit", "8-bit (with R/W)"]},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        sda = _binarize(time_arr, channel_voltages["SDA"])
+        scl = _binarize(time_arr, channel_voltages["SCL"])
+
+        # START = SDA cae mientras SCL está alto
+        # STOP  = SDA sube  mientras SCL está alto
+        # Bit data = SDA estable durante flanco de subida de SCL
+        scl_rising = _find_edges(scl, time_arr, "rising")
+        sda_diff = np.diff(sda.astype(np.int8))
+
+        # Detectar STARTs y STOPs
+        starts = []  # indices de start
+        stops = []
+        for i in range(1, len(sda)):
+            if sda_diff[i - 1] == -1 and scl[i] == 1:
+                starts.append(i)
+            elif sda_diff[i - 1] == 1 and scl[i] == 1:
+                stops.append(i)
+
+        frames = []
+        # Para cada START, leer hasta el siguiente STOP (o repeated start)
+        s_set = set(starts)
+        stop_set = set(stops)
+
+        i_start = 0
+        addr_fmt = params.get("address_format", "7-bit")
+
+        while i_start < len(starts):
+            start_idx = starts[i_start]
+            t_start = time_arr[start_idx]
+            # START frame
+            frames.append({
+                "t_start": t_start - 1e-9,  # un nanosegundo de "ancho" visible
+                "t_end":   t_start + 1e-9,
+                "type":    "start",
+                "value":   0,
+                "label":   "S",
+                "color":   "#7fdb7f",
+                "error":   False,
+            })
+
+            # Leer los flancos de subida de SCL que estén después de start_idx
+            # y antes del próximo START o STOP
+            next_stop_idx = next((s for s in stops if s > start_idx),
+                                 len(time_arr))
+            next_start_idx = (starts[i_start + 1]
+                              if i_start + 1 < len(starts)
+                              else len(time_arr))
+            end_idx = min(next_stop_idx, next_start_idx)
+
+            sclr_in_range = [r for r in scl_rising
+                             if start_idx < r < end_idx]
+
+            # Decodificar bytes de 9 bits (8 + ACK)
+            bit_count = 0
+            byte_val = 0
+            byte_start_t = None
+            byte_idx_in_msg = 0  # 0 = address, 1+ = data
+
+            for r in sclr_in_range:
+                bit = int(sda[r])
+                if bit_count == 0:
+                    byte_start_t = time_arr[r]
+                if bit_count < 8:
+                    byte_val = (byte_val << 1) | bit
+                    bit_count += 1
+                else:
+                    # Este es el ACK bit (9º)
+                    ack = bit  # 0 = ACK, 1 = NACK
+                    byte_end_t = time_arr[r]
+                    if byte_idx_in_msg == 0:
+                        # Address byte
+                        if addr_fmt == "7-bit":
+                            addr = byte_val >> 1
+                            rw = byte_val & 1
+                            label = f"Addr 0x{addr:02X} {'R' if rw else 'W'}"
+                            value_str = f"0x{addr:02X}"
+                        else:
+                            label = f"Addr 0x{byte_val:02X}"
+                            value_str = f"0x{byte_val:02X}"
+                        frames.append({
+                            "t_start": byte_start_t,
+                            "t_end":   byte_end_t,
+                            "type":    "address",
+                            "value":   byte_val,
+                            "label":   label,
+                            "color":   "#ffb84d",
+                            "error":   False,
+                        })
+                    else:
+                        # Data byte
+                        frames.append({
+                            "t_start": byte_start_t,
+                            "t_end":   byte_end_t,
+                            "type":    "data",
+                            "value":   byte_val,
+                            "label":   f"0x{byte_val:02X}",
+                            "color":   "#5fa8ff",
+                            "error":   False,
+                        })
+                    # ACK frame
+                    frames.append({
+                        "t_start": byte_end_t,
+                        "t_end":   byte_end_t + (time_arr[r] - byte_start_t) / 9.0
+                                   if r + 1 < len(time_arr) else byte_end_t + 1e-9,
+                        "type":    "ack",
+                        "value":   ack,
+                        "label":   "A" if ack == 0 else "N",
+                        "color":   "#cc99ff" if ack == 0 else "#ff9999",
+                        "error":   False,
+                    })
+                    byte_idx_in_msg += 1
+                    bit_count = 0
+                    byte_val = 0
+
+            # STOP frame si aplica
+            if next_stop_idx < next_start_idx and next_stop_idx < len(time_arr):
+                t_stop = time_arr[next_stop_idx]
+                frames.append({
+                    "t_start": t_stop - 1e-9,
+                    "t_end":   t_stop + 1e-9,
+                    "type":    "stop",
+                    "value":   0,
+                    "label":   "P",
+                    "color":   "#cc4444",
+                    "error":   False,
+                })
+
+            i_start += 1
+
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama I2C: dos raíles (SCL arriba, SDA abajo) con
+        START, 7 bits ADDR, R/W, ACK, 8 bits DATA, ACK, STOP."""
+        pad_l, pad_r = 56, 16
+        pad_t, pad_b = 28, 24
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+
+        # Dos raíles: SCL arriba, SDA abajo. Cada raíl tiene H y L.
+        rail_gap = 6
+        rail_h = (h - pad_t - pad_b - rail_gap) / 2
+        scl_hi = y + pad_t
+        scl_lo = scl_hi + rail_h
+        sda_hi = scl_lo + rail_gap
+        sda_lo = sda_hi + rail_h
+
+        # Título y etiquetas de raíl
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "I²C frame",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+        cls._dgm_rail_label(canvas, x + pad_l - 6, (scl_hi + scl_lo) / 2,
+                            "SCL", theme)
+        cls._dgm_rail_label(canvas, x + pad_l - 6, (sda_hi + sda_lo) / 2,
+                            "SDA", theme)
+
+        # Reparto horizontal: start(0.8) + 8 pulsos addr+rw(8) + ack(1) +
+        #                     8 pulsos data(8) + ack(1) + stop(0.8) = 27.6
+        # Cada "pulso" = 1 unidad. Total ≈ 27.6 unidades.
+        total_units = 0.8 + 8 + 1 + 8 + 1 + 0.8
+        unit = plot_w / total_units
+
+        # ---- SCL: idle alto, pulsos durante ADDR+RW+ACK+DATA+ACK,
+        #      alto durante START y STOP ----
+        scl_pts = [(x0, scl_hi)]
+        cursor = x0
+        # Start: SCL alto
+        cursor += 0.8 * unit
+        scl_pts.append((cursor, scl_hi))
+        # 8 pulsos (7 addr + RW)
+        for _ in range(8):
+            half = 0.5 * unit
+            scl_pts.append((cursor, scl_hi))
+            scl_pts.append((cursor, scl_lo))
+            scl_pts.append((cursor + half, scl_lo))
+            scl_pts.append((cursor + half, scl_hi))
+            scl_pts.append((cursor + unit, scl_hi))
+            cursor += unit
+        # ACK pulse
+        scl_pts.append((cursor, scl_hi))
+        scl_pts.append((cursor, scl_lo))
+        scl_pts.append((cursor + 0.5 * unit, scl_lo))
+        scl_pts.append((cursor + 0.5 * unit, scl_hi))
+        scl_pts.append((cursor + unit, scl_hi))
+        cursor += unit
+        # 8 pulsos data
+        for _ in range(8):
+            scl_pts.append((cursor, scl_hi))
+            scl_pts.append((cursor, scl_lo))
+            scl_pts.append((cursor + 0.5 * unit, scl_lo))
+            scl_pts.append((cursor + 0.5 * unit, scl_hi))
+            scl_pts.append((cursor + unit, scl_hi))
+            cursor += unit
+        # ACK pulse
+        scl_pts.append((cursor, scl_hi))
+        scl_pts.append((cursor, scl_lo))
+        scl_pts.append((cursor + 0.5 * unit, scl_lo))
+        scl_pts.append((cursor + 0.5 * unit, scl_hi))
+        scl_pts.append((cursor + unit, scl_hi))
+        cursor += unit
+        # Stop: alto
+        scl_pts.append((cursor + 0.8 * unit, scl_hi))
+        cls._dgm_signal_step(canvas, scl_pts, theme["fg"], width=1.5)
+
+        # ---- SDA: idle alto, START baja al inicio (con SCL alto),
+        #      luego datos (cambia mientras SCL bajo), STOP sube al final ----
+        # Para legibilidad, marcamos zonas de cambio como una "envolvente"
+        # estilo bus: dos líneas paralelas que se cruzan a media data.
+        sda_pts = [(x0, sda_hi)]
+        cursor = x0
+        # Mantiene alto hasta caer en START (SCL alto): caída a mitad del start
+        cursor += 0.8 * unit
+        sda_pts.append((cursor, sda_hi))
+        sda_pts.append((cursor, sda_lo))
+        # ADDR+RW+ACK+DATA+ACK = 8+1+8+1 = 18 unidades.
+        # Dibujamos una línea zigzag baja simulando datos.
+        for i in range(18):
+            level = sda_lo if (i % 2 == 0) else sda_hi
+            sda_pts.append((cursor + unit, level))
+            cursor += unit
+        # STOP: SDA sube con SCL alto
+        sda_pts.append((cursor, sda_hi))
+        sda_pts.append((cursor + 0.8 * unit, sda_hi))
+        cls._dgm_signal_step(canvas, sda_pts, theme["fg"], width=1.5)
+
+        # ---- Etiquetas de campos ----
+        cursor = x0 + 0.4 * unit
+        cls._dgm_label(canvas, cursor, y + pad_t - 6, "S",
+                       theme["ok"], font=("Segoe UI", 8, "bold"),
+                       anchor="s")
+        cursor = x0 + 0.8 * unit + (8 * unit) / 2
+        cls._dgm_label(canvas, cursor, y + pad_t - 6, "ADDR + R/W",
+                       theme["data"], font=("Segoe UI", 8, "bold"),
+                       anchor="s")
+        cursor = x0 + 0.8 * unit + 8 * unit + 0.5 * unit
+        cls._dgm_label(canvas, cursor, y + pad_t - 6, "A",
+                       theme["accent"], font=("Segoe UI", 8, "bold"),
+                       anchor="s")
+        cursor = x0 + 0.8 * unit + 8 * unit + 1 * unit + (8 * unit) / 2
+        cls._dgm_label(canvas, cursor, y + pad_t - 6, "DATA",
+                       theme["data"], font=("Segoe UI", 8, "bold"),
+                       anchor="s")
+        cursor = x0 + 0.8 * unit + 8 * unit + 1 * unit + 8 * unit + 0.5 * unit
+        cls._dgm_label(canvas, cursor, y + pad_t - 6, "A",
+                       theme["accent"], font=("Segoe UI", 8, "bold"),
+                       anchor="s")
+        cursor = x0 + 0.8 * unit + 8 * unit + 1 * unit + 8 * unit + 1 * unit + 0.4 * unit
+        cls._dgm_label(canvas, cursor, y + pad_t - 6, "P",
+                       theme["err"], font=("Segoe UI", 8, "bold"),
+                       anchor="s")
+
+        return True
+
+
+# -----------------------------
+# SPI
+# -----------------------------
+class SPIDecoder(ProtocolDecoder):
+    """SPI con CPOL y CPHA configurables. Captura MOSI y MISO opcionales,
+    permitiendo sniff de half-duplex (solo MOSI o solo MISO) y modo sin CS
+    (free-running clock; útil cuando sondeas un slave permanente).
+
+    Modo sin CS: si no se mapea canal CS, el decoder usa el parámetro
+    `idle_time_us` para delimitar frames por gaps de inactividad del
+    SCK. Cuando el SCK no tiene flancos durante más que ese umbral, se
+    considera fin del frame y el siguiente flanco arranca uno nuevo.
+    Equivalente al modo "SPI no CS" en R&S."""
+
+    name = "SPI"
+    description = (
+        "Serial Peripheral Interface. Síncrono, full-duplex. Solo SCK es "
+        "obligatorio. MOSI/MISO opcionales (sniff half-duplex). CS opcional: "
+        "si no se asigna, se delimita por idle time del SCK (modo sin CS)."
+    )
+    channels_needed = ["SCK"]
+    channels_optional = ["MOSI", "MISO", "CS"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "cpol":      {"label": "CPOL",      "default": 0,    "kind": "choice",
+                          "options": [0, 1]},
+            "cpha":      {"label": "CPHA",      "default": 0,    "kind": "choice",
+                          "options": [0, 1]},
+            "word_bits": {"label": "Word bits", "default": 8,    "kind": "choice",
+                          "options": [4, 8, 16, 24, 32]},
+            "msb_first": {"label": "MSB first", "default": True, "kind": "bool"},
+            "cs_active": {"label": "CS active", "default": "low","kind": "choice",
+                          "options": ["low", "high"]},
+            # Tiempo de inactividad del SCK para delimitar frames cuando NO
+            # se ha mapeado un canal CS. Si el clock está parado más que
+            # este valor (en µs), se considera que terminó un frame y el
+            # siguiente flanco arranca uno nuevo. Equivalente al "Idle
+            # time" en SPI no CS de R&S.
+            # Ignorado cuando hay CS mapeado.
+            "idle_time_us": {"label": "Idle time (µs, no CS)",
+                             "default": 100.0,
+                             "kind": "float"},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        sck = _binarize(time_arr, channel_voltages["SCK"])
+        # Canales opcionales — puede que el usuario no los haya mapeado.
+        mosi_v = channel_voltages.get("MOSI")
+        miso_v = channel_voltages.get("MISO")
+        cs_v   = channel_voltages.get("CS")
+        mosi = _binarize(time_arr, mosi_v) if mosi_v is not None else None
+        miso = _binarize(time_arr, miso_v) if miso_v is not None else None
+
+        cpol = int(params["cpol"])
+        cpha = int(params["cpha"])
+        word_bits = int(params["word_bits"])
+        msb_first = bool(params["msb_first"])
+        cs_active_low = (params["cs_active"] == "low")
+
+        # En reposo, SCK = cpol. Los datos se capturan en el flanco
+        # "leading" (cpha=0) o "trailing" (cpha=1). Para cpol=0,cpha=0:
+        # capturar en rising edge. Para cpol=0,cpha=1: en falling. Y viceversa.
+        if (cpol == 0 and cpha == 0) or (cpol == 1 and cpha == 1):
+            sample_kind = "rising"
+        else:
+            sample_kind = "falling"
+
+        sample_edges = _find_edges(sck, time_arr, sample_kind)
+
+        # Construir lista de (cs_start, cs_end) — bloques durante los que
+        # debemos decodificar. Tres casos:
+        #
+        # 1) CS mapeado: usar sus flancos activos para delimitar.
+        # 2) Sin CS y con idle_time_us > 0: dividir por gaps del SCK
+        #    mayores que ese umbral (modo R&S "SPI no CS"). Cada gap
+        #    largo entre flancos del clock indica fin de frame.
+        # 3) Sin CS y idle_time_us == 0: un único bloque para toda
+        #    la captura (comportamiento legacy: free-running clock).
+        if cs_v is not None:
+            cs = _binarize(time_arr, cs_v)
+            cs_active_state = 0 if cs_active_low else 1
+            cs_diff = np.diff(cs.astype(np.int8))
+            cs_starts = []
+            cs_ends = []
+            if cs[0] == cs_active_state:
+                cs_starts.append(0)
+            for i, d in enumerate(cs_diff):
+                new = cs[i + 1]
+                if new == cs_active_state and d != 0:
+                    cs_starts.append(i + 1)
+                elif new != cs_active_state and d != 0:
+                    cs_ends.append(i + 1)
+            if cs[-1] == cs_active_state:
+                cs_ends.append(len(cs) - 1)
+            blocks = list(zip(cs_starts, cs_ends))
+        else:
+            idle_time_us = float(params.get("idle_time_us", 100.0))
+            idle_time_s = idle_time_us * 1e-6
+            if idle_time_s > 0 and len(sample_edges) >= 2:
+                # Trocear por gaps largos entre flancos de muestreo del SCK.
+                # Cada gap > idle_time_s separa un frame del siguiente.
+                edge_times = time_arr[sample_edges]
+                gaps = np.diff(edge_times)
+                # Índices (en sample_edges) donde empieza un nuevo frame
+                # (justo después de un gap largo).
+                gap_idx = np.where(gaps > idle_time_s)[0]
+                # Construir bloques en términos de sample_indices (de time_arr)
+                blocks = []
+                start_e = int(sample_edges[0])
+                for gi in gap_idx:
+                    # Fin del bloque actual = último flanco antes del gap
+                    end_e = int(sample_edges[gi])
+                    blocks.append((start_e, end_e))
+                    # Inicio del siguiente bloque = primer flanco después del gap
+                    start_e = int(sample_edges[gi + 1])
+                # Último bloque hasta el final
+                end_e = int(sample_edges[-1])
+                blocks.append((start_e, end_e))
+            else:
+                blocks = [(0, len(time_arr) - 1)]
+
+        frames = []
+        for cs_s, cs_e in blocks:
+            t_cs_start = time_arr[cs_s]
+            t_cs_end = time_arr[cs_e]
+            if cs_v is not None:
+                frames.append({
+                    "t_start": t_cs_start,
+                    "t_end":   t_cs_start + (t_cs_end - t_cs_start) * 0.02,
+                    "type":    "cs_start",
+                    "value":   0,
+                    "label":   "↓CS",
+                    "color":   "#7fdb7f",
+                    "error":   False,
+                })
+
+            # Recoger flancos de muestreo dentro del rango
+            sample_in = [e for e in sample_edges if cs_s < e < cs_e]
+            mosi_word = 0
+            miso_word = 0
+            bit_count = 0
+            word_start_t = None
+            for e in sample_in:
+                if bit_count == 0:
+                    word_start_t = time_arr[e]
+                mbit = int(mosi[e]) if mosi is not None else 0
+                sbit = int(miso[e]) if miso is not None else 0
+                if msb_first:
+                    mosi_word = (mosi_word << 1) | mbit
+                    miso_word = (miso_word << 1) | sbit
+                else:
+                    mosi_word |= mbit << bit_count
+                    miso_word |= sbit << bit_count
+                bit_count += 1
+                if bit_count >= word_bits:
+                    word_end_t = time_arr[e]
+                    hex_w = word_bits // 4 or 1
+                    if mosi is not None:
+                        frames.append({
+                            "t_start": word_start_t,
+                            "t_end":   word_end_t,
+                            "type":    "mosi",
+                            "value":   mosi_word,
+                            "label":   f"M:0x{mosi_word:0{hex_w}X}",
+                            "color":   "#5fa8ff",
+                            "error":   False,
+                        })
+                    if miso is not None:
+                        frames.append({
+                            "t_start": word_start_t,
+                            "t_end":   word_end_t,
+                            "type":    "miso",
+                            "value":   miso_word,
+                            "label":   f"S:0x{miso_word:0{hex_w}X}",
+                            "color":   "#5fcc99",
+                            "error":   False,
+                        })
+                    mosi_word = 0
+                    miso_word = 0
+                    bit_count = 0
+
+            if cs_v is not None:
+                frames.append({
+                    "t_start": t_cs_end - (t_cs_end - t_cs_start) * 0.02,
+                    "t_end":   t_cs_end,
+                    "type":    "cs_end",
+                    "value":   0,
+                    "label":   "↑CS",
+                    "color":   "#cc4444",
+                    "error":   False,
+                })
+
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama SPI: tres raíles (CS, CLK, MOSI). 4 ciclos de reloj
+        ilustrativos. CS activo low. CPOL=0/CPHA=0 ilustrativo."""
+        pad_l, pad_r = 56, 16
+        pad_t, pad_b = 24, 24
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+
+        # Tres raíles
+        rail_gap = 4
+        rail_h = (h - pad_t - pad_b - 2 * rail_gap) / 3
+        cs_hi = y + pad_t
+        cs_lo = cs_hi + rail_h
+        clk_hi = cs_lo + rail_gap
+        clk_lo = clk_hi + rail_h
+        mo_hi = clk_lo + rail_gap
+        mo_lo = mo_hi + rail_h
+
+        # Título
+        cls._dgm_label(canvas, x + 10, y + 8, "SPI frame  (CPOL=0)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+        cls._dgm_rail_label(canvas, x + pad_l - 6,
+                            (cs_hi + cs_lo) / 2, "CS", theme)
+        cls._dgm_rail_label(canvas, x + pad_l - 6,
+                            (clk_hi + clk_lo) / 2, "CLK", theme)
+        cls._dgm_rail_label(canvas, x + pad_l - 6,
+                            (mo_hi + mo_lo) / 2, "MOSI", theme)
+
+        # Reparto: pre-CS (0.5) + 8 ciclos clk (8) + post-CS (0.5) = 9
+        n_clk = 8
+        total = 0.5 + n_clk + 0.5
+        unit = plot_w / total
+
+        # CS: alto, baja, mantenido bajo durante datos, sube al final
+        cs_pts = [
+            (x0, cs_hi),
+            (x0 + 0.5 * unit, cs_hi),
+            (x0 + 0.5 * unit, cs_lo),
+            (x0 + (0.5 + n_clk) * unit, cs_lo),
+            (x0 + (0.5 + n_clk) * unit, cs_hi),
+            (x0 + total * unit, cs_hi),
+        ]
+        cls._dgm_signal_step(canvas, cs_pts, theme["fg"], width=1.5)
+
+        # CLK: idle bajo, n pulsos cuadrados durante CS activo
+        clk_pts = [(x0, clk_lo), (x0 + 0.5 * unit, clk_lo)]
+        cursor = x0 + 0.5 * unit
+        for _ in range(n_clk):
+            clk_pts.append((cursor, clk_lo))
+            clk_pts.append((cursor, clk_hi))
+            clk_pts.append((cursor + 0.5 * unit, clk_hi))
+            clk_pts.append((cursor + 0.5 * unit, clk_lo))
+            clk_pts.append((cursor + unit, clk_lo))
+            cursor += unit
+        clk_pts.append((cursor + 0.5 * unit, clk_lo))
+        cls._dgm_signal_step(canvas, clk_pts, theme["fg"], width=1.5)
+
+        # MOSI: patrón 1,0,1,1,0,1,0,1 (ilustrativo)
+        bits = [1, 0, 1, 1, 0, 1, 0, 1]
+        mo_pts = [(x0, mo_hi), (x0 + 0.5 * unit, mo_hi)]
+        cursor = x0 + 0.5 * unit
+        prev = 1
+        for b in bits:
+            y_here = mo_hi if b else mo_lo
+            mo_pts.append((cursor, mo_hi if prev else mo_lo))
+            mo_pts.append((cursor, y_here))
+            mo_pts.append((cursor + unit, y_here))
+            cursor += unit
+            prev = b
+        cls._dgm_signal_step(canvas, mo_pts, theme["fg"], width=1.5)
+
+        # Etiquetas MSB/LSB
+        cls._dgm_label(canvas, x0 + 0.5 * unit + 0.5 * unit, mo_hi - 6,
+                       "MSB", theme["accent"],
+                       font=("Segoe UI", 8, "bold"), anchor="s")
+        cls._dgm_label(canvas, x0 + 0.5 * unit + (n_clk - 0.5) * unit,
+                       mo_hi - 6, "LSB", theme["accent"],
+                       font=("Segoe UI", 8, "bold"), anchor="s")
+
+        # Flecha "8 clocks"
+        cls._dgm_arrow_h(canvas,
+                         x0 + 0.5 * unit,
+                         x0 + (0.5 + n_clk) * unit,
+                         mo_lo + 14, theme["dim"],
+                         label=f"{n_clk} clocks", text_color=theme["fg"])
+
+        return True
+
+
+# -----------------------------
+# LIN (Local Interconnect Network)
+# -----------------------------
+class LinDecoder(ProtocolDecoder):
+    """LIN bus — single-wire UART con break dominante (>11 bits low),
+    sync field (0x55), PID protected, 1..8 bytes data, checksum.
+
+    LIN clásico: master + slaves en un bus de 12V. La señal lógica que
+    vemos aquí asume que ya viene transceiver-traducida a TTL (idle = alto).
+    """
+
+    name = "LIN"
+    description = (
+        "Local Interconnect Network. UART single-wire con frame estructurado:\n"
+        " 1) BREAK (≥13 bits dominantes / low)\n"
+        " 2) SYNC field = 0x55 para calibrar baud\n"
+        " 3) PID (6 bits ID + 2 parity)\n"
+        " 4) 1..8 data bytes\n"
+        " 5) Checksum (classic = sobre data; enhanced = sobre PID+data).\n"
+        "Soporta versiones LIN 1.x, 2.x, J2602 y Any (auto).\n"
+        "Asume señal recuperada en TTL (idle alto)."
+    )
+    channels_needed = ["LIN"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "baud_preset": {"label": "Baud rate",
+                            "default": "19200",
+                            "kind": "choice",
+                            "options": ["2400", "4800", "9600", "10417",
+                                        "19200", "20000", "38400",
+                                        "57600", "76800", "115200",
+                                        "Custom"]},
+            "baud_custom": {"label": "  Custom baud",
+                            "default": 19200,
+                            "kind": "int"},
+            "checksum":    {"label": "Checksum",   "default": "Auto",
+                            "kind": "choice",
+                            "options": ["Auto", "Classic", "Enhanced"]},
+            "lin_version": {"label": "LIN version", "default": "2.x",
+                            "kind": "choice",
+                            "options": ["1.x", "2.x", "J2602", "Any"]},
+            "invert":      {"label": "Inverted",   "default": False,
+                            "kind": "bool"},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        v = channel_voltages["LIN"]
+        # Resolver baudrate: el combobox manda; si está en Custom, usar el
+        # campo numérico. Si el valor del combo es uno de los presets, lo
+        # parseamos directamente. El parámetro 'baud' legacy se mantiene
+        # como fallback para retrocompatibilidad con sesiones antiguas.
+        preset = params.get("baud_preset", "19200")
+        if preset == "Custom":
+            baud = max(1, int(params.get("baud_custom", 19200)))
+        else:
+            try:
+                baud = max(1, int(preset))
+            except (ValueError, TypeError):
+                # Fallback a 'baud' legacy si alguien pasa params raros
+                baud = max(1, int(params.get("baud", 19200)))
+        checksum_mode = params["checksum"]
+        invert = bool(params["invert"])
+
+        p_lo = float(np.quantile(v, 0.10))
+        p_hi = float(np.quantile(v, 0.90))
+        hyst = (p_hi - p_lo) * 0.10
+        b = _binarize(time_arr, v, hysteresis=hyst)
+        if invert:
+            b = (1 - b).astype(np.uint8)
+
+        bit_time = 1.0 / baud
+        frames = []
+
+        # Detectar BREAK: tramo dominante (low) ≥ 11*bit_time.
+        # Recorremos las regiones low (0) y miramos su duración.
+        # Las regiones low arrancan en flancos de bajada y terminan en
+        # flancos de subida.
+        falling = _find_edges(b, time_arr, "falling")
+        rising = _find_edges(b, time_arr, "rising")
+        if len(falling) == 0:
+            return frames
+
+        # Para cada flanco de bajada, buscar el siguiente flanco de subida
+        # y medir la duración. Si ≥ 11*bit_time → BREAK.
+        n = len(time_arr)
+        for f_idx in falling:
+            # Próximo rising tras este falling
+            r_idx_arr = rising[rising > f_idx]
+            if len(r_idx_arr) == 0:
+                continue
+            r_idx = int(r_idx_arr[0])
+            low_dur = time_arr[r_idx] - time_arr[f_idx]
+            if low_dur < 11.0 * bit_time:
+                continue
+
+            # BREAK detectado
+            t_break_start = time_arr[f_idx]
+            t_break_end = time_arr[r_idx]
+            frames.append({
+                "t_start": t_break_start,
+                "t_end":   t_break_end,
+                "type":    "break",
+                "value":   0,
+                "label":   "BREAK",
+                "color":   "#cc4444",
+                "error":   False,
+            })
+
+            # Sync field empieza después del break. Es un byte 0x55
+            # (alternancia perfecta). Estructura UART: 1 start (0) +
+            # 8 datos + 1 stop. Saltamos el sync (sólo lo marcamos).
+            t_sync_start = t_break_end
+            # El sync arranca con un start bit (low). Buscar la siguiente
+            # caída cerca de t_sync_start. Por seguridad, asumimos que
+            # el rising que cerró el break dejó la línea en idle alto
+            # y el siguiente flanco descendente es el start del sync.
+            next_falling = falling[falling > r_idx]
+            if len(next_falling) == 0:
+                break
+            sync_start_idx = int(next_falling[0])
+            t_sync_start = time_arr[sync_start_idx]
+
+            # ---------- AUTO-CALIBRACIÓN DEL BIT-TIME DESDE EL SYNC ----------
+            # LIN está diseñado para que el slave se auto-calibre con el SYNC
+            # byte (0x55), porque no tiene oscilador preciso. El SYNC tiene
+            # 8 transiciones equiespaciadas a 1*bit_time entre el flanco
+            # descendente del start y el bit 7.
+            #
+            # Patrón temporal del SYNC byte (UART 8N1, LSB first, valor 0x55):
+            #   t=0*bt  : ↓  (start bit empieza, línea pasa de idle a 0)
+            #   t=1*bt  : ↑  (bit 0 = 1)
+            #   t=2*bt  : ↓  (bit 1 = 0)
+            #   t=3*bt  : ↑  (bit 2 = 1)
+            #   t=4*bt  : ↓  (bit 3 = 0)
+            #   t=5*bt  : ↑  (bit 4 = 1)
+            #   t=6*bt  : ↓  (bit 5 = 0)
+            #   t=7*bt  : ↑  (bit 6 = 1)
+            #   t=8*bt  : ↓  (bit 7 = 0)
+            #   t=9*bt  :    (línea ya en 0, pasa a stop=1 al final)
+            #   t=10*bt :    (fin del byte, idle)
+            #
+            # Entonces, del primer flanco (descendente del start) al 9º
+            # flanco (descendente del bit 7) hay EXACTAMENTE 8 bit_times.
+            # Si encontramos los flancos en ese rango y medimos el span,
+            # tenemos el bit_time real con precisión.
+            #
+            # Procedimiento robusto:
+            #   1. Cogemos todos los flancos (rising + falling) en una
+            #      ventana de [t_sync_start, t_sync_start + 12*bt_nominal]
+            #   2. Si encontramos al menos 9 flancos, los primeros 9
+            #      definen 8 bit_times.
+            #   3. bit_time_real = (t_edge[8] - t_edge[0]) / 8
+            #
+            # Si fallan las suposiciones, caemos al bit_time nominal.
+            search_end = t_sync_start + 12.0 * bit_time   # bit_time aquí aún nominal
+            all_edges_idx = np.sort(np.concatenate([falling, rising]))
+            window_mask = ((time_arr[all_edges_idx] >= t_sync_start - bit_time * 0.1) &
+                           (time_arr[all_edges_idx] <= search_end))
+            sync_edges_idx = all_edges_idx[window_mask]
+            bit_time_sync = bit_time   # fallback al nominal
+            sync_calibrated = False
+            if len(sync_edges_idx) >= 9:
+                t_e0 = time_arr[int(sync_edges_idx[0])]
+                t_e8 = time_arr[int(sync_edges_idx[8])]
+                span = t_e8 - t_e0
+                if span > 0:
+                    candidate = span / 8.0
+                    # Sanity check: el bit_time real no debería diferir más
+                    # de ±50% del nominal. Si se desvía mucho, algo raro
+                    # pasa con la señal y mantenemos el nominal.
+                    if 0.5 * bit_time <= candidate <= 2.0 * bit_time:
+                        bit_time_sync = candidate
+                        sync_calibrated = True
+
+            # A partir de aquí, usamos bit_time_sync (calibrado) para todo
+            # este frame. El bit_time nominal se mantiene SOLO para detectar
+            # BREAKs (que ya hicimos arriba).
+            bt = bit_time_sync
+
+            t_sync_end = t_sync_start + 10.0 * bt
+            # Validar lectura de 0x55 con el bit_time ya calibrado.
+            sync_val = cls._read_uart_byte(b, time_arr, t_sync_start, bt)
+            sync_ok = (sync_val == 0x55)
+            measured_baud = (1.0 / bt) if bt > 0 else 0
+            # Construir label de diagnóstico. Mostramos SIEMPRE el baud medido
+            # cuando hubo calibración, sea OK o no — facilita detectar
+            # mismatches entre lo configurado y lo real.
+            if sync_ok:
+                if sync_calibrated:
+                    sync_label = f"SYNC 0x55 @ {measured_baud:.0f} baud"
+                else:
+                    sync_label = "SYNC 0x55"
+            else:
+                got = sync_val if sync_val is not None else 0
+                if sync_calibrated:
+                    sync_label = (f"SYNC! 0x{got:02X} "
+                                  f"(measured @ {measured_baud:.0f} baud, "
+                                  f"expected 0x55)")
+                else:
+                    sync_label = f"SYNC! 0x{got:02X} (no calibration)"
+            frames.append({
+                "t_start": t_sync_start,
+                "t_end":   t_sync_end,
+                "type":    "sync",
+                "value":   sync_val if sync_val is not None else 0,
+                "label":   sync_label,
+                "color":   "#7fdb7f" if sync_ok else "#ff6b6b",
+                "error":   not sync_ok,
+            })
+
+            # PID: siguiente byte UART tras el sync
+            # Buscar el siguiente flanco descendente (start del PID).
+            after_sync = falling[falling > sync_start_idx]
+            # Saltar el flanco del sync mismo: el byte 0x55 tiene flancos
+            # internos. Avanzamos hasta un flanco que esté > t_sync_end.
+            after_sync = after_sync[time_arr[after_sync] > t_sync_end - bt * 0.5]
+            if len(after_sync) == 0:
+                continue
+            pid_start_idx = int(after_sync[0])
+            t_pid_start = time_arr[pid_start_idx]
+            t_pid_end = t_pid_start + 10.0 * bt
+            pid_val = cls._read_uart_byte(b, time_arr, t_pid_start, bt)
+            if pid_val is None:
+                continue
+            pid_id = pid_val & 0x3F
+            # Parity bits: P0 = ID0^ID1^ID2^ID4,  P1 = ~(ID1^ID3^ID4^ID5)
+            id_bits = [(pid_id >> k) & 1 for k in range(6)]
+            p0 = id_bits[0] ^ id_bits[1] ^ id_bits[2] ^ id_bits[4]
+            p1 = 1 ^ (id_bits[1] ^ id_bits[3] ^ id_bits[4] ^ id_bits[5])
+            expected_pid = pid_id | (p0 << 6) | (p1 << 7)
+            pid_ok = (pid_val == expected_pid)
+            # Longitud según ID (LIN 1.x): ID 0..31 → 2 bytes, 32..47 → 4,
+            # 48..63 → 8. En LIN 2.x el length es libre (lo determina la
+            # tabla de scheduling). Sin tabla, estimamos por convención.
+            # J2602 y "Any" se tratan como 2.x para la estimación de longitud.
+            if params["lin_version"] == "1.x":
+                if pid_id < 32:
+                    dlen = 2
+                elif pid_id < 48:
+                    dlen = 4
+                else:
+                    dlen = 8
+            else:
+                # En 2.x/J2602/Any asumimos 8 (peor caso). El detector de
+                # break cortará si llega antes uno nuevo.
+                dlen = 8
+
+            frames.append({
+                "t_start": t_pid_start,
+                "t_end":   t_pid_end,
+                "type":    "pid",
+                "value":   pid_val,
+                "label":   f"PID 0x{pid_val:02X} (ID {pid_id})"
+                            + ("" if pid_ok else " !PAR"),
+                "color":   "#ffb84d" if pid_ok else "#ff6b6b",
+                "error":   not pid_ok,
+            })
+
+            # Leer bytes de respuesta. La spec LIN tiene dos modos:
+            #
+            #   LIN 1.x: la longitud de payload se deriva del ID
+            #            (ID 0..31 → 2 bytes, 32..47 → 4, 48..63 → 8).
+            #            El último byte siempre es el checksum.
+            #
+            #   LIN 2.x: la longitud la determina la tabla de schedule
+            #            del master, que no tenemos. Solución: leer bytes
+            #            hasta que el gap idle indique fin de frame, y el
+            #            ÚLTIMO byte leído se interpreta como checksum.
+            #
+            # Umbrales de gap (en bit_times):
+            #   - PID → primer byte:   hasta 40 bt (response space del slave)
+            #   - Entre bytes:         hasta 40 bt (inter-byte space puede ser
+            #                          relevante si el slave es lento)
+            #
+            # Estrategia unificada:
+            #   1. Leemos hasta `max_read` bytes (9 = 8 data máx + 1 checksum).
+            #   2. Si el gap antes del siguiente byte excede el umbral, paramos.
+            #   3. El último byte leído es el checksum. Los previos son datos.
+            #   4. En LIN 1.x usamos el dlen calculado del ID como pista para
+            #      detectar inconsistencias si la longitud no encaja.
+            max_read = 9
+            max_gap_first  = 40.0 * bt
+            max_gap_between = 40.0 * bt
+            read_bytes = []          # lista de (t_start, t_end, value)
+            t_cursor = t_pid_end
+            for k in range(max_read):
+                next_f = falling[time_arr[falling] > t_cursor - bt * 0.2]
+                if len(next_f) == 0:
+                    break
+                byte_start_idx = int(next_f[0])
+                t_byte_start = time_arr[byte_start_idx]
+                max_gap = max_gap_first if k == 0 else max_gap_between
+                if t_byte_start - t_cursor > max_gap:
+                    break
+                # Si lo que viene a continuación es un BREAK (pulso bajo
+                # ≥ 11 bit_times), no es un byte de respuesta sino el
+                # inicio del siguiente frame LIN. Paramos aquí.
+                rs_after = rising[rising > byte_start_idx]
+                if len(rs_after) > 0:
+                    ri_after = int(rs_after[0])
+                    low_dur = time_arr[ri_after] - t_byte_start
+                    if low_dur >= 11.0 * bt:
+                        break
+                val = cls._read_uart_byte(b, time_arr, t_byte_start, bt)
+                if val is None:
+                    break
+                t_byte_end = t_byte_start + 10.0 * bt
+                read_bytes.append((t_byte_start, t_byte_end, val))
+                t_cursor = t_byte_end
+
+            if len(read_bytes) < 2:
+                # Frame demasiado corto para tener data + checksum.
+                continue
+
+            # El último byte es el checksum, los previos son datos.
+            data_bytes = [bv for (_, _, bv) in read_bytes[:-1]]
+            cs_t_start, cs_t_end, cs_val = read_bytes[-1]
+
+            # Emitir frames de datos
+            for k, (ts, te, val) in enumerate(read_bytes[:-1]):
+                frames.append({
+                    "t_start": ts,
+                    "t_end":   te,
+                    "type":    "data",
+                    "value":   val,
+                    "label":   f"D{k} 0x{val:02X}",
+                    "color":   "#5fa8ff",
+                    "error":   False,
+                })
+
+            # Calcular checksum esperado.
+            #
+            # Reglas de la spec:
+            #   - LIN 1.x      → Classic   (sólo data bytes)
+            #   - LIN 2.x      → Enhanced  (PID + data), excepto IDs
+            #                    reservados 0x3C/0x3D que siempre Classic
+            #   - J2602        → Enhanced (incluso para diagnóstico, según
+            #                    SAE J2602; aquí mantenemos la regla
+            #                    estricta de excluir PID en 0x3C/0x3D
+            #                    por compatibilidad práctica)
+            #   - Any          → probar ambos. Si alguno coincide, OK.
+            #
+            # Parámetro `checksum`:
+            #   - "Auto"     → respeta la versión (recomendado).
+            #   - "Classic"  → fuerza classic (override manual).
+            #   - "Enhanced" → fuerza enhanced (override manual).
+            cs_mode_param = checksum_mode
+            lin_ver = params.get("lin_version", "2.x")
+
+            def _calc_cs(use_enhanced):
+                acc = pid_val if use_enhanced else 0
+                for d in data_bytes:
+                    acc += d
+                    if acc > 0xFF:
+                        acc = (acc & 0xFF) + 1   # add with carry
+                return (~acc) & 0xFF
+
+            # Determinar qué modos probar
+            if cs_mode_param == "Classic":
+                modes_to_try = [("Classic", False)]
+            elif cs_mode_param == "Enhanced":
+                modes_to_try = [("Enhanced", True)]
+            else:  # Auto
+                # Si el ID es reservado, siempre Classic
+                if pid_id in (0x3C, 0x3D):
+                    modes_to_try = [("Classic", False)]
+                elif lin_ver == "1.x":
+                    modes_to_try = [("Classic", False)]
+                elif lin_ver in ("2.x", "J2602"):
+                    modes_to_try = [("Enhanced", True)]
+                else:  # "Any"
+                    modes_to_try = [("Enhanced", True), ("Classic", False)]
+
+            # Probar y elegir el primero que coincida; si ninguno, usar el
+            # primero como referencia para el mensaje de error.
+            matched = None
+            for name, use_enh in modes_to_try:
+                expected = _calc_cs(use_enh)
+                if cs_val == expected:
+                    matched = (name, expected)
+                    break
+            if matched is not None:
+                cs_ok = True
+                cs_label_suffix = (f" [{matched[0]}]"
+                                   if len(modes_to_try) > 1 else "")
+                expected_cs = matched[1]
+            else:
+                cs_ok = False
+                # Mostrar el esperado del primer modo intentado
+                _, use_enh_first = modes_to_try[0]
+                expected_cs = _calc_cs(use_enh_first)
+                cs_label_suffix = ""
+
+            frames.append({
+                "t_start": cs_t_start,
+                "t_end":   cs_t_end,
+                "type":    "checksum",
+                "value":   cs_val,
+                "label":   (f"CRC 0x{cs_val:02X}{cs_label_suffix}"
+                            if cs_ok else
+                            f"CRC 0x{cs_val:02X} (exp 0x{expected_cs:02X})"),
+                "color":   "#cc99ff" if cs_ok else "#ff6b6b",
+                "error":   not cs_ok,
+            })
+
+        return frames
+
+    @staticmethod
+    def _read_uart_byte(b, time_arr, t_start, bit_time):
+        """Lee un byte UART (1 start + 8 datos LSB + 1 stop) a partir de
+        t_start (flanco de bajada del start). Devuelve int o None si no
+        hay datos suficientes."""
+        if t_start + 10.0 * bit_time > time_arr[-1]:
+            return None
+        # Validar start = 0
+        if _sample_at(b, time_arr, t_start + bit_time * 0.5) != 0:
+            return None
+        value = 0
+        for k in range(8):
+            t_sample = t_start + bit_time * (1.5 + k)
+            bit = _sample_at(b, time_arr, t_sample)
+            value |= (bit & 1) << k
+        return value
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama LIN: Break + Sync + PID + Data + Checksum.
+        Estilo cajas (no señal): más legible para LIN."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 28, 26
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        # Título
+        cls._dgm_label(canvas, x + 10, y + 10, "LIN frame",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+
+        # Reparto proporcional (Break más ancho, data variable)
+        # Break=2, Sync=1.5, PID=1.5, Data=4, Checksum=1
+        weights = [("Break",    2.0, "err"),
+                   ("Sync 0x55", 1.5, "ctrl"),
+                   ("PID",       1.5, "accent"),
+                   ("Data 1..8 B", 4.0, "data"),
+                   ("Checksum",  1.5, "ok")]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            cls._dgm_field_row(canvas, cursor, box_y,
+                               [(label, bw, ck)], box_h, theme)
+            cursor += bw
+
+        # Pequeña traza esquemática debajo (solo el Break + Sync para evocar)
+        sig_y_hi = box_y + box_h + 6
+        sig_y_lo = sig_y_hi + 8
+        # Mantener nivel alto antes del frame: omitido por espacio.
+        # Esquema: traza encima del campo Break baja y se mantiene
+        break_w = 2.0 * unit
+        sync_w = 1.5 * unit
+        # Mini-traza opcional: omitida para no saturar; los campos hablan.
+
+        # Nota de versiones soportadas
+        cls._dgm_label(canvas, x + w / 2, y + h - 8,
+                       "Versions: 1.x · 2.x · J2602 · Any",
+                       theme["dim"], font=("Segoe UI", 7, "italic"))
+
+        return True
+
+
+# -----------------------------
+# I²S (Inter-IC Sound)
+# -----------------------------
+class I2SDecoder(ProtocolDecoder):
+    """I²S audio bus. 3 señales: BCLK (bit clock), WS / LRCLK (word select,
+    L = bajo, R = alto en Philips estándar), SDATA (datos serie).
+
+    Soporta tres alineaciones:
+      - Philips standard: dato empieza 1 BCLK tras flanco de WS
+      - Left-justified:    dato empieza en el mismo flanco de WS
+      - Right-justified:   dato termina en el siguiente flanco de WS
+    """
+
+    name = "I²S"
+    description = (
+        "Inter-IC Sound. 3 hilos: BCLK + WS (Word Select / LRCLK) + SDATA. "
+        "Datos MSB first. WS bajo → canal izquierdo, alto → derecho "
+        "(Philips). Soporta Philips std, left-justified, right-justified. "
+        "Word size típico 16, 24 o 32 bits."
+    )
+    channels_needed = ["BCLK", "WS", "SDATA"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "word_bits":  {"label": "Word bits", "default": 16,
+                           "kind": "choice",
+                           "options": [8, 16, 18, 20, 24, 32]},
+            "format":     {"label": "Format",    "default": "Philips",
+                           "kind": "choice",
+                           "options": ["Philips", "Left-justified",
+                                       "Right-justified"]},
+            "ws_polarity": {"label": "WS low =", "default": "Left",
+                            "kind": "choice",
+                            "options": ["Left", "Right"]},
+            "show_signed": {"label": "Show signed", "default": True,
+                            "kind": "bool"},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        bclk = _binarize(time_arr, channel_voltages["BCLK"])
+        ws = _binarize(time_arr, channel_voltages["WS"])
+        sdata = _binarize(time_arr, channel_voltages["SDATA"])
+
+        word_bits = int(params["word_bits"])
+        fmt = params["format"]
+        ws_low_is_left = (params["ws_polarity"] == "Left")
+        show_signed = bool(params["show_signed"])
+
+        # I²S: dato muestreado en rising edge de BCLK
+        sample_edges = _find_edges(bclk, time_arr, "rising")
+        if len(sample_edges) == 0:
+            return []
+
+        # Flancos de WS — cada uno arranca un word (con offset según format)
+        ws_edges = _find_edges(ws, time_arr, "any")
+        if len(ws_edges) == 0:
+            return []
+
+        frames = []
+
+        # Para cada flanco de WS, identificamos qué bclk-edges corresponden
+        # a su word. Philips: el primer bit empieza UN bclk DESPUÉS del flanco
+        # de WS. Left-justified: el mismo flanco. Right-justified: alineado
+        # al final del slot.
+        # Nota: el primer "word" entre el inicio de captura y el primer flanco
+        # WS NO se decodifica (no sabemos a qué canal pertenece sin un edge
+        # de referencia). En la práctica esto solo afecta a la primera muestra
+        # del stream, despreciable.
+        for wi in range(len(ws_edges)):
+            ws_idx = int(ws_edges[wi])
+            next_ws_idx = (int(ws_edges[wi + 1])
+                           if wi + 1 < len(ws_edges) else len(time_arr) - 1)
+            ws_state = int(ws[ws_idx])
+            # Bclks dentro del slot
+            slot_edges = sample_edges[(sample_edges > ws_idx) &
+                                       (sample_edges < next_ws_idx)]
+            if len(slot_edges) < word_bits:
+                continue
+
+            if fmt == "Philips":
+                # Skip primer bclk (delay de 1 ciclo)
+                use_edges = slot_edges[1:1 + word_bits]
+            elif fmt == "Left-justified":
+                use_edges = slot_edges[:word_bits]
+            else:  # Right-justified
+                use_edges = slot_edges[-word_bits:]
+
+            if len(use_edges) < word_bits:
+                continue
+
+            # MSB first siempre en I²S
+            value = 0
+            for e in use_edges:
+                value = (value << 1) | int(sdata[e])
+
+            # Determinar canal L/R según ws_state y polaridad
+            if ws_low_is_left:
+                channel = "L" if ws_state == 0 else "R"
+            else:
+                channel = "R" if ws_state == 0 else "L"
+
+            t_start = time_arr[use_edges[0]]
+            t_end = time_arr[use_edges[-1]]
+
+            # Representación signed two's complement (audio típico)
+            if show_signed and word_bits >= 8:
+                sign_bit = 1 << (word_bits - 1)
+                if value & sign_bit:
+                    disp_value = value - (1 << word_bits)
+                else:
+                    disp_value = value
+                label = f"{channel} {disp_value} (0x{value:0{word_bits//4 or 1}X})"
+            else:
+                label = f"{channel} 0x{value:0{word_bits//4 or 1}X}"
+
+            frames.append({
+                "t_start": t_start,
+                "t_end":   t_end,
+                "type":    "sample_L" if channel == "L" else "sample_R",
+                "value":   value,
+                "label":   label,
+                "color":   "#5fa8ff" if channel == "L" else "#ff9f5f",
+                "error":   False,
+            })
+
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama I²S: tres raíles (WS, BCLK, SDATA). WS marca canal
+        L/R, BCLK reloj de bits, SDATA palabras MSB-first."""
+        pad_l, pad_r = 64, 16
+        pad_t, pad_b = 26, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+
+        rail_gap = 4
+        rail_h = (h - pad_t - pad_b - 2 * rail_gap) / 3
+        ws_hi = y + pad_t
+        ws_lo = ws_hi + rail_h
+        bc_hi = ws_lo + rail_gap
+        bc_lo = bc_hi + rail_h
+        sd_hi = bc_lo + rail_gap
+        sd_lo = sd_hi + rail_h
+
+        cls._dgm_label(canvas, x + 10, y + 10, "I²S frame  (Philips std)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+        cls._dgm_rail_label(canvas, x + pad_l - 6,
+                            (ws_hi + ws_lo) / 2, "WS", theme)
+        cls._dgm_rail_label(canvas, x + pad_l - 6,
+                            (bc_hi + bc_lo) / 2, "BCLK", theme)
+        cls._dgm_rail_label(canvas, x + pad_l - 6,
+                            (sd_hi + sd_lo) / 2, "SDATA", theme)
+
+        # 4 bits L + 4 bits R, total 8 ciclos clk
+        n_bits = 8
+        unit = plot_w / n_bits
+
+        # WS: bajo durante 4 ciclos (L), alto los siguientes 4 (R)
+        ws_pts = [
+            (x0, ws_lo),
+            (x0 + 4 * unit, ws_lo),
+            (x0 + 4 * unit, ws_hi),
+            (x0 + n_bits * unit, ws_hi),
+        ]
+        cls._dgm_signal_step(canvas, ws_pts, theme["fg"], width=1.5)
+
+        # BCLK
+        bc_pts = []
+        cursor = x0
+        for _ in range(n_bits):
+            bc_pts.append((cursor, bc_lo))
+            bc_pts.append((cursor, bc_hi))
+            bc_pts.append((cursor + 0.5 * unit, bc_hi))
+            bc_pts.append((cursor + 0.5 * unit, bc_lo))
+            bc_pts.append((cursor + unit, bc_lo))
+            cursor += unit
+        cls._dgm_signal_step(canvas, bc_pts, theme["fg"], width=1.5)
+
+        # SDATA: patrón L=1010, R=1100 (ilustrativo)
+        bits = [1, 0, 1, 0, 1, 1, 0, 0]
+        sd_pts = [(x0, sd_hi if bits[0] else sd_lo)]
+        cursor = x0
+        prev = bits[0]
+        for b in bits:
+            y_here = sd_hi if b else sd_lo
+            sd_pts.append((cursor, sd_hi if prev else sd_lo))
+            sd_pts.append((cursor, y_here))
+            sd_pts.append((cursor + unit, y_here))
+            cursor += unit
+            prev = b
+        cls._dgm_signal_step(canvas, sd_pts, theme["fg"], width=1.5)
+
+        # Etiquetas L/R
+        cls._dgm_label(canvas, x0 + 2 * unit, y + pad_t - 6,
+                       "Left", theme["data"],
+                       font=("Segoe UI", 8, "bold"), anchor="s")
+        cls._dgm_label(canvas, x0 + 6 * unit, y + pad_t - 6,
+                       "Right", "#ff9f5f",
+                       font=("Segoe UI", 8, "bold"), anchor="s")
+
+        return True
+
+
+# =====================================================
+# CAN (Controller Area Network)
+# =====================================================
+# Helpers compartidos entre CAN clásico, CAN FD y J1939.
+# Documentación de bits dominantes/recesivos:
+#   - dominante = 0 (low en CAN_H lógico, también low en sniff TTL)
+#   - recesivo  = 1 (idle)
+# Asumimos siempre que la señal llega como TTL lógico ya recuperado
+# (no diferencial). El modo "differential" calcula CAN_H - CAN_L y
+# binariza el resultado.
+
+
+def _can_extract_logical(channel_voltages, mode):
+    """Devuelve un par (logical_volt_array, threshold_used_for_binarize_None)
+    según el modo de entrada del usuario.
+      - 'Logical (TTL)': usa channel_voltages['CAN'] tal cual.
+      - 'Differential (H,L)': resta H - L y binariza con threshold = 0.5*max.
+    """
+    if mode == "Differential (H,L)":
+        h = channel_voltages.get("CAN_H")
+        l = channel_voltages.get("CAN_L")
+        if h is None or l is None:
+            # Fallback al modo lógico
+            return channel_voltages.get("CAN"), None
+        diff = h - l
+        # Dominante: diff alta (~2V). Recesivo: diff ≈ 0V.
+        # En CAN dominante=0 lógico. Hacemos invert.
+        # Threshold: punto medio entre 90th pct y 10th pct, igual que
+        # _binarize por defecto.
+        return diff, None
+    return channel_voltages.get("CAN"), None
+
+
+def _can_binarize_invert_if_differential(v, mode, time_arr):
+    """Binariza una señal CAN respetando que en modo diferencial dominante
+    = nivel alto de (H-L), que corresponde a 0 lógico CAN.
+    En modo lógico TTL asume dominante = 0 (idle alto)."""
+    p_lo = float(np.quantile(v, 0.10))
+    p_hi = float(np.quantile(v, 0.90))
+    hyst = (p_hi - p_lo) * 0.10
+    b = _binarize(time_arr, v, hysteresis=hyst)
+    if mode == "Differential (H,L)":
+        # H-L alto = dominante = 0 lógico → invertir
+        b = (1 - b).astype(np.uint8)
+    return b
+
+
+def _can_unstuff_bits(bits, max_unstuffed=None):
+    """Inverso de bit-stuffing CAN — tolerante con bits post-stuffing.
+
+    Recorre `bits` y elimina los bits que estén en posición de stuff (el bit
+    inmediatamente posterior a 5 idénticos consecutivos). Devuelve:
+       (unstuffed_bits, stuff_positions_in_input, stuff_error_detected)
+
+    Comportamiento clave:
+      - Si encuentra 6 bits idénticos seguidos antes de un stuff, asume que
+        ha llegado al final de la zona stuffeada (típico: CRC delim+ACK+EOF
+        con muchos unos). Devuelve lo decodificado hasta ese punto y marca
+        stuff_error_detected=False (es esperado en un frame válido).
+      - Si encuentra >7 bits idénticos (claramente fuera de la spec dentro
+        de zona stuffed real) durante los primeros bits → stuff_error=True.
+
+    El caller (CanDecoder) corta en el número de bits que necesita parsear
+    (ID, ctrl, DLC, DATA, CRC) y nunca consulta posiciones más allá. Esto
+    hace robusta la decodificación sin necesidad de saber a priori la
+    longitud exacta del payload.
+    """
+    if not bits:
+        return [], [], False
+    out = [bits[0]]
+    stuff_positions = []
+    count = 1
+    prev = bits[0]
+    i = 1
+    stuff_error = False
+    while i < len(bits):
+        if max_unstuffed is not None and len(out) >= max_unstuffed:
+            break
+        bit = bits[i]
+        if bit == prev:
+            count += 1
+        else:
+            count = 1
+        if count == 6:
+            # 6 iguales sin stuff bit intermedio: salimos asumiendo fin
+            # de zona stuffed (CRC delim/ACK/EOF). No es error.
+            break
+        out.append(bit)
+        prev = bit
+        if count == 5 and i + 1 < len(bits):
+            nxt = bits[i + 1]
+            if nxt == bit:
+                # No es stuff. Probablemente fin de zona stuffed. Salimos.
+                break
+            stuff_positions.append(i + 1)
+            i += 2
+            count = 1
+            prev = nxt
+            continue
+        i += 1
+    return out, stuff_positions, stuff_error
+
+
+def _can_crc15(bits):
+    """CRC-15/CAN (poly 0x4599, init 0). bits son los bits desde SOF
+    hasta el último bit del data field (sin stuffs)."""
+    crc = 0
+    for bit in bits:
+        c = (crc >> 14) & 1
+        crc = ((crc << 1) & 0x7FFF)
+        if (c ^ bit) & 1:
+            crc ^= 0x4599
+    return crc & 0x7FFF
+
+
+def _can_crc17(bits):
+    """CRC-17 para CAN FD (poly 0x1685B, init 1)."""
+    crc = 1 << 16
+    for bit in bits:
+        c = (crc >> 16) & 1
+        crc = ((crc << 1) & 0x1FFFF)
+        if (c ^ bit) & 1:
+            crc ^= 0x1685B
+    return crc & 0x1FFFF
+
+
+def _can_crc21(bits):
+    """CRC-21 para CAN FD frames largos (poly 0x102899, init 1)."""
+    crc = 1 << 20
+    for bit in bits:
+        c = (crc >> 20) & 1
+        crc = ((crc << 1) & 0x1FFFFF)
+        if (c ^ bit) & 1:
+            crc ^= 0x102899
+    return crc & 0x1FFFFF
+
+
+def _can_detect_bit_time(b, time_arr, hint_bitrate=None):
+    """Estima el bit time analizando la duración más corta entre flancos
+    consecutivos. En CAN el bit más corto observable es 1*Tbit (un único
+    bit dominante/recesivo entre dos del valor opuesto). Si hint_bitrate
+    está dado, devuelve 1/hint_bitrate y solo lo usa para sanity check."""
+    if hint_bitrate is not None and hint_bitrate > 0:
+        return 1.0 / hint_bitrate
+    edges = _find_edges(b, time_arr, "any")
+    if len(edges) < 4:
+        return None
+    durations = np.diff(time_arr[edges])
+    # El bit más corto plausible: percentil 5 (ignora outliers)
+    bit_time = float(np.quantile(durations, 0.05))
+    return bit_time
+
+
+class CanDecoder(ProtocolDecoder):
+    """CAN 2.0A/B clásico. Soporta entrada lógica (un canal TTL recuperado)
+    o diferencial (CAN_H + CAN_L). Detecta SOF, ID 11 o 29 bits, control,
+    data, CRC15, ACK y EOF. Aplica bit-unstuffing.
+
+    No verifica todos los campos de error definidos por la spec (error
+    frames, overload frames…); detecta y reporta stuff errors y CRC bad.
+    """
+
+    name = "CAN 2.0 A/B"
+    description = (
+        "Controller Area Network classic. Frames hasta 8 bytes payload, "
+        "ID estándar 11-bit o extendido 29-bit. Bit-rate típico 125k–1M.\n"
+        "Modos de entrada:\n"
+        " • Logical (TTL): un canal recuperado a TTL (idle = alto)\n"
+        " • Differential: dos canales CAN_H y CAN_L; se calcula H-L."
+    )
+    channels_needed = ["CAN"]
+    channels_optional = ["CAN_H", "CAN_L"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "input_mode":  {"label": "Input mode", "default": "Logical (TTL)",
+                            "kind": "choice",
+                            "options": ["Logical (TTL)",
+                                        "Differential (H,L)"]},
+            "bitrate":     {"label": "Bitrate (0=auto)", "default": 500000,
+                            "kind": "int"},
+            "show_stuffs": {"label": "Mark stuff bits", "default": False,
+                            "kind": "bool"},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        mode = params["input_mode"]
+        bitrate = int(params["bitrate"])
+        sig, _ = _can_extract_logical(channel_voltages, mode)
+        if sig is None:
+            return []
+        b = _can_binarize_invert_if_differential(sig, mode, time_arr)
+
+        bit_time = _can_detect_bit_time(b, time_arr,
+                                         hint_bitrate=bitrate if bitrate > 0
+                                         else None)
+        if bit_time is None or bit_time <= 0:
+            return []
+
+        frames = []
+        # SOF = flanco de bajada (dominante) tras un idle ≥ 11 bits recesivos
+        falling = _find_edges(b, time_arr, "falling")
+        i = 0
+        while i < len(falling):
+            sof_idx = int(falling[i])
+            t_sof = time_arr[sof_idx]
+            # Validar idle previo: ≥7 bits recesivos justo antes
+            # (Inter-Frame Space = 3 + suspend; relajamos a 7 por margen).
+            t_idle_start = t_sof - 7 * bit_time
+            if t_idle_start > time_arr[0]:
+                # Muestrear: si algún bit antes era 0, no es SOF válido
+                ok = True
+                for k in range(7):
+                    if _sample_at(b, time_arr, t_sof - (k + 1) * bit_time) == 0:
+                        ok = False
+                        break
+                if not ok:
+                    i += 1
+                    continue
+
+            # Leer ~150 bits (suficiente para frame extendido máximo)
+            # como secuencia cruda muestreada en el centro de cada bit.
+            max_bits = 150
+            raw_bits = []
+            for k in range(max_bits):
+                t_sample = t_sof + bit_time * (0.5 + k)
+                if t_sample >= time_arr[-1]:
+                    break
+                raw_bits.append(int(_sample_at(b, time_arr, t_sample)))
+            if len(raw_bits) < 20:
+                i += 1
+                continue
+
+            # Bit-unstuffing aplicable desde SOF hasta el último bit del CRC.
+            # Hacemos un unstuff "generoso" — pedimos hasta 130 bits limpios
+            # (suficiente para frame extendido máximo: 1+29+1+1+1+4+64+15 ≈
+            # 116 bits). Cualquier exceso se deja sin tocar; los bits
+            # post-CRC (delim/ACK/EOF) NO llevan stuffing y aparecerán como
+            # recesivos en raw_bits, ya fuera del rango analizado.
+            unstuffed, stuff_pos, stuff_err = _can_unstuff_bits(
+                raw_bits, max_unstuffed=130)
+            if stuff_err:
+                frames.append({
+                    "t_start": t_sof,
+                    "t_end":   t_sof + bit_time * 6,
+                    "type":    "error",
+                    "value":   0,
+                    "label":   "STUFF ERR",
+                    "color":   "#ff6b6b",
+                    "error":   True,
+                })
+                # Avanzar más allá del error
+                i = cls._advance_past(falling, i, time_arr, t_sof + bit_time * 10)
+                continue
+
+            # Parsear según spec:
+            #   SOF (1) | ID-A (11) | RTR/SRR (1) | IDE (1) | ...
+            # Si IDE=0: standard frame
+            #   RTR (1) | r0 (1) | DLC (4) | DATA (0..64) | CRC (15) | CRC del (1) | ACK | ACK del | EOF (7)
+            # Si IDE=1: extended frame
+            #   SRR=1 | IDE=1 | ID-B (18) | RTR | r1 r0 | DLC (4) | DATA | CRC | ...
+            p = 0
+            if unstuffed[p] != 0:
+                # Debería ser SOF dominante. Falso disparo.
+                i += 1
+                continue
+            sof_bit = unstuffed[p]; p += 1
+            id_a = 0
+            for k in range(11):
+                id_a = (id_a << 1) | unstuffed[p]; p += 1
+            rtr_or_srr = unstuffed[p]; p += 1
+            ide = unstuffed[p]; p += 1
+
+            extended = (ide == 1)
+            if extended:
+                # SRR fue rtr_or_srr (esperado 1)
+                id_b = 0
+                for k in range(18):
+                    id_b = (id_b << 1) | unstuffed[p]; p += 1
+                rtr = unstuffed[p]; p += 1
+                r1 = unstuffed[p]; p += 1
+                r0 = unstuffed[p]; p += 1
+                full_id = (id_a << 18) | id_b
+            else:
+                rtr = rtr_or_srr
+                r0 = unstuffed[p]; p += 1
+                full_id = id_a
+
+            dlc = 0
+            for k in range(4):
+                dlc = (dlc << 1) | unstuffed[p]; p += 1
+            payload_bytes = min(dlc, 8)   # CAN clásico clipa en 8
+
+            data = []
+            for byte_i in range(payload_bytes):
+                v = 0
+                for k in range(8):
+                    if p >= len(unstuffed):
+                        break
+                    v = (v << 1) | unstuffed[p]; p += 1
+                data.append(v)
+
+            # CRC-15
+            crc_received = 0
+            crc_ok = True
+            if p + 15 <= len(unstuffed):
+                # CRC se calcula sobre los bits SIN stuffs DESDE SOF
+                # incluido hasta el último bit de data (justo antes del CRC).
+                bits_for_crc = unstuffed[0:p]
+                expected = _can_crc15(bits_for_crc)
+                for k in range(15):
+                    crc_received = (crc_received << 1) | unstuffed[p]; p += 1
+                crc_ok = (crc_received == expected)
+            else:
+                crc_ok = False
+
+            # Frames de salida
+            # Estimar tiempos: cada bit RAW (con stuffs) ocupa bit_time.
+            # El bit "i" empieza en t_sof + i*bit_time.
+            t_id_start = t_sof + bit_time   # tras SOF
+            t_id_end = t_id_start + (29 if extended else 11) * bit_time
+            id_color = "#ffb84d"
+            frames.append({
+                "t_start": t_sof,
+                "t_end":   t_sof + bit_time,
+                "type":    "sof",
+                "value":   0,
+                "label":   "SOF",
+                "color":   "#7fdb7f",
+                "error":   False,
+            })
+            frames.append({
+                "t_start": t_id_start,
+                "t_end":   t_id_end,
+                "type":    "id",
+                "value":   full_id,
+                "label":   (f"ID 0x{full_id:08X} (29b)" if extended
+                            else f"ID 0x{full_id:03X}"),
+                "color":   id_color,
+                "error":   False,
+            })
+            t_after_id = t_id_end
+            # Saltamos RTR/IDE/r0(r1) visualmente: indicador compacto
+            ctrl_bits = (3 if not extended else 5)
+            t_ctrl_end = t_after_id + ctrl_bits * bit_time
+            frames.append({
+                "t_start": t_after_id,
+                "t_end":   t_ctrl_end,
+                "type":    "ctrl",
+                "value":   dlc,
+                "label":   f"DLC={dlc}" + (" RTR" if rtr else ""),
+                "color":   "#cc99ff",
+                "error":   False,
+            })
+            t_dlc_end = t_ctrl_end + 4 * bit_time
+            t_data_start = t_dlc_end
+            for byte_i, dv in enumerate(data):
+                t_d_start = t_data_start + byte_i * 8 * bit_time
+                t_d_end = t_d_start + 8 * bit_time
+                frames.append({
+                    "t_start": t_d_start,
+                    "t_end":   t_d_end,
+                    "type":    "data",
+                    "value":   dv,
+                    "label":   f"D{byte_i} 0x{dv:02X}",
+                    "color":   "#5fa8ff",
+                    "error":   False,
+                })
+            t_data_end = t_data_start + payload_bytes * 8 * bit_time
+            t_crc_start = t_data_end
+            t_crc_end = t_crc_start + 15 * bit_time
+            frames.append({
+                "t_start": t_crc_start,
+                "t_end":   t_crc_end,
+                "type":    "crc",
+                "value":   crc_received,
+                "label":   (f"CRC 0x{crc_received:04X}"
+                            if crc_ok
+                            else f"CRC! 0x{crc_received:04X}"),
+                "color":   "#cc99ff" if crc_ok else "#ff6b6b",
+                "error":   not crc_ok,
+            })
+
+            # Marcar stuffs si pidió
+            if bool(params["show_stuffs"]):
+                for sp in stuff_pos:
+                    t_s = t_sof + sp * bit_time
+                    frames.append({
+                        "t_start": t_s,
+                        "t_end":   t_s + bit_time,
+                        "type":    "stuff",
+                        "value":   0,
+                        "label":   "·",
+                        "color":   "#666666",
+                        "error":   False,
+                    })
+
+            # Avanzar pasado este frame
+            advance_to = t_crc_end + 10 * bit_time
+            i = cls._advance_past(falling, i, time_arr, advance_to)
+
+        return frames
+
+    @staticmethod
+    def _advance_past(falling, i, time_arr, t_target):
+        while i < len(falling) and time_arr[int(falling[i])] < t_target:
+            i += 1
+        return i
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama CAN clásico: SOF · ID · DLC · Data · CRC · ACK · EOF."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 28, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        cls._dgm_label(canvas, x + 10, y + 10, "CAN frame (2.0A)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+
+        weights = [
+            ("SOF",   0.6, "ok"),
+            ("ID 11b", 2.5, "accent"),
+            ("DLC",  1.0, "ctrl"),
+            ("Data 0..8 B", 4.0, "data"),
+            ("CRC 15", 1.8, "accent"),
+            ("ACK", 0.8, "ok"),
+            ("EOF", 1.0, "err"),
+        ]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            cls._dgm_field_row(canvas, cursor, box_y,
+                               [(label, bw, ck)], box_h, theme)
+            cursor += bw
+
+        return True
+
+
+# -----------------------------
+# CAN FD
+# -----------------------------
+class CanFdDecoder(ProtocolDecoder):
+    """CAN FD (Flexible Data-rate). Frames hasta 64 bytes payload, doble
+    velocidad opcional (BRS), CRC17 o CRC21 según longitud.
+
+    Simplificaciones:
+      - Asumimos bitrate nominal y data conocidos (campos separados).
+      - BRS lo respetamos sólo para el escalado de tiempos de DATA y CRC.
+    """
+
+    name = "CAN FD"
+    description = (
+        "CAN with Flexible Data-rate. ISO 11898-1:2015. Payload hasta 64 "
+        "bytes (DLC mapping no lineal). BRS permite acelerar la fase de "
+        "datos. CRC17 si payload ≤ 16 bytes, CRC21 si > 16.\n"
+        "Modos de entrada igual que CAN."
+    )
+    channels_needed = ["CAN"]
+    channels_optional = ["CAN_H", "CAN_L"]
+
+    # DLC → longitud de payload en CAN FD
+    _FD_DLC_LEN = {
+        0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8,
+        9: 12, 10: 16, 11: 20, 12: 24, 13: 32, 14: 48, 15: 64,
+    }
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "input_mode":     {"label": "Input mode",
+                               "default": "Logical (TTL)",
+                               "kind": "choice",
+                               "options": ["Logical (TTL)",
+                                           "Differential (H,L)"]},
+            "nominal_bitrate": {"label": "Nominal bitrate",
+                                "default": 500000, "kind": "int"},
+            "data_bitrate":   {"label": "Data bitrate (BRS)",
+                               "default": 2000000, "kind": "int"},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        mode = params["input_mode"]
+        nom_br = int(params["nominal_bitrate"])
+        data_br = int(params["data_bitrate"])
+        sig, _ = _can_extract_logical(channel_voltages, mode)
+        if sig is None:
+            return []
+        b = _can_binarize_invert_if_differential(sig, mode, time_arr)
+        bt_nom = 1.0 / max(1, nom_br)
+        bt_data = 1.0 / max(1, data_br)
+
+        frames = []
+        falling = _find_edges(b, time_arr, "falling")
+        i = 0
+        while i < len(falling):
+            sof_idx = int(falling[i])
+            t_sof = time_arr[sof_idx]
+            # Idle previo
+            ok = True
+            for k in range(7):
+                if t_sof - (k + 1) * bt_nom < time_arr[0]:
+                    break
+                if _sample_at(b, time_arr, t_sof - (k + 1) * bt_nom) == 0:
+                    ok = False; break
+            if not ok:
+                i += 1; continue
+
+            # Leer header en bit_time nominal
+            # SOF(1) | ID-A(11) | RRS o IDE (1) ...  — más complejo que clásico
+            # Aproximación: muestrear nominal hasta detectar FDF=1; luego cambiar a data_br.
+            # Lectura preliminar:
+            def sample_n(n, t0, bt):
+                bits = []
+                for k in range(n):
+                    t_s = t0 + bt * (0.5 + k)
+                    if t_s >= time_arr[-1]:
+                        return None
+                    bits.append(int(_sample_at(b, time_arr, t_s)))
+                return bits
+
+            head = sample_n(40, t_sof, bt_nom)   # suficiente para cubrir hasta DLC
+            if head is None:
+                i += 1; continue
+            # Unstuffing parcial (la zona nominal sí lleva stuffing).
+            unstuffed_head, _sp, _se_head = _can_unstuff_bits(
+                head, max_unstuffed=40)
+            if _se_head:
+                i += 1; continue
+
+            p = 0
+            if unstuffed_head[p] != 0:
+                i += 1; continue
+            p += 1  # SOF
+            id_a = 0
+            for k in range(11):
+                id_a = (id_a << 1) | unstuffed_head[p]; p += 1
+            # En FD: RRS (1, reservado) o SRR si extended.
+            srr_or_rrs = unstuffed_head[p]; p += 1
+            ide = unstuffed_head[p]; p += 1
+            extended = (ide == 1)
+            if extended:
+                id_b = 0
+                for k in range(18):
+                    id_b = (id_b << 1) | unstuffed_head[p]; p += 1
+                # En FD extended: RRS, FDF, res, BRS, ESI, DLC
+                rrs = unstuffed_head[p]; p += 1
+                fdf = unstuffed_head[p]; p += 1
+                full_id = (id_a << 18) | id_b
+            else:
+                fdf = unstuffed_head[p]; p += 1   # debe ser 1 en FD
+                full_id = id_a
+
+            if fdf != 1:
+                # No es CAN FD — saltar y dejar para CanDecoder
+                i += 1; continue
+
+            res = unstuffed_head[p]; p += 1
+            brs = unstuffed_head[p]; p += 1
+            esi = unstuffed_head[p]; p += 1
+            dlc = 0
+            for k in range(4):
+                dlc = (dlc << 1) | unstuffed_head[p]; p += 1
+            payload_len = cls._FD_DLC_LEN.get(dlc, 0)
+
+            # A partir de aquí, si BRS=1, los bits cambian a bt_data hasta el CRC delimiter.
+            # Continuamos leyendo el resto en el bit time apropiado.
+            bt_phase2 = bt_data if brs == 1 else bt_nom
+            # Calculamos tiempo donde acaba la lectura de cabecera (bit p en bt_nom)
+            t_after_head = t_sof + p * bt_nom
+            need_bits = payload_len * 8
+            data_raw = sample_n(need_bits + 30, t_after_head, bt_phase2)
+            if data_raw is None:
+                i += 1; continue
+            # En FD, dependiendo de la variante (ISO/non-ISO) el stuffing en la
+            # zona de datos puede ser distinto. Aplicamos unstuff "fixed" típico
+            # de FD (5 idénticos → stuff). max_unstuffed generoso.
+            data_unstuffed, _sp2, _se_data = _can_unstuff_bits(
+                data_raw, max_unstuffed=need_bits + 25)
+            if _se_data:
+                frames.append({
+                    "t_start": t_sof, "t_end": t_after_head,
+                    "type": "error", "value": 0,
+                    "label": "STUFF ERR (FD data)",
+                    "color": "#ff6b6b", "error": True,
+                })
+                i = CanDecoder._advance_past(falling, i, time_arr,
+                                              t_after_head + 20 * bt_phase2)
+                continue
+
+            # Bytes de datos
+            data = []
+            q = 0
+            for byte_i in range(payload_len):
+                v = 0
+                for k in range(8):
+                    if q >= len(data_unstuffed):
+                        break
+                    v = (v << 1) | data_unstuffed[q]; q += 1
+                data.append(v)
+
+            # CRC: 17 si payload ≤ 16, 21 si > 16. ISO FD lo precede de un
+            # stuff count + parity (no implementamos verificación completa,
+            # sólo extraemos el CRC para visualización).
+            crc_bits = 17 if payload_len <= 16 else 21
+            # Saltamos el stuff count + parity (4 bits stuff_count + 1 bit parity)
+            # — usado en ISO CAN FD. Pre-ISO no los lleva. Ofrecemos lectura
+            # "best-effort".
+            crc_received = 0
+            for k in range(crc_bits):
+                if q >= len(data_unstuffed): break
+                crc_received = (crc_received << 1) | data_unstuffed[q]; q += 1
+
+            # Construir frames visuales
+            frames.append({
+                "t_start": t_sof, "t_end": t_sof + bt_nom,
+                "type": "sof", "value": 0, "label": "SOF",
+                "color": "#7fdb7f", "error": False,
+            })
+            id_bits_count = 29 if extended else 11
+            t_id_start = t_sof + bt_nom
+            t_id_end = t_id_start + id_bits_count * bt_nom
+            frames.append({
+                "t_start": t_id_start, "t_end": t_id_end,
+                "type": "id", "value": full_id,
+                "label": (f"ID 0x{full_id:08X} (29b)" if extended
+                          else f"ID 0x{full_id:03X}"),
+                "color": "#ffb84d", "error": False,
+            })
+            t_ctrl_start = t_id_end
+            ctrl_bits = 4 + 4  # FDF/BRS/ESI/res + DLC, aprox
+            t_ctrl_end = t_ctrl_start + ctrl_bits * bt_nom
+            frames.append({
+                "t_start": t_ctrl_start, "t_end": t_ctrl_end,
+                "type": "ctrl", "value": dlc,
+                "label": f"DLC={dlc} ({payload_len}B)"
+                         + (" BRS" if brs else "")
+                         + (" ESI" if esi else ""),
+                "color": "#cc99ff", "error": False,
+            })
+            t_data_start = t_ctrl_end
+            for byte_i, dv in enumerate(data):
+                t_d_start = t_data_start + byte_i * 8 * bt_phase2
+                t_d_end = t_d_start + 8 * bt_phase2
+                frames.append({
+                    "t_start": t_d_start, "t_end": t_d_end,
+                    "type": "data", "value": dv,
+                    "label": f"D{byte_i} 0x{dv:02X}",
+                    "color": "#5fa8ff", "error": False,
+                })
+            t_data_end = t_data_start + payload_len * 8 * bt_phase2
+            t_crc_end = t_data_end + crc_bits * bt_phase2
+            frames.append({
+                "t_start": t_data_end, "t_end": t_crc_end,
+                "type": "crc", "value": crc_received,
+                "label": f"CRC{crc_bits} 0x{crc_received:X}",
+                "color": "#cc99ff", "error": False,
+            })
+
+            i = CanDecoder._advance_past(falling, i, time_arr,
+                                          t_crc_end + 10 * bt_nom)
+
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama CAN FD: añade FDF · BRS · ESI vs CAN clásico,
+        payload hasta 64 B, CRC17/21."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 28, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "CAN FD frame  (flexible data rate)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+
+        # Campos clave (compactos)
+        weights = [
+            ("SOF",   0.5, "ok"),
+            ("ID",    2.0, "accent"),
+            ("FDF",   0.5, "ctrl"),
+            ("BRS",   0.5, "ctrl"),
+            ("ESI",   0.5, "ctrl"),
+            ("DLC",   0.7, "ctrl"),
+            ("Data 0..64 B", 4.5, "data"),
+            ("CRC17/21", 1.7, "accent"),
+            ("ACK",  0.6, "ok"),
+            ("EOF",  0.7, "err"),
+        ]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            cls._dgm_field_row(canvas, cursor, box_y,
+                               [(label, bw, ck)], box_h, theme)
+            cursor += bw
+
+        return True
+
+
+# -----------------------------
+# SAE J1939 (sobre CAN 29-bit)
+# -----------------------------
+class J1939Decoder(ProtocolDecoder):
+    """J1939 = capa aplicación sobre CAN 2.0B (siempre 29-bit). Parsea el
+    ID en sus campos: Priority (3) | EDP+DP (2) | PF (8) | PS (8) | SA (8).
+    Y deriva el PGN según PF:
+       PF < 240 → PGN = (EDP DP PF 0x00) (PDU1, destino = PS)
+       PF ≥ 240 → PGN = (EDP DP PF PS)    (PDU2, broadcast)
+    """
+
+    name = "J1939"
+    description = (
+        "SAE J1939 sobre CAN 29-bit. Decodifica el frame CAN y parsea el "
+        "ID en sus campos: PRIO, R, DP, PF, PS, SA. Calcula el PGN según "
+        "el tipo de PDU. Modos:\n"
+        " • Decode IDs only: sólo cabecera/PGN/SA/DA\n"
+        " • Decode IDs + payload: muestra también los 8 bytes de datos"
+    )
+    channels_needed = ["CAN"]
+    channels_optional = ["CAN_H", "CAN_L"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "input_mode":  {"label": "Input mode", "default": "Logical (TTL)",
+                            "kind": "choice",
+                            "options": ["Logical (TTL)",
+                                        "Differential (H,L)"]},
+            "bitrate":     {"label": "Bitrate (0=auto)", "default": 250000,
+                            "kind": "int"},
+            "decode_mode": {"label": "Decode",
+                            "default": "IDs + payload",
+                            "kind": "choice",
+                            "options": ["IDs only", "IDs + payload"]},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        # Reutilizamos el decoder CAN clásico
+        can_params = {
+            "input_mode": params["input_mode"],
+            "bitrate":    params["bitrate"],
+            "show_stuffs": False,
+        }
+        can_frames = CanDecoder.decode(time_arr, channel_voltages, can_params)
+        decode_payload = (params["decode_mode"] == "IDs + payload")
+
+        out = []
+        for f in can_frames:
+            if f["type"] == "id":
+                full_id = f["value"]
+                # Si no es 29-bit el ID, no es J1939 válido — lo dejamos pero
+                # con label informativo.
+                if full_id <= 0x7FF:
+                    f2 = dict(f)
+                    f2["label"] = f"ID 0x{full_id:03X} (not 29-bit)"
+                    f2["color"] = "#888888"
+                    out.append(f2)
+                    continue
+                prio = (full_id >> 26) & 0x7
+                edp  = (full_id >> 25) & 0x1
+                dp   = (full_id >> 24) & 0x1
+                pf   = (full_id >> 16) & 0xFF
+                ps   = (full_id >> 8) & 0xFF
+                sa   = full_id & 0xFF
+                if pf < 240:
+                    pgn = (edp << 17) | (dp << 16) | (pf << 8)
+                    da  = ps
+                    pdu = "PDU1"
+                    pgn_label = f"PGN 0x{pgn:05X} DA=0x{da:02X}"
+                else:
+                    pgn = (edp << 17) | (dp << 16) | (pf << 8) | ps
+                    pdu = "PDU2"
+                    pgn_label = f"PGN 0x{pgn:05X} (bcast)"
+                f2 = dict(f)
+                f2["label"] = (f"PRI={prio} {pdu} {pgn_label} SA=0x{sa:02X}")
+                f2["color"] = "#ffb84d"
+                out.append(f2)
+            elif f["type"] == "data" and not decode_payload:
+                # Saltar payload en modo "IDs only"
+                continue
+            else:
+                out.append(f)
+        return out
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama J1939: descompone el ID 29-bit en sus campos
+        Priority · EDP · DP · PF · PS · SA. Sobre CAN extendido."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 50, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "J1939  (CAN 2.0B / 29-bit ID)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+        cls._dgm_label(canvas, x + 10, y + 28,
+                       "ID breakdown:", theme["dim"],
+                       font=("Segoe UI", 8), anchor="w")
+
+        # Bits por campo: Prio=3, EDP=1, DP=1, PF=8, PS=8, SA=8 = 29
+        weights = [
+            ("Priority\n(3 b)", 3, "accent"),
+            ("E", 1, "ctrl"),
+            ("D", 1, "ctrl"),
+            ("PF\n(8 b)", 8, "data"),
+            ("PS / GE\n(8 b)", 8, "data"),
+            ("SA\n(8 b)", 8, "ok"),
+        ]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            col = theme.get(ck, theme["data"])
+            canvas.create_rectangle(cursor, box_y, cursor + bw,
+                                    box_y + box_h, outline=col, width=1.5)
+            canvas.create_text(cursor + bw / 2, box_y + box_h / 2,
+                               text=label, fill=col,
+                               font=("Segoe UI", 8, "bold"),
+                               justify="center")
+            cursor += bw
+
+        # Flecha total = 29 bits
+        cls._dgm_arrow_h(canvas, x0, x0 + total * unit,
+                         box_y + box_h + 12, theme["dim"],
+                         label="29-bit identifier",
+                         text_color=theme["fg"])
+
+        return True
+
+
+# -----------------------------
+# SDIO  (SD bus protocol)
+# -----------------------------
+class SdioDecoder(ProtocolDecoder):
+    """SDIO / SD bus. Implementación base: paquetes de comando y respuesta
+    sobre CMD + CLK, con DATA opcional (1-bit por DAT0, 4-bit por DAT0..3).
+
+    Limitaciones documentadas:
+      - Modo 1-bit: decoder completo de CMD/RESPONSE (48 bits) + start de DATA.
+      - Modo 4-bit: detecta paquetes en DAT0..DAT3, asume mismo reloj.
+      - No verifica CRC7 ni CRC16 (sólo los extrae para mostrar).
+      - No decodifica significado de cada CMD (CMD0=GO_IDLE, CMD17=READ…)
+        más allá de etiquetar el número.
+
+    Útil para sniff "qué pasa por el bus" más que análisis a nivel de cmd.
+    """
+
+    name = "SDIO / SD bus"
+    description = (
+        "SD/SDIO bus protocol. CMD + CLK son obligatorios; DAT0..DAT3 "
+        "opcionales según modo.\n"
+        "Modo 1-bit (por defecto): sólo DAT0.\n"
+        "Modo 4-bit: DAT0..DAT3 en paralelo (nibble por flanco).\n"
+        "El decoder marca los frames CMD/RESPONSE y arranques de bloques "
+        "DATA. No interpreta argumentos por comando ni verifica CRC."
+    )
+    channels_needed = ["CMD", "CLK"]
+    channels_optional = ["DAT0", "DAT1", "DAT2", "DAT3"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "bus_width":   {"label": "Bus width", "default": "1-bit",
+                            "kind": "choice",
+                            "options": ["1-bit", "4-bit"]},
+            "sample_edge": {"label": "Sample edge", "default": "rising",
+                            "kind": "choice",
+                            "options": ["rising", "falling"]},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        cmd = _binarize(time_arr, channel_voltages["CMD"])
+        clk = _binarize(time_arr, channel_voltages["CLK"])
+        bus_width = params["bus_width"]
+        edge_kind = params["sample_edge"]
+
+        sample_edges = _find_edges(clk, time_arr, edge_kind)
+        if len(sample_edges) < 48:
+            return []
+
+        # Muestrear CMD en cada flanco
+        cmd_bits = cmd[sample_edges]
+
+        # Buscar arranques: CMD packet empieza con 01 (start bit + dir bit)
+        # 48-bit total: S(1) | D(1) | CMD index(6) | ARG(32) | CRC7(7) | E(1)=1
+        # Nota: bound es i <= n - 48 (loop válido para extraer 48 bits desde i).
+        frames = []
+        i = 0
+        n = len(cmd_bits)
+        while i <= n - 48:
+            if cmd_bits[i] == 0 and cmd_bits[i + 1] == 1:
+                # Posible CMD (dir=1 host→card) o RESP (dir=0 card→host).
+                # Distinguimos: aquí dir=1 → CMD.
+                pkt = cmd_bits[i:i + 48]
+                start_bit = int(pkt[0])
+                dir_bit   = int(pkt[1])
+                cmd_idx = 0
+                for k in range(6):
+                    cmd_idx = (cmd_idx << 1) | int(pkt[2 + k])
+                arg = 0
+                for k in range(32):
+                    arg = (arg << 1) | int(pkt[8 + k])
+                crc = 0
+                for k in range(7):
+                    crc = (crc << 1) | int(pkt[40 + k])
+                end_bit = int(pkt[47])
+                t_start = time_arr[sample_edges[i]]
+                t_end = time_arr[sample_edges[i + 47]]
+                kind = "cmd" if dir_bit == 1 else "resp"
+                lbl = (f"CMD{cmd_idx:02d} arg=0x{arg:08X} CRC=0x{crc:02X}"
+                       if dir_bit == 1 else
+                       f"RESP idx={cmd_idx} arg=0x{arg:08X} CRC=0x{crc:02X}")
+                frames.append({
+                    "t_start": t_start, "t_end": t_end,
+                    "type": kind, "value": arg,
+                    "label": lbl,
+                    "color": "#ffb84d" if dir_bit == 1 else "#5fcc99",
+                    "error": (start_bit != 0 or end_bit != 1),
+                })
+                i += 48
+            elif cmd_bits[i] == 0 and cmd_bits[i + 1] == 0:
+                # Respuesta del card (dir=0). Mismo formato 48-bit.
+                pkt = cmd_bits[i:i + 48]
+                cmd_idx = 0
+                for k in range(6):
+                    cmd_idx = (cmd_idx << 1) | int(pkt[2 + k])
+                arg = 0
+                for k in range(32):
+                    arg = (arg << 1) | int(pkt[8 + k])
+                crc = 0
+                for k in range(7):
+                    crc = (crc << 1) | int(pkt[40 + k])
+                end_bit = int(pkt[47])
+                t_start = time_arr[sample_edges[i]]
+                t_end = time_arr[sample_edges[i + 47]]
+                frames.append({
+                    "t_start": t_start, "t_end": t_end,
+                    "type": "resp", "value": arg,
+                    "label": f"RESP idx={cmd_idx} arg=0x{arg:08X} CRC=0x{crc:02X}",
+                    "color": "#5fcc99",
+                    "error": (end_bit != 1),
+                })
+                i += 48
+            else:
+                i += 1
+
+        # Detectar arranques de DATA (start bit dominante en DAT0) si el usuario
+        # mapeó DAT0. Sólo marcamos arranques — bloques completos requerirían
+        # CRC16 + length, fuera de scope de esta primera versión.
+        dat0_v = channel_voltages.get("DAT0")
+        if dat0_v is not None:
+            dat0 = _binarize(time_arr, dat0_v)
+            dat0_bits = dat0[sample_edges]
+            for j in range(1, len(dat0_bits)):
+                if dat0_bits[j - 1] == 1 and dat0_bits[j] == 0:
+                    t_s = time_arr[sample_edges[j]]
+                    frames.append({
+                        "t_start": t_s,
+                        "t_end":   t_s + (time_arr[sample_edges[min(j + 1,
+                                          len(sample_edges) - 1)]] - t_s),
+                        "type": "data_start",
+                        "value": 0,
+                        "label": (f"DATA↓ ({bus_width})"),
+                        "color": "#5fa8ff",
+                        "error": False,
+                    })
+
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama SDIO: dos raíles (CMD, CLK) con frame de comando
+        Start · Tx · CMD(6) · ARG(32) · CRC7 · End. DAT0..3 implícito."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 28, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "SDIO command frame  (on CMD line)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+
+        weights = [
+            ("Start\n(0)", 0.5, "ok"),
+            ("Tx\n(1=cmd)", 0.5, "ctrl"),
+            ("CMD\n(6 b)", 1.5, "accent"),
+            ("ARG\n(32 b)", 4.5, "data"),
+            ("CRC7", 1.2, "accent"),
+            ("End\n(1)", 0.5, "err"),
+        ]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            col = theme.get(ck, theme["data"])
+            canvas.create_rectangle(cursor, box_y, cursor + bw,
+                                    box_y + box_h, outline=col, width=1.5)
+            canvas.create_text(cursor + bw / 2, box_y + box_h / 2,
+                               text=label, fill=col,
+                               font=("Segoe UI", 8, "bold"),
+                               justify="center")
+            cursor += bw
+
+        cls._dgm_arrow_h(canvas, x0, x0 + total * unit,
+                         box_y + box_h + 12, theme["dim"],
+                         label="48-bit command",
+                         text_color=theme["fg"])
+
+        return True
+
+
+# -----------------------------
+# MIL-STD-1553 (avionics / military data bus)
+# -----------------------------
+class MilStd1553Decoder(ProtocolDecoder):
+    """MIL-STD-1553B básico — decodifica Manchester II y delimita por
+    sync de comando vs sync de data.
+
+    Implementación simplificada (objetivo: visualizar palabras del bus,
+    no validar todo el protocolo):
+      - Sync 3 bits (1.5 bit-times alto + 1.5 bit-times bajo = command/status,
+        invertido = data).
+      - 16 bits de payload codificados Manchester II
+        (transición a media bit: 0=alto→bajo, 1=bajo→alto, NRZ-L invertido).
+      - Parity bit (impar, 1 bit).
+    Total: 20 bit-times por palabra.
+
+    El bit rate fijado por la spec es 1 Mbit/s. El usuario lo puede ajustar
+    para señales recuperadas/escaladas.
+
+    Notas:
+      - Espera la señal ya decodificada a TTL lógico (recuperada del par
+        diferencial). No demodula la portadora.
+      - No diferencia transmitter/receiver address — solo extrae los 16
+        bits y el tipo (CMD/STAT vs DATA).
+    """
+
+    name = "MIL-STD-1553"
+    description = (
+        "MIL-STD-1553B avionics bus (1 Mbit/s, Manchester II).\n"
+        "Decodifica el sync, los 16 bits de palabra y la paridad.\n"
+        "Diferencia palabras de Comando/Status vs Data por la polaridad del sync."
+    )
+    channels_needed = ["BUS"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "bit_rate":   {"label": "Bit rate (b/s)",
+                           "default": 1_000_000, "kind": "int"},
+            "sync_polarity": {"label": "Sync detection",
+                              "default": "Auto",
+                              "kind": "choice",
+                              "options": ["Auto",
+                                          "CMD/STAT first",
+                                          "DATA first"]},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        """Decodificador básico Manchester. Identifica syncs por su
+        duración (~3 bits = 3 * 1/bit_rate) y luego muestrea 16+1 bits
+        a media-bit en los flancos esperados."""
+        v = channel_voltages["BUS"]
+        bit_time = 1.0 / float(params.get("bit_rate", 1_000_000))
+        b = _binarize(time_arr, v)
+        edges = _find_edges(b, time_arr, "any")
+        frames = []
+        if len(edges) < 3:
+            return frames
+
+        # Detección heurística de syncs: dos intervalos consecutivos de
+        # ~1.5 * bit_time del mismo nivel.
+        i = 0
+        while i < len(edges) - 1:
+            e0 = int(edges[i])
+            e1 = int(edges[i + 1])
+            dt = time_arr[e1] - time_arr[e0]
+            # Sync candidato: pulso de ~1.5 bits
+            if 1.2 * bit_time < dt < 1.8 * bit_time:
+                level_first = int(b[e0])
+                t_sync = time_arr[e0]
+                # 16 bits de payload + 1 parity
+                payload = 0
+                t_cur = t_sync + 3 * bit_time  # final del sync
+                for k in range(16):
+                    t_s = t_cur + (k + 0.75) * bit_time
+                    bit = _sample_at(b, time_arr, t_s)
+                    payload = (payload << 1) | int(bit)
+                t_par = t_cur + 16.75 * bit_time
+                parity_bit = _sample_at(b, time_arr, t_par)
+                ones = bin(payload).count("1") + int(parity_bit)
+                parity_ok = (ones % 2) == 1  # paridad impar
+                wtype = "CMD/STAT" if level_first == 1 else "DATA"
+                col = "#ffb84d" if wtype == "CMD/STAT" else "#5fa8ff"
+                frames.append({
+                    "t_start": t_sync,
+                    "t_end":   t_par + bit_time,
+                    "type":    "word",
+                    "value":   payload,
+                    "label":   f"{wtype} 0x{payload:04X}"
+                              + ("" if parity_ok else " ⚠P"),
+                    "color":   col,
+                    "error":   not parity_ok,
+                })
+                # Avanzar índice de edges hasta después del último bit
+                t_done = t_par + bit_time
+                while i < len(edges) and time_arr[int(edges[i])] < t_done:
+                    i += 1
+                continue
+            i += 1
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama MIL-STD-1553: Sync · 16 b · Parity. Manchester II."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 28, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "MIL-STD-1553  (Manchester II · 1 Mbit/s)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+
+        # 3 bits sync + 16 data + 1 parity = 20 bit-times
+        weights = [
+            ("Sync\n(3 bt)", 3.0, "err"),
+            ("Data / Command\n(16 bits)", 16.0, "data"),
+            ("P\n(1)", 1.0, "ok"),
+        ]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            col = theme.get(ck, theme["data"])
+            canvas.create_rectangle(cursor, box_y, cursor + bw,
+                                    box_y + box_h, outline=col, width=1.5)
+            canvas.create_text(cursor + bw / 2, box_y + box_h / 2,
+                               text=label, fill=col,
+                               font=("Segoe UI", 8, "bold"),
+                               justify="center")
+            cursor += bw
+
+        cls._dgm_arrow_h(canvas, x0, x0 + total * unit,
+                         box_y + box_h + 12, theme["dim"],
+                         label="20 bit-times / word",
+                         text_color=theme["fg"])
+
+        return True
+
+
+# -----------------------------
+# ARINC 429 (avionics bus)
+# -----------------------------
+class Arinc429Decoder(ProtocolDecoder):
+    """ARINC 429 — bus aviónico unidireccional broadcast.
+
+    Palabra de 32 bits a 12.5 kbit/s (low speed) o 100 kbit/s (high speed),
+    codificación bipolar return-to-zero (BPRZ). Aquí asumimos señal ya
+    recuperada a TTL lógico — el usuario suministra la señal binaria.
+
+    Estructura del campo de 32 bits (orden de transmisión, LSB primero):
+      [1..8]   Label (8 bits)            — identificador del tipo de dato
+      [9..10]  SDI (2 bits)              — Source/Destination Identifier
+      [11..29] Data field (19 bits)
+      [30..31] SSM (2 bits)              — Sign/Status Matrix
+      [32]     Parity (1 bit, impar)
+
+    El frame se separa por un gap mínimo de 4 bit-times (idle).
+    """
+
+    name = "ARINC 429"
+    description = (
+        "ARINC 429 avionics bus. 32-bit words at 12.5 or 100 kbit/s.\n"
+        "Campos: Label · SDI · Data · SSM · Parity.\n"
+        "Asume señal recuperada a TTL (idle = 0)."
+    )
+    channels_needed = ["A429"]
+
+    @classmethod
+    def default_params(cls):
+        return {
+            "bit_rate":  {"label": "Bit rate",
+                          "default": "Low (12.5 kbit/s)",
+                          "kind": "choice",
+                          "options": ["Low (12.5 kbit/s)",
+                                      "High (100 kbit/s)",
+                                      "Custom"]},
+            "bit_rate_custom": {"label": "  Custom (b/s)",
+                                "default": 12500, "kind": "int"},
+            "label_format": {"label": "Label format",
+                             "default": "Octal",
+                             "kind": "choice",
+                             "options": ["Octal", "Hex", "Decimal"]},
+        }
+
+    @classmethod
+    def decode(cls, time_arr, channel_voltages, params):
+        v = channel_voltages["A429"]
+        rate_choice = str(params.get("bit_rate", "Low (12.5 kbit/s)"))
+        if rate_choice.startswith("Low"):
+            rate = 12500.0
+        elif rate_choice.startswith("High"):
+            rate = 100000.0
+        else:
+            rate = float(params.get("bit_rate_custom", 12500))
+        bit_time = 1.0 / rate
+
+        b = _binarize(time_arr, v)
+        edges = _find_edges(b, time_arr, "rising")
+        frames = []
+        if len(edges) < 2:
+            return frames
+
+        lbl_fmt = str(params.get("label_format", "Octal"))
+
+        i = 0
+        while i < len(edges):
+            # Buscar inicio de palabra: gap previo de ≥4 bit_times
+            e_idx = int(edges[i])
+            t_start = time_arr[e_idx]
+            if i > 0:
+                t_prev = time_arr[int(edges[i - 1])]
+                if (t_start - t_prev) < 3.5 * bit_time:
+                    # No es inicio de palabra (parte de la palabra anterior)
+                    i += 1
+                    continue
+            # Muestrear 32 bits
+            bits = []
+            for k in range(32):
+                t_s = t_start + (k + 0.5) * bit_time
+                bits.append(int(_sample_at(b, time_arr, t_s)))
+
+            # Reconstruir campos (LSB primero → bits[0]=LSB del label)
+            def slice_bits(start, n):
+                val = 0
+                for j in range(n):
+                    val |= (bits[start + j] & 1) << j
+                return val
+
+            label_raw = slice_bits(0, 8)
+            sdi  = slice_bits(8, 2)
+            data = slice_bits(10, 19)
+            ssm  = slice_bits(29, 2)
+            parity = bits[31]
+            ones = sum(bits)
+            parity_ok = (ones % 2) == 1  # paridad impar
+
+            # Formatear label
+            if lbl_fmt == "Octal":
+                # ARINC convencional: octal
+                label_str = f"{label_raw:03o}"
+            elif lbl_fmt == "Hex":
+                label_str = f"0x{label_raw:02X}"
+            else:
+                label_str = str(label_raw)
+
+            t_end = t_start + 32 * bit_time
+            frames.append({
+                "t_start": t_start,
+                "t_end":   t_end,
+                "type":    "word",
+                "value":   (label_raw, sdi, data, ssm, parity),
+                "label":   (f"L={label_str} SDI={sdi} "
+                           f"D=0x{data:05X} SSM={ssm}"
+                           + ("" if parity_ok else " ⚠P")),
+                "color":   "#5fa8ff" if parity_ok else "#cc4444",
+                "error":   not parity_ok,
+            })
+
+            # Avanzar past este frame
+            while i < len(edges) and time_arr[int(edges[i])] < t_end:
+                i += 1
+        return frames
+
+    @classmethod
+    def draw_diagram(cls, canvas, x, y, w, h, theme):
+        """Diagrama ARINC 429: tabla de bits 32..1 con campos
+        Parity · SSM · Data · SDI · Label."""
+        pad_l, pad_r = 16, 16
+        pad_t, pad_b = 50, 22
+        x0 = x + pad_l
+        x1 = x + w - pad_r
+        plot_w = max(80, x1 - x0)
+        box_h = h - pad_t - pad_b
+        box_y = y + pad_t
+
+        cls._dgm_label(canvas, x + 10, y + 10,
+                       "ARINC 429  (32-bit word, LSB first transmitted)",
+                       theme["dim"], font=("Segoe UI", 9, "bold"),
+                       anchor="w")
+        cls._dgm_label(canvas, x + 10, y + 28,
+                       "Field layout (bit numbering ARINC):",
+                       theme["dim"],
+                       font=("Segoe UI", 8), anchor="w")
+
+        # Convención ARINC: bit 32 (MSB) primero en la diagrama (izda),
+        # bit 1 (LSB) último — coincide con el panel R&S.
+        weights = [
+            ("P\n32", 1, "ok"),
+            ("SSM\n31-30", 2, "ctrl"),
+            ("Data field\n29-11", 19, "data"),
+            ("SDI\n10-9", 2, "ctrl"),
+            ("Label\n8-1", 8, "accent"),
+        ]
+        total = sum(w for _, w, _ in weights)
+        unit = plot_w / total
+
+        cursor = x0
+        for label, width, ck in weights:
+            bw = width * unit
+            col = theme.get(ck, theme["data"])
+            canvas.create_rectangle(cursor, box_y, cursor + bw,
+                                    box_y + box_h, outline=col, width=1.5)
+            canvas.create_text(cursor + bw / 2, box_y + box_h / 2,
+                               text=label, fill=col,
+                               font=("Segoe UI", 8, "bold"),
+                               justify="center")
+            cursor += bw
+
+        cls._dgm_arrow_h(canvas, x0, x0 + total * unit,
+                         box_y + box_h + 12, theme["dim"],
+                         label="32-bit word",
+                         text_color=theme["fg"])
+
+        return True
+
+
+# Registro de decoders disponibles. Para añadir uno nuevo: subclase de
+# ProtocolDecoder + entrada aquí, y añadirlo a la categoría correspondiente
+# en DECODER_CATEGORIES. La UI lo recoge automáticamente.
+DECODER_REGISTRY = [
+    UartDecoder, I2CDecoder, SPIDecoder,
+    LinDecoder, I2SDecoder, SdioDecoder,
+    CanDecoder, CanFdDecoder, J1939Decoder,
+    MilStd1553Decoder, Arinc429Decoder,
+]
+
+# Categorías para el acordeón estilo MEAS. El orden de los grupos y el
+# orden dentro de cada grupo se respeta en la UI.
+DECODER_CATEGORIES = {
+    "SERIAL / INDUSTRIAL": [UartDecoder],
+    "EMBEDDED": [I2CDecoder, SPIDecoder, I2SDecoder, SdioDecoder],
+    "AUTOMOTIVE": [LinDecoder, CanDecoder, CanFdDecoder, J1939Decoder],
+    "AVIONICS / MILITARY": [MilStd1553Decoder, Arinc429Decoder],
+}
+
+
+class DecoderWindow:
+    """Ventana de configuración y resultados del decoder de protocolos.
+
+    Flujo:
+      1. Usuario elige protocolo del combo.
+      2. La UI se reconstruye según los `channels_needed` y `default_params`.
+      3. Asigna canales reales del scope a cada rol del protocolo.
+      4. Pulsa Decode → se llama al método decode() del decoder.
+      5. Frames resultantes:
+         - Se muestran como tabla en esta ventana.
+         - Se envían al scope para pintar BAJO la traza correspondiente
+           (scope._set_protocol_frames(frames, channel_roles)).
+    """
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.win = tk.Toplevel(scope.root)
+        self.win.withdraw()  # anti-flash
+        self.win.title("Protocol decoder")
+        # Centrado sobre la principal (igual que FFT/Eye). En lugar de
+        # geometry("700x600") fijo que dejaba al WM elegir posición
+        # (acababa en cualquier esquina, cambiando entre aperturas).
+        scope._center_dialog(self.win, 700, 960)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+        # ESC también cierra la ventana
+        try:
+            self.win.bind("<Escape>", lambda _e: self._on_close())
+        except Exception:
+            pass
+        # Hereda icono de la ventana raíz y se marca transient para que en
+        # Windows no aparezca como entrada propia en la taskbar.
+        scope._apply_window_chrome(self.win)
+
+        # Estado
+        self.current_decoder_cls = DECODER_REGISTRY[0]
+        # Variables Tk para mapeo canal->rol y params
+        self.role_vars = {}     # role_name -> StringVar(canal)
+        self.param_vars = {}    # param_name -> Var (Bool/Int/StringVar)
+        self.last_frames = []
+
+        self._build_ui()
+        self._on_protocol_changed()
+
+    def _on_close(self):
+        """Al cerrar la ventana, limpiar el render de frames bajo la traza."""
+        try:
+            self.scope._set_protocol_frames([], {})
+        except Exception:
+            pass
+        self.win.destroy()
+
+    # Token interno para "canal no asignado" en comboboxes de roles opcionales.
+    _NONE_TOKEN = "— (none) —"
+
+    def _build_ui(self):
+        self.win.configure(bg=COLOR_BG)
+        # NO sobrescribir geometry aquí: el __init__ ya llamó a
+        # _center_dialog(700, 960) que centra Y dimensiona. Hacer
+        # geometry("780x720") aquí machacaba ese tamaño y dejaba la
+        # tabla de frames cortada por la parte de abajo.
+
+        # Header igual estilo MEAS
+        hdr = tk.Frame(self.win, bg=COLOR_BG_ALT, height=40)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="PROTOCOL DECODER",
+                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 font=("Segoe UI", 11, "bold")
+                 ).pack(side=tk.LEFT, padx=14, pady=8)
+        # Indicador del protocolo seleccionado a la derecha del header
+        self._selected_lbl = tk.Label(
+            hdr, text="", bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            font=("Segoe UI", 10, "bold"))
+        self._selected_lbl.pack(side=tk.RIGHT, padx=14, pady=8)
+
+        # ---- Panel superior: acordeón de categorías ----
+        cats_outer = tk.Frame(self.win, bg=COLOR_BG)
+        cats_outer.pack(fill=tk.X, padx=10, pady=(8, 4))
+
+        self.protocol_var = tk.StringVar(value=DECODER_REGISTRY[0].name)
+
+        # Estado del acordeón: solo una sección abierta a la vez
+        first_cat = next(iter(DECODER_CATEGORIES.keys()))
+        section_state = {"open": first_cat}
+        section_grids = {}
+        section_carets = {}
+        # Mapa botón -> nombre de protocolo, para repintar selección
+        self._proto_buttons = {}
+
+        def make_cat_section(parent, title, decoder_list):
+            hdr_f = tk.Frame(parent, bg=COLOR_BG_ALT, height=28, cursor="hand2")
+            hdr_f.pack(fill=tk.X, pady=(6, 0))
+            hdr_f.pack_propagate(False)
+
+            caret = tk.Label(hdr_f, text="▼", bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                             font=("Segoe UI", 9, "bold"))
+            caret.pack(side=tk.LEFT, padx=(10, 6), pady=4)
+            title_lbl = tk.Label(hdr_f, text=title, bg=COLOR_BG_ALT,
+                                 fg=COLOR_TEXT,
+                                 font=("Segoe UI", 9, "bold"))
+            title_lbl.pack(side=tk.LEFT, pady=4)
+            section_carets[title] = caret
+
+            grid = tk.Frame(parent, bg=COLOR_BG)
+            section_grids[title] = grid
+
+            COLS = 2
+            for i, dec_cls in enumerate(decoder_list):
+                r, c = divmod(i, COLS)
+                btn = tk.Button(
+                    grid, text=dec_cls.name,
+                    bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                    activebackground=COLOR_BG_HOVER,
+                    activeforeground=COLOR_TEXT,
+                    bd=1, relief="flat",
+                    font=("Segoe UI", 9),
+                    padx=8, pady=6,
+                    anchor="w", width=28,
+                    highlightbackground=COLOR_BORDER,
+                    highlightthickness=1,
+                )
+                btn.grid(row=r, column=c, padx=3, pady=2, sticky="we")
+                self._proto_buttons[dec_cls.name] = btn
+
+                # Tooltip con la descripción del protocolo
+                desc = getattr(dec_cls, "description", "") or ""
+                if desc:
+                    Tooltip(btn, desc)
+
+                def on_enter(e, b=btn):
+                    if int(b.cget("highlightthickness")) < 2:
+                        b.config(bg=COLOR_BG_HOVER,
+                                 highlightbackground=COLOR_ACCENT)
+                def on_leave(e, b=btn):
+                    if int(b.cget("highlightthickness")) < 2:
+                        b.config(bg=COLOR_BG_ALT,
+                                 highlightbackground=COLOR_BORDER)
+                btn.bind("<Enter>", on_enter)
+                btn.bind("<Leave>", on_leave)
+
+                def make_handler(name=dec_cls.name, b=btn):
+                    def _click():
+                        # Repintar todos los botones a estado normal
+                        for nm, btn_ref in self._proto_buttons.items():
+                            btn_ref.config(highlightbackground=COLOR_BORDER,
+                                           highlightthickness=1,
+                                           bg=COLOR_BG_ALT)
+                        b.config(highlightbackground=COLOR_ACCENT,
+                                 highlightthickness=2)
+                        self.protocol_var.set(name)
+                        self._on_protocol_changed()
+                    return _click
+                btn.config(command=make_handler())
+                grid.columnconfigure(c, weight=1)
+
+            def toggle(_e=None):
+                if section_state["open"] == title:
+                    return
+                old = section_state["open"]
+                if old in section_grids:
+                    section_grids[old].pack_forget()
+                    section_carets[old].config(text="▶")
+                section_state["open"] = title
+                section_grids[title].pack(
+                    fill=tk.X, padx=4, pady=4,
+                    after=section_carets[title].master)
+                section_carets[title].config(text="▼")
+            hdr_f.bind("<Button-1>", toggle)
+            caret.bind("<Button-1>", toggle)
+            title_lbl.bind("<Button-1>", toggle)
+
+        for cat_title, dec_list in DECODER_CATEGORIES.items():
+            make_cat_section(cats_outer, cat_title, dec_list)
+
+        # Abrir solo la primera categoría
+        section_grids[first_cat].pack(
+            fill=tk.X, padx=4, pady=4,
+            after=section_carets[first_cat].master)
+        for other in list(DECODER_CATEGORIES.keys())[1:]:
+            section_carets[other].config(text="▶")
+
+        # ---- Diagrama explicativo del frame ----
+        # Cada decoder puede aportar un diagrama (método draw_diagram).
+        # Si no lo implementa, este panel muestra un placeholder discreto.
+        # Se redibuja al cambiar protocolo y al cambiar el tamaño del canvas.
+        self.diagram_frame = ttk.LabelFrame(
+            self.win, text="Frame structure", padding=4)
+        self.diagram_frame.pack(fill=tk.X, padx=10, pady=(4, 4))
+
+        # Canvas con altura fija razonable; ancho responde al pack.
+        # bg viene del tema; lo refrescamos en _refresh_diagram.
+        self.diagram_canvas = tk.Canvas(
+            self.diagram_frame, height=130, bd=0, highlightthickness=0,
+            bg=COLOR_BG_ALT,
+        )
+        self.diagram_canvas.pack(fill=tk.X, expand=False)
+        # Repintar al redimensionar (el ancho cambia con la ventana).
+        self.diagram_canvas.bind(
+            "<Configure>", lambda _e: self._refresh_diagram())
+
+        # ---- Channel mapping y parámetros ----
+        ctrl = ttk.Frame(self.win, padding=(10, 4, 10, 4))
+        ctrl.pack(side=tk.TOP, fill=tk.X)
+
+        # Frame dinámico para mapeo de canales
+        self.channel_map_frame = ttk.LabelFrame(
+            ctrl, text="Channel mapping", padding=8)
+        self.channel_map_frame.pack(fill=tk.X, pady=(4, 4))
+
+        # Frame dinámico para parámetros
+        self.params_frame = ttk.LabelFrame(
+            ctrl, text="Parameters", padding=8)
+        self.params_frame.pack(fill=tk.X, pady=(4, 4))
+
+        # Botones
+        btn_row = ttk.Frame(ctrl)
+        btn_row.pack(fill=tk.X, pady=(8, 4))
+        decode_btn = ttk.Button(btn_row, text="Decode",
+                                style="Accent.TButton",
+                                command=self._decode)
+        decode_btn.pack(side=tk.LEFT, padx=2)
+        Tooltip(decode_btn,
+                "Decode the full capture using the selected channels and "
+                "parameters.\nResults are listed below and overlaid on the "
+                "main plot.")
+        clear_btn = ttk.Button(btn_row, text="Clear", command=self._clear)
+        clear_btn.pack(side=tk.LEFT, padx=2)
+        Tooltip(clear_btn, "Clear decoded frames and remove overlay from main plot")
+        export_btn = ttk.Button(btn_row, text="Export CSV…",
+                                command=self._export_csv)
+        export_btn.pack(side=tk.LEFT, padx=2)
+        Tooltip(export_btn, "Save the decoded frames table to a CSV file")
+
+        self.status_label = tk.Label(
+            btn_row, text="", bg=COLOR_BG,
+            fg=COLOR_TEXT_DIM, font=("Segoe UI", 9))
+        self.status_label.pack(side=tk.RIGHT, padx=10)
+
+        # Tabla de resultados
+        table_frame = ttk.Frame(self.win)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        cols = ("t_start", "type", "label", "duration")
+        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings",
+                                 height=12)
+        self.tree.heading("t_start", text="Time")
+        self.tree.heading("type",    text="Type")
+        self.tree.heading("label",   text="Value")
+        self.tree.heading("duration", text="Duration")
+        self.tree.column("t_start", width=120, anchor="w")
+        self.tree.column("type",    width=80,  anchor="w")
+        self.tree.column("label",   width=240, anchor="w")
+        self.tree.column("duration", width=100, anchor="w")
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scroll = ttk.Scrollbar(table_frame, orient="vertical",
+                               command=self.tree.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.configure(yscrollcommand=scroll.set)
+
+        # Doble-click en una fila → centrar la vista del scope ahí
+        self.tree.bind("<Double-1>", self._on_row_double_click)
+
+        # Marcar como seleccionado el botón del protocolo inicial
+        init_btn = self._proto_buttons.get(self.protocol_var.get())
+        if init_btn is not None:
+            init_btn.config(highlightbackground=COLOR_ACCENT,
+                            highlightthickness=2)
+
+    def _on_protocol_changed(self):
+        # Localizar la clase
+        name = self.protocol_var.get()
+        for d in DECODER_REGISTRY:
+            if d.name == name:
+                self.current_decoder_cls = d
+                break
+
+        # Etiqueta superior con nombre del protocolo activo
+        try:
+            self._selected_lbl.config(text=name)
+        except Exception:
+            pass
+
+        # Reconstruir channel mapping
+        for w in self.channel_map_frame.winfo_children():
+            w.destroy()
+        self.role_vars = {}
+        ch_names = [ch["name"] for ch in self.scope.channels]
+        required = list(self.current_decoder_cls.channels_needed)
+        optional = list(getattr(self.current_decoder_cls,
+                                "channels_optional", []))
+
+        if not ch_names:
+            tk.Label(self.channel_map_frame,
+                     text="No channels loaded. Open a CSV first.",
+                     bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM
+                     ).pack(anchor="w")
+        else:
+            # Layout: cabecera + filas. Obligatorios primero, opcionales después
+            # en una sub-sección visualmente diferenciada.
+            all_roles = [(r, False) for r in required] + \
+                        [(r, True)  for r in optional]
+            for i, (role, is_opt) in enumerate(all_roles):
+                row = ttk.Frame(self.channel_map_frame)
+                row.pack(fill=tk.X, pady=2)
+                label_text = f"{role}:" + ("  (opt)" if is_opt else "")
+                ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
+
+                # Para opcionales añadimos el token "(none)" al inicio
+                if is_opt:
+                    values = [self._NONE_TOKEN] + ch_names
+                    default = self._NONE_TOKEN
+                else:
+                    values = ch_names
+                    default = ch_names[i] if i < len(ch_names) else ch_names[0]
+
+                var = tk.StringVar(value=default)
+                self.role_vars[role] = var
+                cb = ttk.Combobox(row, textvariable=var, values=values,
+                                  state="readonly", width=18)
+                cb.pack(side=tk.LEFT, padx=4)
+                if is_opt:
+                    Tooltip(cb,
+                            f"Optional. Channel carrying the {role} signal.\n"
+                            f"Set to '{self._NONE_TOKEN}' to skip this role.")
+                else:
+                    Tooltip(cb, f"Channel carrying the {role} signal")
+
+        # Reconstruir parámetros
+        for w in self.params_frame.winfo_children():
+            w.destroy()
+        self.param_vars = {}
+        params = self.current_decoder_cls.default_params()
+        # Layout: 2 columnas
+        i = 0
+        for pname, pdef in params.items():
+            row_idx = i // 2
+            col_idx = i % 2
+            cell = ttk.Frame(self.params_frame)
+            cell.grid(row=row_idx, column=col_idx, padx=8, pady=2, sticky="w")
+            ttk.Label(cell, text=f"{pdef['label']}:", width=18,
+                      ).pack(side=tk.LEFT)
+            kind = pdef["kind"]
+            default = pdef["default"]
+            if kind == "bool":
+                var = tk.BooleanVar(value=bool(default))
+                w = ttk.Checkbutton(cell, variable=var)
+            elif kind == "choice":
+                var = tk.StringVar(value=str(default))
+                w = ttk.Combobox(cell, textvariable=var,
+                                 values=[str(o) for o in pdef["options"]],
+                                 state="readonly", width=18)
+            elif kind == "int":
+                var = tk.IntVar(value=int(default))
+                w = ttk.Spinbox(cell, from_=0, to=int(1e9),
+                                textvariable=var, width=12)
+            else:  # float
+                var = tk.DoubleVar(value=float(default))
+                w = ttk.Spinbox(cell, from_=0, to=1e9, increment=0.1,
+                                textvariable=var, width=12)
+            w.pack(side=tk.LEFT)
+            self.param_vars[pname] = (var, kind)
+            i += 1
+
+        # Refrescar diagrama explicativo del frame
+        self._refresh_diagram()
+
+    def _refresh_diagram(self):
+        """Limpia el canvas de diagrama y pide al decoder activo que se
+        dibuje. Si no hay diagrama implementado, muestra un placeholder."""
+        if not hasattr(self, "diagram_canvas"):
+            return
+        c = self.diagram_canvas
+        c.delete("all")
+
+        # Asegurar fondo coherente con el tema actual
+        c.configure(bg=COLOR_BG_ALT)
+
+        # El widget puede no estar aún mapeado: usar winfo_width como mejor
+        # aproximación, con fallback al request.
+        w = c.winfo_width()
+        if w <= 1:
+            w = c.winfo_reqwidth() or 600
+        h = int(c.cget("height"))
+
+        theme = {
+            "bg":     COLOR_BG_ALT,
+            "fg":     COLOR_TEXT,
+            "dim":    COLOR_TEXT_DIM,
+            "accent": COLOR_ACCENT,
+            "ok":     "#7fdb7f",
+            "err":    "#ff6b6b",
+            "data":   "#5fa8ff",
+            "ctrl":   "#888888",
+            "border": COLOR_BORDER,
+        }
+
+        drew = False
+        try:
+            drew = bool(
+                self.current_decoder_cls.draw_diagram(c, 0, 0, w, h, theme))
+        except Exception:
+            # Si el diagrama falla, no rompemos la ventana — sólo logueamos.
+            import traceback
+            traceback.print_exc()
+            drew = False
+
+        # Si el decoder no aporta diagrama, mostrar un placeholder discreto
+        if not drew:
+            c.create_text(
+                w / 2, h / 2,
+                text="(no diagram available for this protocol)",
+                fill=COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
+
+    def _collect_params(self):
+        """Lee los param_vars y devuelve dict {name: value} con conversiones
+        adecuadas (especialmente: convertir str 'choice' a int/str según
+        el tipo de la opción original)."""
+        result = {}
+        defaults = self.current_decoder_cls.default_params()
+        for name, (var, kind) in self.param_vars.items():
+            val = var.get()
+            if kind == "choice":
+                # Convertir a tipo nativo de la opción
+                options = defaults[name]["options"]
+                # Si las options son ints, intentar parsear
+                if all(isinstance(o, int) for o in options):
+                    try:
+                        val = int(val)
+                    except ValueError:
+                        val = options[0]
+            result[name] = val
+        return result
+
+    def _decode(self):
+        if not self.scope.channels:
+            self.status_label.config(text="No channels loaded.")
+            return
+        # Mapear roles a arrays. Para roles opcionales, "(none)" → None.
+        ch_voltages = {}
+        ch_by_name = {ch["name"]: ch for ch in self.scope.channels}
+        roles_to_idx = {}
+        optional_set = set(getattr(self.current_decoder_cls,
+                                   "channels_optional", []))
+        for role, var in self.role_vars.items():
+            name = var.get()
+            if role in optional_set and name == self._NONE_TOKEN:
+                ch_voltages[role] = None
+                continue
+            if name not in ch_by_name:
+                self.status_label.config(text=f"Channel {name} not found")
+                return
+            ch_voltages[role] = ch_by_name[name]["voltage"]
+            roles_to_idx[role] = self.scope.channels.index(ch_by_name[name])
+
+        params = self._collect_params()
+        try:
+            frames = self.current_decoder_cls.decode(
+                self.scope.time, ch_voltages, params)
+        except Exception as e:
+            self.status_label.config(text=f"Decode error: {e}")
+            import traceback; traceback.print_exc()
+            return
+
+        self.last_frames = frames
+        self._populate_table(frames)
+        # Pasar al scope para overlay bajo la traza. Elegimos como "principal"
+        # el primer rol obligatorio que esté efectivamente mapeado.
+        primary_idx = None
+        for role in self.current_decoder_cls.channels_needed:
+            if role in roles_to_idx:
+                primary_idx = roles_to_idx[role]
+                break
+        try:
+            if primary_idx is not None:
+                self.scope._set_protocol_frames(frames,
+                                                {"primary": primary_idx})
+        except Exception:
+            pass
+        self.status_label.config(text=f"{len(frames)} frames")
+
+    def _populate_table(self, frames):
+        # Limpiar
+        for it in self.tree.get_children():
+            self.tree.delete(it)
+        # time_origin del scope: suma al t_start para mostrar tiempos REALES
+        # (consistentes con las etiquetas del eje X principal).
+        # Duration NO se ajusta porque es una diferencia.
+        t_o = self.scope._t_display_origin() if hasattr(self.scope, "_t_display_origin") else getattr(self.scope, "time_origin", 0.0)
+        for f in frames:
+            t_str = format_si(f["t_start"] + t_o, "s")
+            dur = format_si(f["t_end"] - f["t_start"], "s")
+            self.tree.insert("", "end", values=(t_str, f["type"],
+                                                f.get("label", ""), dur))
+
+    def _on_row_double_click(self, _event):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        idx = self.tree.index(sel[0])
+        if idx < 0 or idx >= len(self.last_frames):
+            return
+        f = self.last_frames[idx]
+        # Centrar la vista del scope en el frame seleccionado
+        try:
+            t_center = (f["t_start"] + f["t_end"]) / 2.0
+            window = self.scope.t_div.get() * H_DIVS
+            self.scope.t_offset.set(max(0.0, t_center - window / 2.0))
+            self.scope.update_plot()
+        except Exception:
+            pass
+
+    def _clear(self):
+        self.last_frames = []
+        for it in self.tree.get_children():
+            self.tree.delete(it)
+        try:
+            self.scope._set_protocol_frames([], {})
+        except Exception:
+            pass
+        self.status_label.config(text="Cleared")
+
+    def _export_csv(self):
+        if not self.last_frames:
+            self.status_label.config(text="Nothing to export")
+            return
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            parent=self.win,
+            title="Export decoded frames",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv"), ("All", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("t_start,t_end,type,value,label,error\n")
+                for f in self.last_frames:
+                    val = f.get("value", "")
+                    if isinstance(val, int):
+                        val = f"0x{val:X}"
+                    label = str(f.get("label", "")).replace(",", " ")
+                    fh.write(f"{f['t_start']},{f['t_end']},{f['type']},"
+                             f"{val},{label},{int(f.get('error', False))}\n")
+            self.scope._show_toast(f"Saved: {path}")
+        except Exception as e:
+            self.status_label.config(text=f"Export failed: {e}")
+
+
+# =====================================================
+# User config (persistent across sessions)
+# =====================================================
+# Modo PORTABLE: el fichero de config vive JUNTO al ejecutable, no en el
+# home del usuario. Una instalación queda autocontenida — la carpeta del
+# programa se puede mover, copiar o borrar como una unidad sin dejar restos.
+#
+# Estrategia para encontrar la carpeta:
+#   - Si la app está empaquetada con PyInstaller (sys.frozen=True):
+#       carpeta del .exe vía sys.executable.
+#   - En modo desarrollo (script .py):
+#       carpeta del script principal vía __file__.
+#
+# Si la carpeta no es escribible (instalación en Program Files con UAC,
+# USB read-only, etc.) NO caemos a home — mostramos diálogo al usuario
+# pidiendo que mueva la app a otra ubicación. Esto se decide así
+# DELIBERADAMENTE para que no haya sorpresas: o funciona donde está, o
+# el usuario lo sabe.
+
+
+def _app_base_dir():
+    """Devuelve el directorio que aloja al ejecutable o al script.
+    Estable entre arranques. NO depende del cwd."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller: sys.executable apunta al .exe real (no a python.exe)
+        return os.path.dirname(os.path.abspath(sys.executable))
+    # Modo desarrollo
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _user_config_path():
+    """Ruta del fichero de config (portable, junto al ejecutable)."""
+    return os.path.join(_app_base_dir(), "config.json")
+
+
+def _is_writable(directory):
+    """Comprueba REALMENTE si podemos escribir en el directorio creando y
+    borrando un fichero temporal. os.access() no es fiable en Windows
+    (UAC virtualization, ACLs complejas) por lo que la única forma robusta
+    es probar a escribir."""
+    try:
+        test_path = os.path.join(directory, ".scope_write_test_tmp")
+        with open(test_path, "w") as fh:
+            fh.write("ok")
+        os.remove(test_path)
+        return True
+    except Exception:
+        return False
+
+
+# Flag global: ¿hemos verificado ya escribibilidad? La verificación cuesta
+# poco pero la hacemos una vez al inicio y propagamos el resultado.
+# None = no comprobado, True/False = resultado del último chequeo.
+_CONFIG_DIR_WRITABLE = None
+
+
+def check_config_writable():
+    """Verifica escribibilidad del directorio de config y devuelve el
+    resultado. Cachea para no probar dos veces."""
+    global _CONFIG_DIR_WRITABLE
+    if _CONFIG_DIR_WRITABLE is None:
+        _CONFIG_DIR_WRITABLE = _is_writable(_app_base_dir())
+    return _CONFIG_DIR_WRITABLE
+
+
+def load_user_config():
+    """Lee el config persistido. Devuelve dict (vacío si no existe o falla).
+
+    Lectura SIEMPRE permitida (incluso si el dir no es escribible, podría
+    haberse colocado un config.json read-only por un admin)."""
+    path = _user_config_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def save_user_config(updates):
+    """Mezcla `updates` (dict) con el config existente y lo escribe.
+
+    Convención: si un valor en `updates` es None, se BORRA esa clave del
+    config (en vez de almacenarla como null). Esto permite a los callers
+    "limpiar" preferencias específicas sin tener que cargar+modificar+
+    guardar manualmente.
+
+    Devuelve True si se guardó OK, False si falló. Los callers pueden
+    decidir si avisan al usuario; las llamadas habituales (al cambiar tema)
+    son silenciosas para no molestar — el aviso se centraliza al inicio
+    de la app."""
+    path = _user_config_path()
+    try:
+        current = load_user_config()
+        for k, v in updates.items():
+            if v is None:
+                current.pop(k, None)
+            else:
+                current[k] = v
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(current, fh, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+# -----------------------------
+# Main
+# -----------------------------
+# Posicionamiento de la ventana principal
+# -----------------------------
+# La ventana principal sufre un comportamiento aleatorio del WM si se la
+# deja sin posición: Windows decide dónde abrir, normalmente en la última
+# posición conocida del sistema, lo que provoca que aparezca pegada a un
+# borde, en un monitor secundario apagado, o solapando otras apps.
+#
+# Estrategia (sin dependencias extra):
+#   1. Al cerrar la app, guardamos en user_config la geometría actual:
+#        - "main_window_geom": "WxH+X+Y" del estado normal (no maximizada)
+#        - "main_window_zoomed": True si estaba maximizada
+#   2. Al abrir, si hay geometría guardada Y queda razonablemente visible
+#      en la pantalla actual, se aplica tal cual. Si no (cambio de
+#      monitor, resolución más pequeña, etc.) se descarta y se centra.
+#   3. Si nunca se guardó nada (primer arranque): centrar.
+#
+# Definimos "razonablemente visible" como: al menos 80 píxeles de la
+# ventana intersectan el área de la pantalla primaria. Esto tolera setups
+# multi-monitor sin sacar la ventana fuera del área usable.
+
+def _parse_geometry_string(s):
+    """Parsea 'WxH+X+Y' o 'WxH-X-Y' a tupla (w, h, x, y) o None si falla."""
+    if not isinstance(s, str):
+        return None
+    try:
+        # Formatos posibles: '1536x960+100+50', '1536x960-50+50', etc.
+        # Encontrar el separador después de WxH (puede ser + o -)
+        i_x = s.find("x")
+        if i_x <= 0:
+            return None
+        w = int(s[:i_x])
+        rest = s[i_x + 1:]
+        # rest = "960+100+50" o similar
+        # Buscar primer + o - desde posición 1 (la altura puede ser 960
+        # sin signo, así que evitamos confundir con un negativo)
+        i_sign = -1
+        for j in range(1, len(rest)):
+            if rest[j] in "+-":
+                i_sign = j
+                break
+        if i_sign < 0:
+            # Solo "WxH" sin posición — no nos sirve
+            return None
+        h = int(rest[:i_sign])
+        # rest[i_sign:] empieza con + o - y trae "X+Y" o "X-Y"
+        tail = rest[i_sign:]
+        # Buscar segundo + o - desde posición 1 de tail
+        i_sign2 = -1
+        for j in range(1, len(tail)):
+            if tail[j] in "+-":
+                i_sign2 = j
+                break
+        if i_sign2 < 0:
+            return None
+        x = int(tail[:i_sign2])
+        y = int(tail[i_sign2:])
+        return (w, h, x, y)
+    except (ValueError, IndexError):
+        return None
+
+
+def _position_main_window(root, user_config):
+    """Aplica geometry guardada si es válida; si no, centra en pantalla.
+
+    Devuelve True si la ventana debería abrirse maximizada (zoomed),
+    False en caso contrario. EL CALLER es responsable de aplicar
+    root.state("zoomed") DESPUÉS de deiconify(), nunca antes — hacerlo
+    mientras withdraw() está activo en Windows destruye el icono asignado
+    con iconbitmap() y la taskbar acaba mostrando el icono genérico de
+    python.exe.
+
+    Llamar DESPUÉS de root.geometry() inicial (que solo fija tamaño) y
+    ANTES de deiconify(). El estado zoomed se aplica más tarde.
+    """
+    # Pantalla primaria — Tk no expone múltiples monitores. Aceptamos la
+    # limitación: el "razonablemente visible" se mide contra el primario.
+    try:
+        scr_w = root.winfo_screenwidth()
+        scr_h = root.winfo_screenheight()
+    except Exception:
+        scr_w, scr_h = 1920, 1080
+
+    # Intentar usar la geometría guardada
+    saved = user_config.get("main_window_geom")
+    # Primera apertura (sin geom guardada) → maximizada por defecto.
+    # Si ya existe config previo, respetamos la elección del usuario.
+    if saved is None:
+        zoomed = True
+    else:
+        zoomed = bool(user_config.get("main_window_zoomed", False))
+    parsed = _parse_geometry_string(saved)
+
+    use_saved = False
+    if parsed is not None:
+        w, h, x, y = parsed
+        # Validar que la ventana queda con al menos 80 px visibles
+        # dentro del área de la pantalla primaria (tolerante a multi-mon).
+        MIN_VISIBLE = 80
+        visible_horiz = (x + w > MIN_VISIBLE) and (x < scr_w - MIN_VISIBLE)
+        visible_vert  = (y + h > MIN_VISIBLE) and (y < scr_h - MIN_VISIBLE)
+        # Tamaños sanos: ni minúscula ni gigantesca. El mínimo (400x300)
+        # rechaza geometrías "default" minúsculas que Windows Tk asigna
+        # a veces al des-maximizar sin tiempo de update.
+        size_ok = (400 <= w <= scr_w * 3) and (300 <= h <= scr_h * 3)
+        if visible_horiz and visible_vert and size_ok:
+            use_saved = True
+            root.geometry(f"{w}x{h}+{x}+{y}")
+
+    if not use_saved:
+        # Centrar en pantalla primaria. Tomar tamaño actual (ya fue
+        # configurado con root.geometry("1536x960") antes de llamar).
+        # update_idletasks fuerza a Tk a evaluar winfo_width/height.
+        try:
+            root.update_idletasks()
+            w = root.winfo_width()
+            h = root.winfo_height()
+            # Si update_idletasks devuelve 1x1 (común antes del mainloop),
+            # caer al tamaño nominal por defecto.
+            if w <= 1 or h <= 1:
+                w, h = 1536, 960
+        except Exception:
+            w, h = 1536, 960
+        x = max(0, (scr_w - w) // 2)
+        y = max(0, (scr_h - h) // 2)
+        root.geometry(f"{w}x{h}+{x}+{y}")
+
+    # NO aplicamos state aquí — eso es responsabilidad del caller, DESPUÉS
+    # del deiconify(). Ver docstring para el porqué.
+    return zoomed
+
+
+def _register_windows_app_id():
+    """Registra un AppUserModelID propio para la app en Windows.
+
+    Sin esto, Windows agrupa la ventana bajo el AppUserModelID de
+    python.exe (en modo desarrollo) o el del exe empaquetado (lo que
+    suele funcionar bien), y la taskbar muestra el icono genérico de
+    Python en vez del nuestro.
+
+    Usa ctypes (stdlib, no dependencia nueva). Falla silenciosa en
+    plataformas que no son Windows o si ctypes no encuentra shell32."""
+    try:
+        import ctypes
+        # AppID propio — string único que identifica la app en Windows.
+        # Cambiar este string solo si se cambia el "branding" de la app.
+        app_id = "jotapeveloper.OscilloscopeCSVViewer"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        # No-Windows, ctypes faltante o shell32 sin la función: ignorar.
+        pass
+
+
+def _save_main_window_geom(root):
+    """Guarda la geometría y el estado de maximización de la ventana
+    principal. Llamada desde on_close ANTES de destruir.
+
+    NO tocamos el state al leer geometry(): en Windows Tk root.geometry()
+    devuelve la geometría "normal" subyacente incluso cuando la ventana
+    está maximizada. Hacer state("normal") + update_idletasks() resulta
+    poco fiable porque el WM no siempre devuelve la geometría real a
+    tiempo (puede devolver un default minúsculo si update_idletasks no
+    completa la des-maximización antes de leer).
+
+    Validamos antes de escribir: si la geometría parsea a algo inválido
+    (W < 400 o H < 300), no la guardamos — preservamos lo que hubiera
+    antes en el config para no corromperlo."""
+    try:
+        st = root.state()
+    except Exception:
+        st = "normal"
+    zoomed = (st == "zoomed")
+
+    try:
+        geom = root.geometry()   # "WxH+X+Y"
+    except Exception:
+        geom = None
+
+    # Validar antes de guardar para no corromper el config con basura
+    parsed = _parse_geometry_string(geom)
+    geom_valid = False
+    if parsed is not None:
+        w, h, _x, _y = parsed
+        geom_valid = (w >= 400 and h >= 300)
+
+    updates = {"main_window_zoomed": zoomed}
+    if geom_valid:
+        updates["main_window_geom"] = geom
+    # Si NO es válida, no escribimos main_window_geom — preservamos el
+    # valor anterior del config. Así un cierre raro no rompe la próxima
+    # apertura.
+
+    try:
+        save_user_config(updates)
+    except Exception:
+        pass
+
+
+# -----------------------------
+# Main
+# -----------------------------
+if __name__ == "__main__":
+    # PRIMERO: registrar AppUserModelID antes de crear cualquier ventana.
+    # Esto asocia la ventana a un grupo propio en la taskbar de Windows
+    # en vez de agruparla bajo python.exe. Sin esto, la taskbar muestra
+    # el icono genérico de Python aunque iconbitmap() funcione para el
+    # icono del título de ventana. Inocuo fuera de Windows.
+    _register_windows_app_id()
+
+    root = tk.Tk()
+    # Ocultar la ventana inmediatamente para evitar el "flash" de ventana
+    # en blanco mientras se aplica icono, geometría, tema y se construye
+    # la UI completa. Misma técnica que _apply_window_chrome usa para las
+    # ventanas secundarias.
+    root.withdraw()
+
+    try:
+        root.iconbitmap(_resource_path("assets/icon.ico"))
+    except Exception as e:
+        print(f"Icon load failed: {e}")
+
+    root.geometry("1536x960")
+
+    # Aplicar tema desde el config persistido (o Dark si no existe).
+    # ANTES de construir la UI para que los widgets nazcan con el tema correcto.
+    user_config = load_user_config()
+    initial_theme = user_config.get("app_theme", "Dark")
+    if initial_theme not in THEMES:
+        initial_theme = "Dark"
+    apply_theme(root, initial_theme)
+
+    # Posicionar la ventana ANTES de construir la UI y ANTES de deiconify
+    # para evitar el "flash" en posición incorrecta. Si hay geometría
+    # guardada de una sesión anterior, la restauramos; si no, centramos
+    # en pantalla. Detalles en _position_main_window().
+    #
+    # IMPORTANTE: _position_main_window NO aplica state("zoomed") —
+    # devuelve el flag y nosotros lo aplicamos DESPUÉS de deiconify para
+    # no destruir el icono asignado durante el withdraw.
+    should_zoom = _position_main_window(root, user_config)
+
+    app = OscilloscopeApp(root)
+
+    # Una vez la UI está construida, mostrar la ventana ya con todo aplicado.
+    # update_idletasks() fuerza a Tk a procesar pendientes (geometría, layout)
+    # antes de hacerla visible, así nace en su tamaño correcto sin parpadeo.
+    root.update_idletasks()
+    root.deiconify()
+
+    # AHORA aplicar el state maximizado, con la ventana ya visible y el
+    # icono ya asignado. Hacer state("zoomed") mientras withdraw() rompe
+    # la asociación del icono con la taskbar de Windows.
+    if should_zoom:
+        try:
+            root.state("zoomed")
+        except Exception:
+            pass
+
+    # update() (no idletasks) fuerza a Tk a procesar TODOS los eventos
+    # pendientes — incluyendo el repintado completo de la mainwindow
+    # tras el state("zoomed"). Necesario antes de cerrar el splash para
+    # que la mainwindow ya esté pintada por encima cuando Windows
+    # ejecute la animación shrink-to-close nativa del splash; si no, el
+    # splash se ve encogiéndose y desplazándose justo antes de la app.
+    try:
+        root.update()
+    except Exception:
+        pass
+
+    # Cerrar el splash de PyInstaller (--splash splash.png) con la
+    # mainwindow ya pintada encima. La animación nativa de cierre del
+    # splash ocurre tapada y es invisible. El módulo pyi_splash solo
+    # existe en runtime del .exe empaquetado; en desarrollo no está,
+    # ImportError → ignorar.
+    try:
+        import pyi_splash  # type: ignore
+        if pyi_splash.is_alive():
+            pyi_splash.close()
+    except Exception:
+        pass
+
+    # Re-aplicar el icono como cinturón-y-tirantes: si state() o cualquier
+    # otra operación de chrome anterior afectó al icono cacheado por el WM,
+    # esta llamada lo deja correcto. Si no era necesario, es inocuo.
+    try:
+        root.iconbitmap(_resource_path("assets/icon.ico"))
+    except Exception as e:
+        print(f"Icon re-apply failed: {e}")
+
+    # Si el directorio del .exe no es escribible, avisar al usuario UNA SOLA
+    # vez al arrancar. Lo hacemos después de construir la UI para que el
+    # diálogo herede el tema. Schedule con `after` para que el mainloop
+    # arranque antes (la geometría de root está fija en ese momento).
+    if not check_config_writable():
+        def _warn_readonly():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Read-only install location",
+                "The application folder is not writable, so preferences\n"
+                "(theme, future settings...) will not be saved between\n"
+                "sessions.\n\n"
+                f"Folder: {_app_base_dir()}\n\n"
+                "To fix this, move the application to a writable location\n"
+                "such as your Desktop or Documents folder.",
+                parent=root,
+            )
+        root.after(300, _warn_readonly)
+
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
+    root.mainloop()

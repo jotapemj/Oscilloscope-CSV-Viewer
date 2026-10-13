@@ -1,0 +1,13 @@
+# Bitácora interna
+CLAUDE.md
+
+# Estado de usuario
+config.json
+
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller
+build/
+dist/

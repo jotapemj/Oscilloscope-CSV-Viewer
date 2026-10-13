@@ -1,0 +1,11 @@
+# Oscilloscope CSV Viewer — runtime dependencies
+# Tested versions; >= permite parches sin romper reproducibilidad mayor.
+# tkinter, ctypes, json, csv, re, struct, threading vienen con Python stdlib.
+# Python 3.10+ recomendado.
+
+pandas>=2.3,<3.0
+numpy>=2.2,<3.0
+matplotlib>=3.10,<4.0
+
+# Build-only (no necesario en runtime). Descomenta para generar el .exe:
+# pyinstaller>=6.0
