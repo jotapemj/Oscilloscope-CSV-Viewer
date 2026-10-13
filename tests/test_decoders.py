@@ -1,7 +1,8 @@
 """Decoders de protocolo contra tramas sintéticas según spec."""
 import unittest
 
-import main as dec
+import ocv.decoders as dec
+from ocv.decoders.can import _can_crc15
 from tests import signals as sig
 
 
@@ -147,7 +148,7 @@ class CAN(unittest.TestCase):
     def test_generator_crc(self):
         """CRC del generador == CRC del decoder (vector común)."""
         bits = sig._bits(0x2A5, 15)
-        self.assertEqual(sig.crc15_can(bits), dec._can_crc15(bits))
+        self.assertEqual(sig.crc15_can(bits), _can_crc15(bits))
 
 
 if __name__ == "__main__":
