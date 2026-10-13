@@ -34,6 +34,7 @@ from ocv.core.csv_io import (
 )
 from ocv.core.math_expr import (
     math_parse,
+    math_eval_with,
 )
 
 
@@ -3001,42 +3002,8 @@ class OscilloscopeApp:
 
     def _eval_resolved(self, ast):
         """Evalúa AST ya resuelto (con ref_real)."""
-        t = self.time
-
-        def ev(n):
-            tag = n[0]
-            if tag == "num":
-                return np.full_like(t, n[1], dtype=float)
-            if tag == "ref_real":
-                return self.channels[n[1]]["voltage"]
-            if tag == "neg":
-                return -ev(n[1])
-            if tag == "bin":
-                a = ev(n[2]); b = ev(n[3])
-                if n[1] == "+": return a + b
-                if n[1] == "-": return a - b
-                if n[1] == "*": return a * b
-                if n[1] == "/":
-                    with np.errstate(divide="ignore", invalid="ignore"):
-                        return np.where(b != 0, a / b, 0.0)
-            if tag == "fn1":
-                x = ev(n[2]); fn = n[1]
-                if fn == "ABS":  return np.abs(x)
-                if fn == "POW":  return x * x
-                if fn == "SQRT":
-                    with np.errstate(invalid="ignore"):
-                        return np.sqrt(np.maximum(x, 0.0))
-                if fn == "INT":
-                    return np.concatenate(([0.0], np.cumsum(0.5 * (x[1:] + x[:-1]) * np.diff(t))))
-                if fn == "DIFF":
-                    return np.gradient(x, t)
-            if tag == "fn2":
-                a = ev(n[2]); b = ev(n[3])
-                if n[1] == "MIN": return np.minimum(a, b)
-                if n[1] == "MAX": return np.maximum(a, b)
-            raise ValueError(f"Bad node: {n}")
-
-        return ev(ast)
+        return math_eval_with(
+            ast, self.time, lambda n: self.channels[n[1]]["voltage"])
 
     def _math_deps_resolved(self, ast):
         """Devuelve set de índices (en self.channels) de los que depende

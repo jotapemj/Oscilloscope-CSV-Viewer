@@ -80,5 +80,33 @@ class Eval(unittest.TestCase):
             run("CH5")
 
 
+class ResolvedRefs(unittest.TestCase):
+    """Camino de la app: refs ya resueltas a ('ref_real', idx)."""
+
+    @staticmethod
+    def resolve(n, mapping):
+        # Imita OscilloscopeApp._resolve_refs
+        if n[0] == "ref":
+            return ("ref_real", mapping[(n[1], n[2])])
+        if n[0] == "num":
+            return n
+        if n[0] == "neg":
+            return ("neg", ResolvedRefs.resolve(n[1], mapping))
+        return (n[0], n[1]) + tuple(ResolvedRefs.resolve(c, mapping)
+                                    for c in n[2:])
+
+    def test_same_as_dict_eval(self):
+        """math_eval_with(ref_real) == math_eval(dicts) en expresión compleja."""
+        t = np.linspace(0, 1e-3, 501)
+        a, b = np.sin(2e4 * t), np.cos(3e4 * t) + 0.5
+        expr = "INT(CH1*CH2) - DIFF(M1)/1E4 + MAX(ABS(CH1), SQRT(CH2))"
+        ast = mx.math_parse(expr)
+        ref = mx.math_eval(ast, t, {0: a, 1: b}, {0: a + b})
+        channels = {7: a, 9: b, 4: a + b}
+        res = self.resolve(ast, {("CH", 0): 7, ("CH", 1): 9, ("M", 0): 4})
+        got = mx.math_eval_with(res, t, lambda n: channels[n[1]])
+        np.testing.assert_allclose(got, ref)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -194,16 +194,26 @@ def math_deps(ast):
 def math_eval(ast, time, ch_arrays, m_arrays):
     """Evalúa el AST. ch_arrays: dict idx -> np.ndarray. m_arrays: idx -> np.ndarray.
     time: np.ndarray común. Devuelve np.ndarray del mismo tamaño que time."""
+    def lookup(n):
+        src = ch_arrays if n[1] == "CH" else m_arrays
+        arr = src.get(n[2])
+        if arr is None:
+            raise ValueError(f"Missing data for {n[1]}{n[2]+1}")
+        return arr
+    return math_eval_with(ast, time, lookup)
+
+
+def math_eval_with(ast, time, lookup):
+    """Evalúa el AST delegando las hojas de referencia en `lookup(node)`.
+
+    Hojas: ('ref', kind, idx) del parser o ('ref_real', idx) ya resueltas
+    por la app contra self.channels."""
     def ev(n):
         tag = n[0]
         if tag == "num":
             return np.full_like(time, n[1], dtype=float)
-        if tag == "ref":
-            src = ch_arrays if n[1] == "CH" else m_arrays
-            arr = src.get(n[2])
-            if arr is None:
-                raise ValueError(f"Missing data for {n[1]}{n[2]+1}")
-            return arr
+        if tag in ("ref", "ref_real"):
+            return lookup(n)
         if tag == "neg":
             return -ev(n[1])
         if tag == "bin":
