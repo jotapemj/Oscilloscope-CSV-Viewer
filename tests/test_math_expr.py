@@ -3,12 +3,12 @@ import unittest
 
 import numpy as np
 
-import main as ocv
+from ocv.core import math_expr as mx
 
 
 def run(expr, ch=None, m=None, time=None):
     time = np.linspace(0.0, 1.0, 11) if time is None else time
-    return ocv.math_eval(ocv.math_parse(expr), time, ch or {}, m or {})
+    return mx.math_eval(mx.math_parse(expr), time, ch or {}, m or {})
 
 
 class Parse(unittest.TestCase):
@@ -27,8 +27,8 @@ class Parse(unittest.TestCase):
 
     def test_deps(self):
         """Refs 1-based → índices 0-based."""
-        ast = ocv.math_parse("CH1*CH3 + M2")
-        self.assertEqual(ocv.math_deps(ast), ({0, 2}, {1}))
+        ast = mx.math_parse("CH1*CH3 + M2")
+        self.assertEqual(mx.math_deps(ast), ({0, 2}, {1}))
 
     def test_errors(self):
         """Expresiones inválidas lanzan ValueError."""

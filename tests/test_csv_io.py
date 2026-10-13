@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-import main as ocv
+from ocv.core import csv_io
 
 
 class CsvSmart(unittest.TestCase):
@@ -33,7 +33,7 @@ class CsvSmart(unittest.TestCase):
     def test_plain_header(self):
         """Cabecera simple: tiempo detectado con confianza alta."""
         p = self.write("Time,CH1,CH2\n" + self.rows())
-        r = ocv._read_csv_smart(p)
+        r = csv_io._read_csv_smart(p)
         self.assertEqual(r["separator"], ",")
         self.assertEqual(r["time_confidence"], "high")
         self.assertEqual(r["time_col_index"], 0)
@@ -44,14 +44,14 @@ class CsvSmart(unittest.TestCase):
     def test_european(self):
         """Separador ';' con coma decimal."""
         p = self.write("Time;CH1;CH2\n" + self.rows(sep=";", dec=","))
-        r = ocv._read_csv_smart(p)
+        r = csv_io._read_csv_smart(p)
         self.assertEqual(r["separator"], ";")
         self.assertEqual(r["time_confidence"], "high")
         self.assertAlmostEqual(r["columns"][0][5], np.sin(1.0), places=5)
 
     def test_tab(self):
         p = self.write("Time\tCH1\tCH2\n" + self.rows(sep="\t"))
-        self.assertEqual(ocv._read_csv_smart(p)["separator"], "\t")
+        self.assertEqual(csv_io._read_csv_smart(p)["separator"], "\t")
 
     def test_metadata_header(self):
         """Cabecera tipo Tek con metadata numérica antes de los datos."""
@@ -62,7 +62,7 @@ class CsvSmart(unittest.TestCase):
                 "\n"
                 "TIME,CH1,CH2\n")
         p = self.write(head + self.rows())
-        r = ocv._read_csv_smart(p)
+        r = csv_io._read_csv_smart(p)
         self.assertEqual(r["n_metadata_lines"], 6)
         self.assertEqual(r["brand"], "Tektronix")
         self.assertEqual(r["metadata"].get("x_increment"), 1e-6)
@@ -75,7 +75,7 @@ class CsvSmart(unittest.TestCase):
         for i in range(50):
             lines.append(f"{np.sin(i):.6f},{i * 1e-3:.6e}")
         p = self.write("\n".join(lines) + "\n")
-        r = ocv._read_csv_smart(p)
+        r = csv_io._read_csv_smart(p)
         self.assertEqual(r["time_col_index"], 1)
         self.assertEqual(r["col_names"], ["CH1"])
 
@@ -84,7 +84,7 @@ class CsvSmart(unittest.TestCase):
         head = "XIncrement,2e-6\nXStart,-1e-4\nCH1,CH2\n"
         body = "\n".join(f"{np.sin(i):.6f},{np.cos(i):.6f}" for i in range(40))
         p = self.write(head + body + "\n")
-        r = ocv._read_csv_smart(p)
+        r = csv_io._read_csv_smart(p)
         self.assertEqual(r["time_confidence"], "none")
         self.assertIsNotNone(r["time"])
         self.assertAlmostEqual(r["time"][0], -1e-4)
@@ -94,13 +94,13 @@ class CsvSmart(unittest.TestCase):
     def test_bom_and_crlf(self):
         """BOM UTF-8 y finales CRLF no rompen la cabecera."""
         text = ("﻿Time,CH1,CH2\n" + self.rows()).replace("\n", "\r\n")
-        r = ocv._read_csv_smart(self.write(text))
+        r = csv_io._read_csv_smart(self.write(text))
         self.assertEqual(r["all_col_names"][0], "Time")
 
     def test_trailing_empty_columns(self):
         """Columnas vacías al final (',,') se descartan."""
         body = self.rows().replace("\n", ",,\n")
-        r = ocv._read_csv_smart(self.write("Time,CH1,CH2,,\n" + body))
+        r = csv_io._read_csv_smart(self.write("Time,CH1,CH2,,\n" + body))
         self.assertEqual(len(r["all_columns"]), 3)
 
     def test_errors(self):
@@ -108,7 +108,7 @@ class CsvSmart(unittest.TestCase):
         for text in ["", "hello\nworld\n"]:
             with self.subTest(text=text):
                 with self.assertRaises(ValueError):
-                    ocv._read_csv_smart(self.write(text))
+                    csv_io._read_csv_smart(self.write(text))
 
 
 if __name__ == "__main__":
