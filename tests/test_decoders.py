@@ -156,6 +156,19 @@ class CAN(unittest.TestCase):
                            "corrupt_crc": True}])
         self.assertEqual([f["type"] for f in errors(fr)], ["crc"])
 
+    def test_garbage_before_frame(self):
+        """Ruido antes de una trama válida: se salta, no aborta."""
+        t, v = sig.can([{"can_id": 0x2A0, "data": [0x11, 0x22]}])
+        rng = np.random.default_rng(3)
+        junk = np.repeat(rng.integers(0, 2, 300), 16) * sig.HI
+        v = np.concatenate([np.full(16 * 12, sig.HI), junk, v])
+        t = np.arange(len(v)) * (t[1] - t[0])
+        for cls in (dec.CanDecoder, dec.J1939Decoder, dec.CanFdDecoder):
+            with self.subTest(decoder=cls.__name__):
+                fr = cls.decode(t, {"CAN": v}, params(cls))
+                if cls is dec.CanDecoder:
+                    self.assertIn(0x2A0, values(fr, "id"))
+
     def test_generator_crc(self):
         """CRC del generador == CRC del decoder (vector común)."""
         bits = sig._bits(0x2A5, 15)

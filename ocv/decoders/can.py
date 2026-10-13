@@ -273,7 +273,9 @@ class CanDecoder(ProtocolDecoder):
             # Si IDE=1: extended frame
             #   SRR=1 | IDE=1 | ID-B (18) | RTR | r1 r0 | DLC (4) | DATA | CRC | ...
             p = 0
-            if unstuffed[p] != 0:
+            # Cabecera mínima SOF..DLC: 19 bits (39 extendida). Más corta =
+            # el unstuff paró antes (ruido, no es trama). Saltar, no abortar.
+            if len(unstuffed) < 19 or unstuffed[p] != 0:
                 # Debería ser SOF dominante. Falso disparo.
                 i += 1
                 continue
@@ -285,6 +287,9 @@ class CanDecoder(ProtocolDecoder):
             ide = unstuffed[p]; p += 1
 
             extended = (ide == 1)
+            if extended and len(unstuffed) < 39:
+                i += 1
+                continue
             if extended:
                 # SRR fue rtr_or_srr (esperado 1)
                 id_b = 0
@@ -550,7 +555,8 @@ class CanFdDecoder(ProtocolDecoder):
                 i += 1; continue
 
             p = 0
-            if unstuffed_head[p] != 0:
+            # Cabecera FD mínima SOF..DLC: 22 bits (41 extendida)
+            if len(unstuffed_head) < 22 or unstuffed_head[p] != 0:
                 i += 1; continue
             p += 1  # SOF
             id_a = 0
@@ -560,6 +566,8 @@ class CanFdDecoder(ProtocolDecoder):
             srr_or_rrs = unstuffed_head[p]; p += 1
             ide = unstuffed_head[p]; p += 1
             extended = (ide == 1)
+            if extended and len(unstuffed_head) < 41:
+                i += 1; continue
             if extended:
                 id_b = 0
                 for k in range(18):
