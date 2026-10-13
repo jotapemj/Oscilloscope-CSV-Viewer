@@ -1,6 +1,8 @@
 """Decoders de protocolo contra tramas sintéticas según spec."""
 import unittest
 
+import numpy as np
+
 import ocv.decoders as dec
 from ocv.decoders.can import _can_crc15
 from tests import signals as sig
@@ -92,8 +94,6 @@ class SPI(unittest.TestCase):
                     self.assertEqual(values(fr, "mosi"), mosi_w)
                     self.assertEqual(values(fr, "miso"), miso_w)
 
-    # Bug #7: sin CS se pierde el primer flanco de cada bloque
-    @unittest.expectedFailure
     def test_no_cs(self):
         """Sin CS: delimita por idle del reloj; solo MOSI."""
         t, sck, mosi, _, _ = sig.spi([0x12, 0x34], [0, 0])
@@ -101,6 +101,17 @@ class SPI(unittest.TestCase):
                                    params(dec.SPIDecoder))
         self.assertEqual(values(fr, "mosi"), [0x12, 0x34])
         self.assertEqual(values(fr, "miso"), [])
+
+    def test_no_cs_idle_split(self):
+        """Sin CS: dos ráfagas separadas por idle > umbral = dos bloques."""
+        t1, sck1, mosi1, _, _ = sig.spi([0xA1, 0xB2], [0, 0])
+        gap = int(200e-6 * 20e6)           # 200 µs a 20 MS/s
+        sck = np.concatenate([sck1, np.zeros(gap), sck1])
+        mosi = np.concatenate([mosi1, np.zeros(gap), mosi1])
+        t = np.arange(len(sck)) / 20e6
+        fr = dec.SPIDecoder.decode(t, {"SCK": sck, "MOSI": mosi},
+                                   params(dec.SPIDecoder, idle_time_us=100.0))
+        self.assertEqual(values(fr, "mosi"), [0xA1, 0xB2, 0xA1, 0xB2])
 
 
 class CAN(unittest.TestCase):

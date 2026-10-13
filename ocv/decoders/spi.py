@@ -143,8 +143,12 @@ class SPIDecoder(ProtocolDecoder):
                     "error":   False,
                 })
 
-            # Recoger flancos de muestreo dentro del rango
-            sample_in = [e for e in sample_edges if cs_s < e < cs_e]
+            # Recoger flancos de muestreo dentro del rango. Sin CS los
+            # bordes del bloque SON flancos de muestreo: incluirlos.
+            if cs_v is not None:
+                sample_in = [e for e in sample_edges if cs_s < e < cs_e]
+            else:
+                sample_in = [e for e in sample_edges if cs_s <= e <= cs_e]
             mosi_word = 0
             miso_word = 0
             bit_count = 0
