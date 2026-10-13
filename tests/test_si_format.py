@@ -1,0 +1,85 @@
+"""format_si / parse_si: formato y lectura con prefijos SI."""
+import unittest
+
+import main as ocv
+
+
+class FormatSI(unittest.TestCase):
+
+    def test_prefixes(self):
+        """Escalado a G/M/k/-/m/µ/n/p."""
+        cases = [
+            (2.5e9, "Hz", "2.5 GHz"),
+            (120e3, "Hz", "120 kHz"),
+            (1.0, "V", "1 V"),
+            (1.5e-3, "s", "1.5 ms"),
+            (33.3e-6, "s", "33.3 µs"),
+            (4.7e-9, "s", "4.7 ns"),
+            (10e-12, "F", "10 pF"),
+            (-3.3, "V", "-3.3 V"),
+        ]
+        for value, unit, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(ocv.format_si(value, unit), expected)
+
+    def test_sig_figs(self):
+        """sig_figs=3 recorta etiquetas de ticks."""
+        self.assertEqual(ocv.format_si(33.3332e-6, "s", sig_figs=3), "33.3 µs")
+
+    def test_zero_noise(self):
+        """|x| < 1e-15 se muestra como 0."""
+        self.assertEqual(ocv.format_si(1e-16, "V"), "0 V")
+        self.assertEqual(ocv.format_si(-1e-16, "—"), "0")
+
+    def test_no_prefix_units(self):
+        """°C, dB, % no se escalan; % con 2 decimales; — sin sufijo."""
+        self.assertEqual(ocv.format_si(1500, "°C"), "1500 °C")
+        self.assertEqual(ocv.format_si(0.002, "dB"), "0.002 dB")
+        self.assertEqual(ocv.format_si(32, "%"), "32.00 %")
+        self.assertEqual(ocv.format_si(1500, "—"), "1500")
+
+
+class ParseSI(unittest.TestCase):
+
+    def test_values(self):
+        """Prefijos, espacios, unidad opcional, notación exponencial."""
+        cases = [
+            ("240k", "", 240e3),
+            ("240 kHz", "Hz", 240e3),
+            ("1.5M", "", 1.5e6),
+            ("20 us", "s", 20e-6),
+            ("20 µs", "s", 20e-6),
+            (".5m", "", 0.5e-3),
+            ("-3.3", "V", -3.3),
+            ("1e-3", "", 1e-3),
+            ("100 mV", "V", 0.1),
+            ("5 v", "V", 5.0),
+        ]
+        for text, unit, expected in cases:
+            with self.subTest(text=text):
+                got = ocv.parse_si(text, unit)
+                self.assertIsNotNone(got)
+                self.assertAlmostEqual(got, expected, delta=abs(expected) * 1e-12)
+
+    def test_case_sensitive(self):
+        """m = mili, M = mega."""
+        self.assertAlmostEqual(ocv.parse_si("1m"), 1e-3)
+        self.assertAlmostEqual(ocv.parse_si("1M"), 1e6)
+
+    def test_invalid(self):
+        """Basura → None."""
+        for text in [None, "", "abc", "1.2.3", "5 X", "1 kk"]:
+            with self.subTest(text=text):
+                self.assertIsNone(ocv.parse_si(text))
+
+    def test_roundtrip(self):
+        """format_si → parse_si recupera el valor."""
+        for value in [2.2e9, 47e3, 1.0, 3.3e-3, 12e-6, 5e-9]:
+            with self.subTest(value=value):
+                text = ocv.format_si(value, "s")
+                self.assertAlmostEqual(ocv.parse_si(text, "s"), value,
+                                       delta=value * 1e-9)
+
+
+if __name__ == "__main__":
+    unittest.main()
