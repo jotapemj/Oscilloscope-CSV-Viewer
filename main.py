@@ -14917,7 +14917,7 @@ if __name__ == "__main__":
                 "The application folder is not writable, so preferences\n"
                 "(theme, future settings...) will not be saved between\n"
                 "sessions.\n\n"
-                f"Folder: {_app_base_dir()}\n\n"
+                f"Folder: {config_dir()}\n\n"
                 "To fix this, move the application to a writable location\n"
                 "such as your Desktop or Documents folder.",
                 parent=root,
