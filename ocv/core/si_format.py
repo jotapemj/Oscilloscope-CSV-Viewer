@@ -1,6 +1,21 @@
 """SI-prefixed number formatting and parsing."""
 
 
+# =============================
+# Unidades de canal (v1.29)
+# =============================
+# Lista de unidades seleccionables por canal. "V" es el default (igual que el
+# comportamiento histórico). El símbolo "—" representa "sin unidad" (adimensional).
+# Layout 5x5 en el picker dialog: 24 unidades + 1 hueco vacío.
+CHANNEL_UNITS = [
+    "V",  "A",   "W",  "VA",  "var",   # eléctricas
+    "J",  "Ω",   "Hz", "%",   "dB",    # otras eléctricas / generales
+    "N",  "kgf", "N·m","RPM", "T",     # mecánicas
+    "°C", "°F",  "K",  "Pa",  "PSI",   # térmicas / presión
+    "bar","lux", "lm", "—",            # presión / luz / adimensional
+]
+DEFAULT_UNIT = "V"
+
 # Unidades que NO aceptan prefijo SI (no tiene sentido "k°C", "MdB", etc.).
 # format_si las muestra con formato directo sin prefijo.
 _NO_SI_PREFIX_UNITS = {"°C", "°F", "dB", "%", "PSI", "RPM", "lux", "lm", "—"}

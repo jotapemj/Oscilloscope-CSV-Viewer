@@ -26,6 +26,8 @@ from ocv.core.dsp import (
     scale_unit,
 )
 from ocv.core.si_format import (
+    CHANNEL_UNITS,
+    DEFAULT_UNIT,
     format_si,
     parse_si,
 )
@@ -35,6 +37,14 @@ from ocv.core.csv_io import (
 from ocv.core.math_expr import (
     math_parse,
     math_eval_with,
+)
+from ocv.ui import theme
+from ocv.ui.theme import (
+    _retheme_tk_widgets,
+    apply_theme,
+    channel_color,
+    CHANNEL_COLORS,
+    THEMES,
 )
 from ocv.core.config import (
     config_dir,
@@ -60,619 +70,6 @@ def _resource_path(rel_path):
     else:
         base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, rel_path)
-
-
-# =============================
-# Sistema de temas
-# =============================
-# La app soporta varios temas intercambiables en runtime. Cada tema define:
-#   - Colores de la chrome (fondos, texto, acento, bordes)
-#   - Colores recomendados del plot (bg, grid, text, time_label_bg)
-#
-# Diseño:
-# Las variables COLOR_* siguen siendo módulo-globales por compatibilidad con
-# las ~350 referencias existentes en el código. apply_theme(name) reescribe
-# esas globales y reaplica el style ttk. Para los widgets tk.* clásicos que
-# ya están construidos (no responden a ttk.Style), _retheme_widgets() recorre
-# el árbol y actualiza bg/fg.
-#
-# Para añadir un tema nuevo: añadir entrada a THEMES siguiendo el esquema.
-
-THEMES = {
-    "Dark": {
-        "BG":         "#1e1e1e",   # fondo principal
-        "BG_ALT":     "#2a2a2a",   # superficies (inputs, frames secundarios)
-        "BG_HOVER":   "#353535",   # hover de controles
-        "BG_ACTIVE":  "#404040",   # pressed / focus
-        "BORDER":     "#3f3f3f",   # bordes sutiles
-        "TEXT":       "#e0e0e0",   # texto principal
-        "TEXT_DIM":   "#9a9a9a",   # texto secundario / labels
-        "ACCENT":     "#4cc2ff",   # azul Sun Valley (cabeceras)
-        "ACCENT_2":   "#3a7fb5",   # azul más oscuro para pressed
-        "DANGER":     "#ff6b6b",
-        # Plot
-        "PLOT_BG":          "black",
-        "PLOT_GRID":        "#555555",
-        "PLOT_TEXT":        "white",
-        "PLOT_TIME_LBL_BG": "#222222",
-    },
-    "Light": {
-        # Tema claro tipo "blanco roto" — no blanco puro (cansa la vista),
-        # acento azul más saturado para que destaque sobre fondo claro.
-        "BG":         "#f5f5f5",
-        "BG_ALT":     "#ffffff",
-        "BG_HOVER":   "#e8e8e8",
-        "BG_ACTIVE":  "#d8d8d8",
-        "BORDER":     "#c8c8c8",
-        "TEXT":       "#1a1a1a",
-        "TEXT_DIM":   "#666666",
-        "ACCENT":     "#0078d4",
-        "ACCENT_2":   "#005a9e",
-        "DANGER":     "#d13438",
-        # Plot: fondo claro, grid gris, texto oscuro
-        "PLOT_BG":          "#fafafa",
-        "PLOT_GRID":        "#c0c0c0",
-        "PLOT_TEXT":        "#222222",
-        "PLOT_TIME_LBL_BG": "#e0e0e0",
-    },
-    "Blueprint": {
-        # Estilo cianotipo / papel técnico azul oscuro con líneas claras.
-        # Muy "ingeniería de los 80s", se ve fantástico con trazas amarillas.
-        "BG":         "#0d2847",
-        "BG_ALT":     "#143559",
-        "BG_HOVER":   "#1d4271",
-        "BG_ACTIVE":  "#265389",
-        "BORDER":     "#2a5a8a",
-        "TEXT":       "#cce4ff",
-        "TEXT_DIM":   "#7fa9d4",
-        "ACCENT":     "#ffb84d",   # ámbar para contraste con azul
-        "ACCENT_2":   "#cc8a2e",
-        "DANGER":     "#ff5e5e",
-        "PLOT_BG":          "#0a2240",
-        "PLOT_GRID":        "#2d5a8c",
-        "PLOT_TEXT":        "#d4e8ff",
-        "PLOT_TIME_LBL_BG": "#143559",
-    },
-    "High Contrast": {
-        # Accesibilidad: negro puro + amarillo + blanco. Sin grises medios.
-        # Bordes gruesos, acentos brillantes. Cumple WCAG AAA aprox.
-        "BG":         "#000000",
-        "BG_ALT":     "#0a0a0a",
-        "BG_HOVER":   "#1f1f1f",
-        "BG_ACTIVE":  "#2f2f2f",
-        "BORDER":     "#ffffff",
-        "TEXT":       "#ffffff",
-        "TEXT_DIM":   "#cccccc",
-        "ACCENT":     "#ffff00",   # amarillo puro
-        "ACCENT_2":   "#cccc00",
-        "DANGER":     "#ff4040",
-        "PLOT_BG":          "#000000",
-        "PLOT_GRID":        "#808080",
-        "PLOT_TEXT":        "#ffffff",
-        "PLOT_TIME_LBL_BG": "#202020",
-    },
-}
-
-# Tema activo. apply_theme() lo modifica.
-CURRENT_THEME_NAME = "Dark"
-
-# Estas globales se rellenan con apply_theme() y son las que usa el resto
-# del código. Inicializadas con valores de Dark para que importar el módulo
-# sin haber llamado a apply_theme() siga funcionando.
-COLOR_BG        = THEMES["Dark"]["BG"]
-COLOR_BG_ALT    = THEMES["Dark"]["BG_ALT"]
-COLOR_BG_HOVER  = THEMES["Dark"]["BG_HOVER"]
-COLOR_BG_ACTIVE = THEMES["Dark"]["BG_ACTIVE"]
-COLOR_BORDER    = THEMES["Dark"]["BORDER"]
-COLOR_TEXT      = THEMES["Dark"]["TEXT"]
-COLOR_TEXT_DIM  = THEMES["Dark"]["TEXT_DIM"]
-COLOR_ACCENT    = THEMES["Dark"]["ACCENT"]
-COLOR_ACCENT_2  = THEMES["Dark"]["ACCENT_2"]
-COLOR_DANGER    = THEMES["Dark"]["DANGER"]
-
-
-def _refresh_color_globals(theme_name):
-    """Reescribe las constantes COLOR_* del módulo con los valores del tema
-    indicado. Esto permite que el código existente (que usa COLOR_BG, etc.)
-    siga funcionando sin tocar las ~350 referencias dispersas."""
-    g = globals()
-    t = THEMES[theme_name]
-    g["COLOR_BG"]        = t["BG"]
-    g["COLOR_BG_ALT"]    = t["BG_ALT"]
-    g["COLOR_BG_HOVER"]  = t["BG_HOVER"]
-    g["COLOR_BG_ACTIVE"] = t["BG_ACTIVE"]
-    g["COLOR_BORDER"]    = t["BORDER"]
-    g["COLOR_TEXT"]      = t["TEXT"]
-    g["COLOR_TEXT_DIM"]  = t["TEXT_DIM"]
-    g["COLOR_ACCENT"]    = t["ACCENT"]
-    g["COLOR_ACCENT_2"]  = t["ACCENT_2"]
-    g["COLOR_DANGER"]    = t["DANGER"]
-    g["CURRENT_THEME_NAME"] = theme_name
-
-
-# =====================================================
-# Interpolación de colores (para transiciones de tema)
-# =====================================================
-# Usadas por apply_theme_runtime() cuando fade=True. La animación
-# interpola entre dos diccionarios THEME a lo largo de N frames con
-# ~30-40 ms entre cada uno.
-def _hex_to_rgb(c):
-    """Convierte color hex '#RRGGBB' o '#RGB' a tupla (r, g, b) en
-    enteros 0-255. Si no parsea, devuelve negro. Los colores en THEMES
-    son siempre #hex, así que en la práctica siempre parsea."""
-    if not isinstance(c, str) or not c.startswith("#"):
-        return (0, 0, 0)
-    s = c[1:]
-    try:
-        if len(s) == 3:
-            return tuple(int(ch * 2, 16) for ch in s)
-        if len(s) == 6:
-            return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
-    except ValueError:
-        pass
-    return (0, 0, 0)
-
-
-def _rgb_to_hex(r, g, b):
-    """Devuelve '#rrggbb' con clamping a [0, 255]."""
-    r = max(0, min(255, int(round(r))))
-    g = max(0, min(255, int(round(g))))
-    b = max(0, min(255, int(round(b))))
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
-def lerp_color(c1, c2, t):
-    """Interpola dos colores hex linealmente. t en [0, 1].
-    t=0 → c1; t=1 → c2."""
-    r1, g1, b1 = _hex_to_rgb(c1)
-    r2, g2, b2 = _hex_to_rgb(c2)
-    return _rgb_to_hex(
-        r1 + (r2 - r1) * t,
-        g1 + (g2 - g1) * t,
-        b1 + (b2 - b1) * t,
-    )
-
-
-def lerp_theme(t1, t2, t):
-    """Tema intermedio entre dos. Solo interpola valores hex; las claves
-    no-color se toman de t1. t en [0, 1]."""
-    out = {}
-    for k, v1 in t1.items():
-        v2 = t2.get(k, v1)
-        if isinstance(v1, str) and v1.startswith("#") \
-                and isinstance(v2, str) and v2.startswith("#"):
-            out[k] = lerp_color(v1, v2, t)
-        else:
-            # No-color o tipos mixtos: mantenemos v1 hasta que el fade acabe
-            out[k] = v1
-    return out
-
-
-# =============================
-# Canales — colores fijos por orden
-# =============================
-# CH1-CH8: paleta tipo Tek (yellow/green/orange/blue/magenta/cyan/red/white).
-# CH9-CH12 (v1.26): paleta extendida — violeta, lima brillante, rosa fuerte y
-# teal oscuro. Elegidos por contraste claro frente a los 8 originales y entre
-# sí, evitando colisión visual sobre fondo oscuro.
-CHANNEL_COLORS = [
-    "#ffeb3b",   # CH1   amarillo
-    "#4caf50",   # CH2   verde
-    "#ff9800",   # CH3   naranja
-    "#2196f3",   # CH4   azul
-    "#e91e63",   # CH5   magenta
-    "#00e5ff",   # CH6   cyan
-    "#f44336",   # CH7   rojo
-    "#ffffff",   # CH8   blanco
-    "#b388ff",   # CH9   violeta
-    "#76ff03",   # CH10  lima
-    "#ff4081",   # CH11  rosa
-    "#00bfa5",   # CH12  teal
-]
-
-
-def channel_color(idx):
-    """Devuelve el color asignado al canal número idx (0-based).
-    Si hay más canales que colores definidos, cicla."""
-    return CHANNEL_COLORS[idx % len(CHANNEL_COLORS)]
-
-
-# =============================
-# Unidades de canal (v1.29)
-# =============================
-# Lista de unidades seleccionables por canal. "V" es el default (igual que el
-# comportamiento histórico). El símbolo "—" representa "sin unidad" (adimensional).
-# Layout 5x5 en el picker dialog: 24 unidades + 1 hueco vacío.
-CHANNEL_UNITS = [
-    "V",  "A",   "W",  "VA",  "var",   # eléctricas
-    "J",  "Ω",   "Hz", "%",   "dB",    # otras eléctricas / generales
-    "N",  "kgf", "N·m","RPM", "T",     # mecánicas
-    "°C", "°F",  "K",  "Pa",  "PSI",   # térmicas / presión
-    "bar","lux", "lm", "—",            # presión / luz / adimensional
-]
-DEFAULT_UNIT = "V"
-
-
-
-def apply_theme(root, name="Dark"):
-    """Aplica el tema indicado.
-
-    Pasos:
-      1) Reescribe las constantes COLOR_* del módulo.
-      2) Configura ttk.Style con esos valores.
-      3) Actualiza option_add para widgets futuros y Combobox listbox interno.
-
-    Para re-tematizar widgets tk.* YA CREADOS (Frames, Labels, Buttons que
-    no son ttk), llamar a _retheme_tk_widgets(root) después. El método de
-    OscilloscopeApp .apply_theme_runtime() hace ambas cosas.
-    """
-    if name not in THEMES:
-        name = "Dark"
-    _refresh_color_globals(name)
-
-    style = ttk.Style(root)
-    # 'clam' es el único tema empotrado que permite personalización real
-    # de colores en Windows/Linux/Mac.
-    style.theme_use("clam")
-
-    # Raíz
-    root.configure(bg=COLOR_BG)
-
-    # --- Frame / Label / Separator ---
-    style.configure("TFrame", background=COLOR_BG)
-    style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT)
-    style.configure(
-        "TSeparator",
-        background=COLOR_BORDER,
-    )
-
-    # --- Button ---
-    style.configure(
-        "TButton",
-        background=COLOR_BG_ALT,
-        foreground=COLOR_TEXT,
-        bordercolor=COLOR_BORDER,
-        lightcolor=COLOR_BG_ALT,
-        darkcolor=COLOR_BG_ALT,
-        focuscolor=COLOR_BG_ALT,
-        padding=(10, 6),
-        relief="flat",
-        borderwidth=1,
-    )
-    style.map(
-        "TButton",
-        background=[("active", COLOR_BG_HOVER), ("pressed", COLOR_BG_ACTIVE)],
-        bordercolor=[("active", COLOR_ACCENT), ("pressed", COLOR_ACCENT)],
-    )
-
-    # Botón con énfasis (el típico azul)
-    style.configure(
-        "Accent.TButton",
-        background=COLOR_ACCENT,
-        foreground="#000000",
-        bordercolor=COLOR_ACCENT,
-        lightcolor=COLOR_ACCENT,
-        darkcolor=COLOR_ACCENT,
-        padding=(10, 6),
-        relief="flat",
-        borderwidth=0,
-    )
-    style.map(
-        "Accent.TButton",
-        background=[("active", "#6ccfff"), ("pressed", COLOR_ACCENT_2)],
-        foreground=[("active", "#000000"), ("pressed", "#ffffff")],
-    )
-
-    # --- Checkbutton ---
-    style.configure(
-        "TCheckbutton",
-        background=COLOR_BG,
-        foreground=COLOR_TEXT,
-        focuscolor=COLOR_BG,
-        indicatorcolor=COLOR_BG_ALT,
-        indicatorbackground=COLOR_BG_ALT,
-        indicatorforeground="#ffffff",   # ⬅️ tick blanco (la "X")
-    )
-    style.map(
-        "TCheckbutton",
-        background=[("active", COLOR_BG)],
-        foreground=[("active", COLOR_ACCENT)],
-        indicatorcolor=[
-            ("selected", COLOR_ACCENT),
-            ("!selected", COLOR_BG_ALT),
-        ],
-        indicatorforeground=[("selected", "#ffffff")],
-    )
-
-    # --- Radiobutton ---
-    style.configure(
-        "TRadiobutton",
-        background=COLOR_BG,
-        foreground=COLOR_TEXT,
-        focuscolor=COLOR_BG,
-        indicatorcolor=COLOR_BG_ALT,
-        indicatorbackground=COLOR_BG_ALT,
-        indicatorforeground=COLOR_TEXT,
-    )
-    style.map(
-        "TRadiobutton",
-        background=[("active", COLOR_BG)],
-        foreground=[("active", COLOR_ACCENT)],
-        indicatorcolor=[
-            ("selected", COLOR_ACCENT),
-            ("!selected", COLOR_BG_ALT),
-            ("active", COLOR_BG_HOVER),
-        ],
-    )
-
-    # --- Entry / Spinbox / Combobox ---
-    for name in ("TEntry", "TSpinbox", "TCombobox"):
-        style.configure(
-            name,
-            fieldbackground=COLOR_BG_ALT,
-            background=COLOR_BG_ALT,
-            foreground=COLOR_TEXT,
-            bordercolor=COLOR_BORDER,
-            lightcolor=COLOR_BORDER,
-            darkcolor=COLOR_BORDER,
-            insertcolor=COLOR_TEXT,
-            arrowcolor=COLOR_TEXT,
-            padding=4,
-        )
-        style.map(
-            name,
-            bordercolor=[("focus", COLOR_ACCENT), ("hover", COLOR_ACCENT)],
-            lightcolor=[("focus", COLOR_ACCENT)],
-            darkcolor=[("focus", COLOR_ACCENT)],
-            fieldbackground=[("readonly", COLOR_BG_ALT)],
-            foreground=[("readonly", COLOR_TEXT)],
-            arrowcolor=[("hover", "#000000"),
-                        ("active", "#000000"),
-                        ("pressed", "#000000"),
-                        ("!disabled", COLOR_TEXT)],
-        )
-
-    # Combobox tiene además un "dropdown" (Listbox interno) que no usa ttk.
-    # Se configura por option_add:
-    root.option_add("*TCombobox*Listbox.background", COLOR_BG_ALT)
-    root.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
-    root.option_add("*TCombobox*Listbox.selectBackground", COLOR_ACCENT)
-    root.option_add("*TCombobox*Listbox.selectForeground", "#000000")
-
-    # --- Scale (sliders) ---
-    style.configure(
-        "Horizontal.TScale",
-        background=COLOR_BG,
-        troughcolor=COLOR_BG_ALT,
-        bordercolor=COLOR_BORDER,
-        lightcolor=COLOR_BG_ALT,
-        darkcolor=COLOR_BG_ALT,
-    )
-    style.map(
-        "Horizontal.TScale",
-        background=[("active", COLOR_BG)],
-    )
-
-    # ---- Treeview (tablas, e.g. DecoderWindow) ----
-    # Por defecto ttk.Treeview ignora la mayoría de los colores configurados
-    # globalmente. Hay que dárselos explícitamente.
-    style.configure(
-        "Treeview",
-        background=COLOR_BG_ALT,
-        foreground=COLOR_TEXT,
-        fieldbackground=COLOR_BG_ALT,
-        bordercolor=COLOR_BORDER,
-        lightcolor=COLOR_BORDER,
-        darkcolor=COLOR_BORDER,
-        rowheight=22,
-    )
-    style.map(
-        "Treeview",
-        background=[("selected", COLOR_ACCENT)],
-        foreground=[("selected", "#000000")],
-    )
-    style.configure(
-        "Treeview.Heading",
-        background=COLOR_BG,
-        foreground=COLOR_ACCENT,
-        bordercolor=COLOR_BORDER,
-        relief="flat",
-        font=("Segoe UI", 9, "bold"),
-    )
-    style.map(
-        "Treeview.Heading",
-        background=[("active", COLOR_BG_HOVER)],
-    )
-
-    # ---- LabelFrame (e.g. "Channel mapping", "Parameters") ----
-    style.configure(
-        "TLabelframe",
-        background=COLOR_BG,
-        bordercolor=COLOR_BORDER,
-        relief="solid",
-        borderwidth=1,
-    )
-    style.configure(
-        "TLabelframe.Label",
-        background=COLOR_BG,
-        foreground=COLOR_ACCENT,
-        font=("Segoe UI", 9, "bold"),
-    )
-
-    # ---- Scrollbar ----
-    style.configure(
-        "Vertical.TScrollbar",
-        background=COLOR_BG_ALT,
-        troughcolor=COLOR_BG,
-        bordercolor=COLOR_BORDER,
-        arrowcolor=COLOR_TEXT,
-    )
-    style.map(
-        "Vertical.TScrollbar",
-        background=[("active", COLOR_BG_HOVER)],
-    )
-
-    # Tk clásicos que todavía puedan aparecer (Toplevel, etc.)
-    root.option_add("*Background", COLOR_BG)
-    root.option_add("*Foreground", COLOR_TEXT)
-    root.option_add("*selectBackground", COLOR_ACCENT)
-    root.option_add("*selectForeground", "#000000")
-    root.option_add("*Toplevel.background", COLOR_BG)
-    root.option_add("*Menu.background", COLOR_BG_ALT)
-    root.option_add("*Menu.foreground", COLOR_TEXT)
-    # Nota: estos option_add solo afectan a widgets creados DESPUÉS de esta llamada
-
-
-# Alias retrocompat: el código histórico llamaba a apply_dark_theme(root).
-def apply_dark_theme(root):
-    apply_theme(root, "Dark")
-
-
-def _retheme_tk_widgets(widget, _depth=0):
-    """Recorre el árbol de widgets a partir de `widget` y reescribe bg/fg de
-    los tk.* clásicos (Frame, Label, Button, Canvas) usando las constantes
-    COLOR_* actuales.
-
-    Solo toca atributos que el widget soporta — los Canvas no tienen fg, los
-    Frame no tienen fg, etc. Atrapa TclError silenciosamente porque algunos
-    widgets nativos (Spinbox de ttk wrappeado, etc.) rechazan ciertas opciones.
-
-    Las clases ttk.* NO se tocan aquí: ya se actualizan automáticamente al
-    haber reconfigurado ttk.Style en apply_theme().
-
-    Mapping de roles → colores:
-      - tk.Frame con bg actual ~ BG     → nuevo BG
-      - tk.Frame con bg actual ~ BG_ALT → nuevo BG_ALT (topbar, paneles)
-      - tk.Label hereda según el bg del padre
-      - tk.Canvas: igual que Frame, sin fg
-      - tk.Button: como BG_ALT por defecto
-
-    Widgets con atributo `_theme_protected = True` se respetan: no se
-    cambia su color y no se desciende a sus hijos. Sirve para "muestras"
-    de tema (botones del selector de tema en Appearance) que deben
-    mantener su apariencia original siempre.
-
-    Cuidado: como el cambio de tema modifica COLOR_*, comparamos contra los
-    valores del tema ANTERIOR (que pasamos como argumento, ver el método
-    apply_theme_runtime de la app).
-    """
-    # Skip widgets explícitamente marcados como protegidos contra retheme.
-    # Tampoco descendemos: si todo un subárbol debe quedar fijo (poco
-    # común, pero ocurre en swatches/previews), marca el contenedor raíz.
-    if getattr(widget, "_theme_protected", False):
-        return
-
-    try:
-        cls = widget.winfo_class()
-    except Exception:
-        return
-
-    # Detectamos tipo "raw tk" por la ausencia de un punto en el nombre
-    # de clase y por que ttk usa "TFrame", "TLabel", etc.
-    is_ttk = cls.startswith("T") and cls not in ("Toplevel",)
-
-    if not is_ttk:
-        # Recoger bg actual y mapear
-        try:
-            current_bg = widget.cget("bg") if "bg" in widget.keys() else None
-        except (tk.TclError, AttributeError):
-            current_bg = None
-
-        new_bg = _map_legacy_color(current_bg, "bg")
-        if new_bg is not None:
-            try:
-                widget.configure(bg=new_bg)
-            except tk.TclError:
-                pass
-
-        # Foreground si lo soporta
-        try:
-            if "fg" in widget.keys():
-                current_fg = widget.cget("fg")
-                new_fg = _map_legacy_color(current_fg, "fg")
-                if new_fg is not None:
-                    widget.configure(fg=new_fg)
-        except (tk.TclError, AttributeError):
-            pass
-
-        # Para Toplevels y Canvas también highlight* si lo tienen
-        for attr in ("highlightbackground",):
-            try:
-                if attr in widget.keys():
-                    cur = widget.cget(attr)
-                    mapped = _map_legacy_color(cur, "border")
-                    if mapped is not None:
-                        widget.configure(**{attr: mapped})
-            except (tk.TclError, AttributeError):
-                pass
-
-    # Recursión sobre hijos
-    try:
-        children = widget.winfo_children()
-    except Exception:
-        children = []
-    for child in children:
-        _retheme_tk_widgets(child, _depth + 1)
-
-
-# Mapa inverso: dado un color (de cualquier tema), devuelve la "etiqueta" que
-# tenía (BG, BG_ALT, etc.) — útil para re-mapear al nuevo tema.
-_LEGACY_COLOR_REVERSE = {}
-
-def _rebuild_legacy_reverse():
-    """Reconstruye la tabla inversa: hex_color → (theme_name, role).
-    Llamado al inicio. Para retheme runtime, el caller debe pasar el tema
-    ANTERIOR explícitamente."""
-    global _LEGACY_COLOR_REVERSE
-    _LEGACY_COLOR_REVERSE = {}
-    for tname, td in THEMES.items():
-        for role, hex_val in td.items():
-            _LEGACY_COLOR_REVERSE.setdefault(hex_val.lower(), []).append((tname, role))
-
-_rebuild_legacy_reverse()
-
-
-def _map_legacy_color(hex_value, kind):
-    """Dado un color hex que estaba en un widget, intentar identificar su
-    'rol' y devolver el equivalente en el tema ACTUAL.
-
-    `kind` es una hint ('bg', 'fg', 'border') para desempatar cuando el
-    mismo hex se usaba para más de un rol.
-    """
-    if hex_value is None:
-        return None
-    try:
-        h = str(hex_value).lower()
-    except Exception:
-        return None
-    if h not in _LEGACY_COLOR_REVERSE:
-        return None
-    # Tomar el primer mapping encontrado, preferentemente del tema previo si
-    # podemos identificarlo. Para simplicidad: si el rol contiene 'TEXT' y
-    # kind=='fg', preferir TEXT. Si kind=='border', preferir BORDER.
-    candidates = _LEGACY_COLOR_REVERSE[h]
-    preferred_role = None
-    if kind == "fg":
-        for _, role in candidates:
-            if "TEXT" in role:
-                preferred_role = role; break
-    elif kind == "border":
-        for _, role in candidates:
-            if role == "BORDER":
-                preferred_role = role; break
-    if preferred_role is None:
-        # Bg por defecto: priorizar BG, luego BG_ALT, luego cualquiera
-        for pref in ("BG", "BG_ALT", "BG_HOVER", "BG_ACTIVE"):
-            for _, role in candidates:
-                if role == pref:
-                    preferred_role = role; break
-            if preferred_role:
-                break
-    if preferred_role is None:
-        preferred_role = candidates[0][1]
-    return THEMES[CURRENT_THEME_NAME].get(preferred_role)
-
-
 
 
 # =============================
@@ -1252,11 +649,11 @@ class Tooltip:
 
         # Colocar fuera de pantalla mientras se mide
         tip.wm_geometry("+0+0")
-        tip.configure(bg=COLOR_BORDER)  # actúa como borde
+        tip.configure(bg=theme.COLOR_BORDER)  # actúa como borde
 
         lbl = tk.Label(
             tip, text=text,
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 9),
             justify="left",
             padx=8, pady=4,
@@ -1466,7 +863,7 @@ class OscilloscopeApp:
         #   2. Sobreescritura desde config.json si el usuario personalizó
         #      colores en Appearance → Advanced. Persistir en config evita
         #      que al cerrar y reabrir la app se pierdan esos ajustes.
-        _theme_plot = THEMES.get(CURRENT_THEME_NAME, THEMES["Dark"])
+        _theme_plot = THEMES.get(theme.CURRENT_THEME_NAME, THEMES["Dark"])
         self.grid_theme = {
             "bg":            _theme_plot["PLOT_BG"],
             "grid_color":    _theme_plot["PLOT_GRID"],
@@ -1766,30 +1163,30 @@ class OscilloscopeApp:
     # -----------------------------
     def build_layout(self):
         # ---- TopBar horizontal ----
-        self.topbar = tk.Frame(self.root, bg=COLOR_BG_ALT, height=52)
+        self.topbar = tk.Frame(self.root, bg=theme.COLOR_BG_ALT, height=52)
         self.topbar.pack(side=tk.TOP, fill=tk.X)
         self.topbar.pack_propagate(False)
 
         # ---- Zona principal (izquierda: sidebar, centro: plot, derecha: meas) ----
-        main = tk.Frame(self.root, bg=COLOR_BG)
+        main = tk.Frame(self.root, bg=theme.COLOR_BG)
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # Sidebar izquierdo
-        sidebar = tk.Frame(main, bg=COLOR_BG, padx=5)
+        sidebar = tk.Frame(main, bg=theme.COLOR_BG, padx=5)
         sidebar.pack(side=tk.LEFT, fill=tk.Y)
 
         # Panel derecho: columna de medidas activas
-        self.meas_panel = tk.Frame(main, bg=COLOR_BG, width=220)
+        self.meas_panel = tk.Frame(main, bg=theme.COLOR_BG, width=220)
         self.meas_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
         self.meas_panel.pack_propagate(False)
 
         # Zona central: minimap arriba + plot debajo
-        plot_area = tk.Frame(main, bg=COLOR_BG)
+        plot_area = tk.Frame(main, bg=theme.COLOR_BG)
         plot_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.minimap_canvas = tk.Canvas(
-            plot_area, bg=COLOR_BG_ALT, height=40,
-            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            plot_area, bg=theme.COLOR_BG_ALT, height=40,
+            highlightthickness=1, highlightbackground=theme.COLOR_BORDER,
             bd=0, cursor="hand2",
         )
         self.minimap_canvas.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(4, 0))
@@ -1823,14 +1220,14 @@ class OscilloscopeApp:
         def mkbtn(parent, text, command, width=8, fg=None):
             b = tk.Button(
                 parent, text=text,
-                bg=COLOR_BG_ALT, fg=fg or COLOR_TEXT,
-                activebackground=COLOR_BG_HOVER,
-                activeforeground=COLOR_TEXT,
+                bg=theme.COLOR_BG_ALT, fg=fg or theme.COLOR_TEXT,
+                activebackground=theme.COLOR_BG_HOVER,
+                activeforeground=theme.COLOR_TEXT,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=10, pady=4,
                 width=width,
-                highlightbackground=COLOR_BORDER,
+                highlightbackground=theme.COLOR_BORDER,
                 highlightthickness=1,
                 command=command,
             )
@@ -1838,11 +1235,11 @@ class OscilloscopeApp:
             return b
 
         # ---- TOOLS (grupo izquierdo) ----
-        tools_frame = tk.Frame(bar, bg=COLOR_BG_ALT)
+        tools_frame = tk.Frame(bar, bg=theme.COLOR_BG_ALT)
         tools_frame.pack(side=tk.LEFT, padx=(8, 0), pady=8)
 
         tk.Label(tools_frame, text="TOOLS",
-                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -1874,13 +1271,13 @@ class OscilloscopeApp:
         self._render_mode_btn = tk.Button(
             tools_frame,
             text="Detail",
-            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
-            activebackground=COLOR_BG_HOVER,
-            activeforeground=COLOR_ACCENT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
+            activebackground=theme.COLOR_BG_HOVER,
+            activeforeground=theme.COLOR_ACCENT,
             bd=1, relief="flat",
             font=("Segoe UI", 9, "bold"),
             padx=10, pady=4, width=7,
-            highlightbackground=COLOR_ACCENT,
+            highlightbackground=theme.COLOR_ACCENT,
             highlightthickness=1,
             command=self._toggle_render_mode,
         )
@@ -1905,15 +1302,15 @@ class OscilloscopeApp:
                 "Ctrl+S to save, Ctrl+O to load")
 
         # Separador vertical
-        tk.Frame(bar, bg=COLOR_BORDER, width=1
+        tk.Frame(bar, bg=theme.COLOR_BORDER, width=1
                  ).pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=8)
 
         # ---- CURSORS (grupo central) ----
-        cursors_frame = tk.Frame(bar, bg=COLOR_BG_ALT)
+        cursors_frame = tk.Frame(bar, bg=theme.COLOR_BG_ALT)
         cursors_frame.pack(side=tk.LEFT, pady=8)
 
         tk.Label(cursors_frame, text="CURSORS",
-                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -1979,8 +1376,8 @@ class OscilloscopeApp:
         # Antes era "☀ Grid view". Ahora muestra una tuerca y abre la
         # ventana de Settings (tema, grid colors, phosphor, commands legend).
         gear_btn = tk.Frame(
-            bar, bg=COLOR_BG_ALT,
-            highlightbackground=COLOR_BORDER,
+            bar, bg=theme.COLOR_BG_ALT,
+            highlightbackground=theme.COLOR_BORDER,
             highlightthickness=1,
             cursor="hand2",
         )
@@ -1990,7 +1387,7 @@ class OscilloscopeApp:
         gear_size = 22
         gear_canvas = tk.Canvas(
             gear_btn, width=gear_size, height=gear_size,
-            bg=COLOR_BG_ALT, highlightthickness=0, bd=0,
+            bg=theme.COLOR_BG_ALT, highlightthickness=0, bd=0,
         )
         gear_canvas.pack(side=tk.LEFT, padx=(6, 2), pady=4)
 
@@ -1998,7 +1395,7 @@ class OscilloscopeApp:
             """Dibuja una tuerca: anillo dentado + círculo central hueco.
             Polígono de 8 dientes alternando radio outer/inner."""
             if color is None:
-                color = COLOR_ACCENT
+                color = theme.COLOR_ACCENT
             gear_canvas.delete("all")
             cx = cy = gear_size / 2
             import math
@@ -2041,7 +1438,7 @@ class OscilloscopeApp:
         # Texto
         gear_label = tk.Label(
             gear_btn, text="Settings",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 9, "bold"),
         )
         gear_label.pack(side=tk.LEFT, padx=(2, 8), pady=4)
@@ -2054,27 +1451,27 @@ class OscilloscopeApp:
             try:
                 if not gear_canvas.winfo_exists():
                     return
-                cur_bg = COLOR_BG_ALT
+                cur_bg = theme.COLOR_BG_ALT
                 gear_btn.config(bg=cur_bg,
-                                highlightbackground=COLOR_BORDER)
+                                highlightbackground=theme.COLOR_BORDER)
                 gear_canvas.config(bg=cur_bg)
-                gear_label.config(bg=cur_bg, fg=COLOR_TEXT)
-                draw_gear(COLOR_ACCENT)
+                gear_label.config(bg=cur_bg, fg=theme.COLOR_TEXT)
+                draw_gear(theme.COLOR_ACCENT)
             except Exception:
                 pass
         self._gear_redraw = _gear_redraw_for_theme
 
         # Hover y click: propagar a todos los hijos para que se comporte como botón
         def on_enter(_e=None):
-            gear_btn.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
-            gear_canvas.config(bg=COLOR_BG_HOVER)
-            gear_label.config(bg=COLOR_BG_HOVER)
-            draw_gear(COLOR_ACCENT)
+            gear_btn.config(highlightbackground=theme.COLOR_ACCENT, bg=theme.COLOR_BG_HOVER)
+            gear_canvas.config(bg=theme.COLOR_BG_HOVER)
+            gear_label.config(bg=theme.COLOR_BG_HOVER)
+            draw_gear(theme.COLOR_ACCENT)
         def on_leave(_e=None):
-            gear_btn.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
-            gear_canvas.config(bg=COLOR_BG_ALT)
-            gear_label.config(bg=COLOR_BG_ALT)
-            draw_gear(COLOR_ACCENT)
+            gear_btn.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
+            gear_canvas.config(bg=theme.COLOR_BG_ALT)
+            gear_label.config(bg=theme.COLOR_BG_ALT)
+            draw_gear(theme.COLOR_ACCENT)
         def on_click(_e=None):
             self._open_grid_view_window()
 
@@ -2093,26 +1490,26 @@ class OscilloscopeApp:
         # más a la derecha. Como gear_btn ya se packeó, el About queda a su
         # izquierda. Visualmente: [...cursors...]  [About]  [⚙ Settings]
         about_btn = tk.Frame(
-            bar, bg=COLOR_BG_ALT,
-            highlightbackground=COLOR_BORDER,
+            bar, bg=theme.COLOR_BG_ALT,
+            highlightbackground=theme.COLOR_BORDER,
             highlightthickness=1,
             cursor="hand2",
         )
         about_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=8)
         about_label = tk.Label(
             about_btn, text="ⓘ  About",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 9, "bold"),
             cursor="hand2",
         )
         about_label.pack(side=tk.LEFT, padx=10, pady=4)
 
         def about_enter(_e=None):
-            about_btn.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
-            about_label.config(bg=COLOR_BG_HOVER)
+            about_btn.config(highlightbackground=theme.COLOR_ACCENT, bg=theme.COLOR_BG_HOVER)
+            about_label.config(bg=theme.COLOR_BG_HOVER)
         def about_leave(_e=None):
-            about_btn.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
-            about_label.config(bg=COLOR_BG_ALT)
+            about_btn.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
+            about_label.config(bg=theme.COLOR_BG_ALT)
         def about_click(_e=None):
             self._open_about_window()
         for w in (about_btn, about_label):
@@ -2123,7 +1520,7 @@ class OscilloscopeApp:
 
     def build_controls(self, frame):
         # Configurar el frame padre como oscuro
-        frame.configure(bg=COLOR_BG, padx=10, pady=10)
+        frame.configure(bg=theme.COLOR_BG, padx=10, pady=10)
 
         # ---- Load CSV destacado arriba ----
         open_btn = ttk.Button(frame, text="📂  Open CSV", command=self.load_csv,
@@ -2144,7 +1541,7 @@ class OscilloscopeApp:
         ttk.Label(frame, text="V / div").pack(anchor="w", pady=(4, 0))
 
         # Fila con Entry + botones ⯅ ⯆
-        vdiv_row = tk.Frame(frame, bg=COLOR_BG)
+        vdiv_row = tk.Frame(frame, bg=theme.COLOR_BG)
         vdiv_row.pack(fill=tk.X, pady=(2, 4))
 
         self.v_div_entry = ttk.Entry(
@@ -2165,12 +1562,12 @@ class OscilloscopeApp:
 
         v_step_up = tk.Button(
             vdiv_row, text="⯅",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 8, "bold"),
             padx=4, pady=0,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=lambda: self._step_v_div("up"),
         )
         v_step_up.pack(side=tk.LEFT, padx=(2, 0))
@@ -2179,12 +1576,12 @@ class OscilloscopeApp:
 
         v_step_dn = tk.Button(
             vdiv_row, text="⯆",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 8, "bold"),
             padx=4, pady=0,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=lambda: self._step_v_div("down"),
         )
         v_step_dn.pack(side=tk.LEFT, padx=(0, 0))
@@ -2206,7 +1603,7 @@ class OscilloscopeApp:
 
         # Fila con Entry central + botones ⯅ ⯆ manuales (evita los problemas
         # del Spinbox con valores no-canónicos/textuales).
-        tdiv_row = tk.Frame(frame, bg=COLOR_BG)
+        tdiv_row = tk.Frame(frame, bg=theme.COLOR_BG)
         tdiv_row.pack(fill=tk.X, pady=(2, 10))
 
         self.t_div_entry = ttk.Entry(
@@ -2228,12 +1625,12 @@ class OscilloscopeApp:
         # Botones de step
         step_up = tk.Button(
             tdiv_row, text="⯅",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 8, "bold"),
             padx=4, pady=0,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=lambda: self._step_t_div("up"),
         )
         step_up.pack(side=tk.LEFT, padx=(2, 0))
@@ -2242,12 +1639,12 @@ class OscilloscopeApp:
 
         step_dn = tk.Button(
             tdiv_row, text="⯆",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 8, "bold"),
             padx=4, pady=0,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=lambda: self._step_t_div("down"),
         )
         step_dn.pack(side=tk.LEFT, padx=(0, 0))
@@ -2309,13 +1706,13 @@ class OscilloscopeApp:
         self._section_header(frame, "CHANNELS")
 
         # Frame contenedor que se rellena dinámicamente al cargar CSV
-        self.channels_frame = tk.Frame(frame, bg=COLOR_BG)
+        self.channels_frame = tk.Frame(frame, bg=theme.COLOR_BG)
         self.channels_frame.pack(fill=tk.X, pady=(4, 10))
 
         # Placeholder cuando no hay canales
         self.channels_placeholder = tk.Label(
             self.channels_frame, text="No CSV loaded",
-            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            fg=theme.COLOR_TEXT_DIM, bg=theme.COLOR_BG,
             font=("Segoe UI", 9, "italic")
         )
         self.channels_placeholder.pack(anchor="w", padx=4)
@@ -2328,7 +1725,7 @@ class OscilloscopeApp:
         tk.Label(
             parent, text=text,
             font=("Segoe UI", 8, "bold"),
-            fg=COLOR_ACCENT, bg=COLOR_BG
+            fg=theme.COLOR_ACCENT, bg=theme.COLOR_BG
         ).pack(anchor="w", pady=(0, 2))
 
 
@@ -2344,20 +1741,20 @@ class OscilloscopeApp:
         if not self.channels:
             self.channels_placeholder = tk.Label(
                 self.channels_frame, text="No CSV loaded",
-                fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+                fg=theme.COLOR_TEXT_DIM, bg=theme.COLOR_BG,
                 font=("Segoe UI", 9, "italic")
             )
             self.channels_placeholder.pack(anchor="w", padx=4)
             return
 
         for i, ch in enumerate(self.channels):
-            row = tk.Frame(self.channels_frame, bg=COLOR_BG)
+            row = tk.Frame(self.channels_frame, bg=theme.COLOR_BG)
             row.pack(fill=tk.X, pady=1)
 
             # Rectángulo de color (pequeño cuadrado)
             swatch = tk.Label(
                 row, text="■",
-                fg=ch["color"], bg=COLOR_BG,
+                fg=ch["color"], bg=theme.COLOR_BG,
                 font=("Segoe UI", 12, "bold")
             )
             swatch.pack(side=tk.LEFT, padx=(2, 4))
@@ -2367,11 +1764,11 @@ class OscilloscopeApp:
                 row,
                 text=ch["name"],
                 variable=ch["visible"],
-                bg=COLOR_BG,
+                bg=theme.COLOR_BG,
                 fg=ch["color"],
-                activebackground=COLOR_BG,
+                activebackground=theme.COLOR_BG,
                 activeforeground=ch["color"],
-                selectcolor=COLOR_BG_ALT,
+                selectcolor=theme.COLOR_BG_ALT,
                 font=("Segoe UI", 10, "bold" if i == self.active_channel_idx else "normal"),
                 bd=0, highlightthickness=0,
                 anchor="w",
@@ -2445,14 +1842,14 @@ class OscilloscopeApp:
                 return _del
             del_btn = tk.Label(
                 row, text="✕",
-                bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                 font=("Segoe UI", 9, "bold"),
                 cursor="hand2",
             )
             del_btn.pack(side=tk.RIGHT, padx=(2, 4))
             del_btn.bind("<Button-1>", lambda e, f=make_deleter(i): f())
-            del_btn.bind("<Enter>", lambda e, w=del_btn: w.config(fg=COLOR_DANGER))
-            del_btn.bind("<Leave>", lambda e, w=del_btn: w.config(fg=COLOR_TEXT_DIM))
+            del_btn.bind("<Enter>", lambda e, w=del_btn: w.config(fg=theme.COLOR_DANGER))
+            del_btn.bind("<Leave>", lambda e, w=del_btn: w.config(fg=theme.COLOR_TEXT_DIM))
 
             # Botón ⟲ GND: alinea el 0V del canal a la división vertical más cercana
             def make_gnd_snap(idx):
@@ -2461,21 +1858,21 @@ class OscilloscopeApp:
                 return _snap
             gnd_btn = tk.Label(
                 row, text="⟲",
-                bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                 font=("Segoe UI", 10, "bold"),
                 cursor="hand2",
             )
             gnd_btn.pack(side=tk.RIGHT, padx=(2, 2))
             gnd_btn.bind("<Button-1>", lambda e, f=make_gnd_snap(i): f())
-            gnd_btn.bind("<Enter>", lambda e, w=gnd_btn: w.config(fg=COLOR_ACCENT))
-            gnd_btn.bind("<Leave>", lambda e, w=gnd_btn: w.config(fg=COLOR_TEXT_DIM))
+            gnd_btn.bind("<Enter>", lambda e, w=gnd_btn: w.config(fg=theme.COLOR_ACCENT))
+            gnd_btn.bind("<Leave>", lambda e, w=gnd_btn: w.config(fg=theme.COLOR_TEXT_DIM))
 
             # Botón-casilla de unidad (v1.29): muestra la unidad del canal.
             # Clic → abre picker grid 5x5 para seleccionar otra.
             ch_unit = self._ch_unit(i)
             unit_btn = tk.Label(
                 row, text=ch_unit,
-                bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                 font=("Segoe UI", 8, "bold"),
                 cursor="hand2",
                 padx=5, pady=0,
@@ -2489,12 +1886,12 @@ class OscilloscopeApp:
             unit_btn.bind(
                 "<Enter>",
                 lambda e, w=unit_btn: w.config(
-                    highlightbackground=COLOR_ACCENT, fg=COLOR_ACCENT),
+                    highlightbackground=theme.COLOR_ACCENT, fg=theme.COLOR_ACCENT),
             )
             unit_btn.bind(
                 "<Leave>",
                 lambda e, w=unit_btn: w.config(
-                    highlightbackground=COLOR_BORDER, fg=COLOR_TEXT),
+                    highlightbackground=theme.COLOR_BORDER, fg=theme.COLOR_TEXT),
             )
             Tooltip(unit_btn, "Channel unit — click to change")
 
@@ -2504,7 +1901,7 @@ class OscilloscopeApp:
             self.channels_frame,
             text=("swatch = color · dbl-click = rename · "
                   "box = unit · ⟲ = snap · ✕ = delete"),
-            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            fg=theme.COLOR_TEXT_DIM, bg=theme.COLOR_BG,
             font=("Segoe UI", 7, "italic"),
             wraplength=240, justify="left",
         ).pack(anchor="w", padx=4, pady=(4, 0))
@@ -2514,16 +1911,16 @@ class OscilloscopeApp:
         """Construye la cabecera del panel derecho. El contenido (filas de
         medidas) se regenera con _rebuild_measurements_panel."""
         # Header
-        hdr = tk.Frame(self.meas_panel, bg=COLOR_BG_ALT, height=28)
+        hdr = tk.Frame(self.meas_panel, bg=theme.COLOR_BG_ALT, height=28)
         hdr.pack(fill=tk.X, pady=(0, 4))
         hdr.pack_propagate(False)
         tk.Label(hdr, text="MEASUREMENTS",
-                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                  font=("Segoe UI", 8, "bold")
                  ).pack(side=tk.LEFT, padx=10, pady=6)
 
         # Frame contenedor scrollable de filas
-        self.meas_rows_frame = tk.Frame(self.meas_panel, bg=COLOR_BG)
+        self.meas_rows_frame = tk.Frame(self.meas_panel, bg=theme.COLOR_BG)
         self.meas_rows_frame.pack(fill=tk.BOTH, expand=True)
 
         # Placeholder
@@ -2543,7 +1940,7 @@ class OscilloscopeApp:
             tk.Label(
                 self.meas_rows_frame,
                 text="No measurements\nadded",
-                bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                 font=("Segoe UI", 9, "italic"),
                 justify="center"
             ).pack(expand=True, pady=20)
@@ -2557,29 +1954,29 @@ class OscilloscopeApp:
     def _draw_meas_row(self, idx, result):
         """Dibuja una fila del panel de medidas con color del canal, nombre,
         valor y click derecho para eliminar."""
-        row = tk.Frame(self.meas_rows_frame, bg=COLOR_BG)
+        row = tk.Frame(self.meas_rows_frame, bg=theme.COLOR_BG)
         row.pack(fill=tk.X, padx=4, pady=1)
 
         # Separador superior sutil
-        sep = tk.Frame(row, bg=COLOR_BORDER, height=1)
+        sep = tk.Frame(row, bg=theme.COLOR_BORDER, height=1)
         sep.pack(fill=tk.X)
 
         # Contenido
-        body = tk.Frame(row, bg=COLOR_BG)
+        body = tk.Frame(row, bg=theme.COLOR_BG)
         body.pack(fill=tk.X, padx=6, pady=4)
 
         # Cabecera: canal + nombre de la medida (color del canal)
-        top_line = tk.Frame(body, bg=COLOR_BG)
+        top_line = tk.Frame(body, bg=theme.COLOR_BG)
         top_line.pack(fill=tk.X)
 
         tk.Label(
             top_line, text=result["channel_name"],
-            bg=COLOR_BG, fg=result["color"],
+            bg=theme.COLOR_BG, fg=result["color"],
             font=("Segoe UI", 8, "bold")
         ).pack(side=tk.LEFT)
         tk.Label(
             top_line, text=f"  {result['name']}",
-            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
             font=("Segoe UI", 8)
         ).pack(side=tk.LEFT)
 
@@ -2588,7 +1985,7 @@ class OscilloscopeApp:
                       if result["value"] is not None else "---")
         val_lbl = tk.Label(
             body, text=value_text,
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Consolas", 11, "bold"),
             anchor="w"
         )
@@ -2598,8 +1995,8 @@ class OscilloscopeApp:
         def show_ctx(event, i=idx):
             menu = tk.Menu(
                 self.root, tearoff=0,
-                bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-                activebackground=COLOR_ACCENT, activeforeground="#000000",
+                bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+                activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
                 bd=0,
             )
             menu.add_command(
@@ -2633,7 +2030,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash: ocultar antes de cualquier configure
         win.title("Rename channel")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, luego transient (evita fantasma).
         self._make_resizable_dialog(win, 320, 140)
         win.transient(self.root)
@@ -2642,7 +2039,7 @@ class OscilloscopeApp:
         tk.Label(
             win,
             text=f"New name for {old_name}:",
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 10, "bold")
         ).pack(padx=12, pady=(14, 6), anchor="w")
 
@@ -2653,7 +2050,7 @@ class OscilloscopeApp:
         entry.select_range(0, tk.END)
         entry.icursor(tk.END)
 
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(fill=tk.X, padx=12, pady=12)
 
         def apply_rename(*_):
@@ -2687,7 +2084,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title(f"Color — {self.channels[ch_idx]['name']}")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         win.resizable(False, False)
         # Geometry PRIMERO, luego transient (evita fantasma).
         self._center_dialog(win, 320, 360)
@@ -2698,7 +2095,7 @@ class OscilloscopeApp:
         tk.Label(
             win,
             text=f"Pick color for {self.channels[ch_idx]['name']}",
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 10, "bold")
         ).pack(padx=12, pady=(12, 4), anchor="w")
 
@@ -2730,7 +2127,7 @@ class OscilloscopeApp:
             "#101010", "#000000",
         ]
 
-        grid = tk.Frame(win, bg=COLOR_BG)
+        grid = tk.Frame(win, bg=theme.COLOR_BG)
         grid.pack(padx=12, pady=4)
 
         def make_picker(color):
@@ -2748,19 +2145,19 @@ class OscilloscopeApp:
             sq = tk.Frame(
                 grid, bg=color,
                 width=24, height=24,
-                highlightbackground=COLOR_BORDER,
-                highlightcolor=COLOR_ACCENT,
+                highlightbackground=theme.COLOR_BORDER,
+                highlightcolor=theme.COLOR_ACCENT,
                 highlightthickness=1,
                 cursor="hand2",
             )
             sq.grid(row=r, column=c, padx=1, pady=1)
             sq.bind("<Button-1>", make_picker(color))
             # Hover feedback (bordecillo azul al pasar encima)
-            sq.bind("<Enter>", lambda e, s=sq: s.config(highlightthickness=2, highlightbackground=COLOR_ACCENT))
-            sq.bind("<Leave>", lambda e, s=sq: s.config(highlightthickness=1, highlightbackground=COLOR_BORDER))
+            sq.bind("<Enter>", lambda e, s=sq: s.config(highlightthickness=2, highlightbackground=theme.COLOR_ACCENT))
+            sq.bind("<Leave>", lambda e, s=sq: s.config(highlightthickness=1, highlightbackground=theme.COLOR_BORDER))
 
         # Botón Cancel
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(pady=(10, 12))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack()
 
@@ -2824,7 +2221,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title(f"Unit — {self.channels[ch_idx].get('name', f'CH{ch_idx+1}')}")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         win.resizable(False, False)
         # Geometry PRIMERO, transient DESPUÉS (patrón anti-fantasma).
         self._center_dialog(win, 380, 440)
@@ -2834,17 +2231,17 @@ class OscilloscopeApp:
         self._bind_escape_to_close(win)
 
         # Header
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=40)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=40)
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(
             hdr, text="CHANNEL UNIT",
-            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
             font=("Segoe UI", 11, "bold"),
         ).pack(side=tk.LEFT, padx=14, pady=10)
 
         # Grid de botones
-        grid = tk.Frame(win, bg=COLOR_BG)
+        grid = tk.Frame(win, bg=theme.COLOR_BG)
         grid.pack(padx=14, pady=12)
 
         cells = {}  # unit -> Label widget
@@ -2852,13 +2249,13 @@ class OscilloscopeApp:
         def refresh_styles():
             for u, w in cells.items():
                 if u == selected["unit"]:
-                    w.config(bg=COLOR_ACCENT, fg="#000000",
+                    w.config(bg=theme.COLOR_ACCENT, fg="#000000",
                              relief="sunken",
-                             highlightbackground=COLOR_ACCENT)
+                             highlightbackground=theme.COLOR_ACCENT)
                 else:
-                    w.config(bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                    w.config(bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                              relief="solid",
-                             highlightbackground=COLOR_BORDER)
+                             highlightbackground=theme.COLOR_BORDER)
 
         def make_pick(unit):
             def _pick(_e=None):
@@ -2869,10 +2266,10 @@ class OscilloscopeApp:
         def make_hover(w, unit):
             def _enter(_e):
                 if selected["unit"] != unit:
-                    w.config(bg=COLOR_BG_HOVER)
+                    w.config(bg=theme.COLOR_BG_HOVER)
             def _leave(_e):
                 if selected["unit"] != unit:
-                    w.config(bg=COLOR_BG_ALT)
+                    w.config(bg=theme.COLOR_BG_ALT)
             return _enter, _leave
 
         # Layout 5x5 — itera CHANNEL_UNITS y rellena huecos vacíos.
@@ -2884,12 +2281,12 @@ class OscilloscopeApp:
                 u = CHANNEL_UNITS[idx]
                 cell = tk.Label(
                     grid, text=u,
-                    bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                    bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                     font=("Segoe UI", 11, "bold"),
                     cursor="hand2",
                     width=4, height=2,
                     bd=1, relief="solid",
-                    highlightbackground=COLOR_BORDER,
+                    highlightbackground=theme.COLOR_BORDER,
                     highlightthickness=1,
                 )
                 cell.grid(row=r, column=c, padx=3, pady=3)
@@ -2900,13 +2297,13 @@ class OscilloscopeApp:
                 cells[u] = cell
             else:
                 # Hueco vacío — placeholder invisible para mantener layout
-                tk.Label(grid, text="", bg=COLOR_BG,
+                tk.Label(grid, text="", bg=theme.COLOR_BG,
                          width=4, height=2).grid(row=r, column=c, padx=3, pady=3)
 
         refresh_styles()
 
         # Bottom bar
-        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom = tk.Frame(win, bg=theme.COLOR_BG)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=12)
 
         def on_cancel():
@@ -3122,7 +2519,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("New MATH channel")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # 720 de ancho garantiza que los 11 botones de la fila "Nums" entren
         # con padding. El alto 500 sigue siendo suficiente para todo el contenido.
         # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
@@ -3136,11 +2533,11 @@ class OscilloscopeApp:
         # final, Tk la pondría arriba (orden de llamada a pack manda, no el
         # atributo side, cuando hay TOP+BOTTOM). Los botones se añaden más
         # abajo a este frame ya packeado.
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
 
         tk.Label(win, text="Math expression",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(anchor="w", padx=14, pady=(14, 4))
 
@@ -3150,7 +2547,7 @@ class OscilloscopeApp:
         entry.focus_set()
 
         status = tk.Label(win, text="Type an expression",
-                          bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                          bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                           font=("Segoe UI", 9), anchor="w", justify="left")
         status.pack(fill=tk.X, padx=14, pady=(0, 6))
 
@@ -3160,10 +2557,10 @@ class OscilloscopeApp:
             entry.focus_set()
 
         # Canales reales
-        pads = tk.Frame(win, bg=COLOR_BG)
+        pads = tk.Frame(win, bg=theme.COLOR_BG)
         pads.pack(fill=tk.X, padx=14, pady=(4, 0))
 
-        tk.Label(pads, text="Channels:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(pads, text="Channels:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).grid(row=0, column=0, sticky="nw", pady=(4, 0))
 
         # Lista combinada: primero CHs reales, luego MATH
@@ -3175,20 +2572,20 @@ class OscilloscopeApp:
             chan_btns.append((f"M{i+1}", mch["name"], mch["color"]))
 
         CHANS_PER_ROW = 4
-        ch_grid = tk.Frame(pads, bg=COLOR_BG)
+        ch_grid = tk.Frame(pads, bg=theme.COLOR_BG)
         ch_grid.grid(row=0, column=1, columnspan=20, sticky="we", pady=(0, 4))
         for idx, (tag, name, color) in enumerate(chan_btns):
             r, c = divmod(idx, CHANS_PER_ROW)
             # Etiqueta con flecha para evitar confusión con el operador '·' (multiplicación)
             b = tk.Button(
                 ch_grid, text=f"{tag}  →  {name}",
-                bg=COLOR_BG_ALT, fg=color,
-                activebackground=COLOR_BG_HOVER,
+                bg=theme.COLOR_BG_ALT, fg=color,
+                activebackground=theme.COLOR_BG_HOVER,
                 activeforeground=color,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=6, pady=3,
-                highlightbackground=COLOR_BORDER,
+                highlightbackground=theme.COLOR_BORDER,
                 highlightthickness=1,
                 command=lambda s=tag: insert(s),
             )
@@ -3196,14 +2593,14 @@ class OscilloscopeApp:
             ch_grid.columnconfigure(c, weight=1)
             self._add_hover_shadow(b)
 
-        tk.Label(pads, text="Ops:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(pads, text="Ops:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(6, 0))
         for j, op in enumerate(["+", "-", "*", "/", "(", ")"]):
             ttk.Button(pads, text=op, width=4,
                        command=lambda s=op: insert(s)
                        ).grid(row=1, column=1 + j, padx=2, pady=(6, 0))
 
-        tk.Label(pads, text="Funcs:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(pads, text="Funcs:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).grid(row=2, column=0, sticky="w", pady=(6, 0))
         funcs_1 = [("INT", "INT("), ("DIFF", "DIFF("),
                    ("ABS", "ABS("), ("POW", "POW("), ("SQRT", "SQRT(")]
@@ -3214,7 +2611,7 @@ class OscilloscopeApp:
                        ).grid(row=2, column=1 + j, padx=2, pady=(6, 0))
 
         # Fila de números
-        tk.Label(pads, text="Nums:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(pads, text="Nums:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).grid(row=3, column=0, sticky="w", pady=(6, 0))
         nums = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "."]
         for j, n in enumerate(nums):
@@ -3223,15 +2620,15 @@ class OscilloscopeApp:
                        ).grid(row=3, column=1 + j, padx=2, pady=(6, 0))
 
         # Nombre + Unidad (v1.29)
-        name_frame = tk.Frame(win, bg=COLOR_BG)
+        name_frame = tk.Frame(win, bg=theme.COLOR_BG)
         name_frame.pack(fill=tk.X, padx=14, pady=(14, 0))
-        tk.Label(name_frame, text="Name:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(name_frame, text="Name:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT)
         name_var = tk.StringVar(value="")
         name_entry = ttk.Entry(name_frame, textvariable=name_var,
                                font=("Segoe UI", 10))
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
-        tk.Label(name_frame, text="Unit:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(name_frame, text="Unit:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(12, 4))
         unit_var = tk.StringVar(value=DEFAULT_UNIT)
         unit_combo = ttk.Combobox(
@@ -3252,7 +2649,7 @@ class OscilloscopeApp:
         def validate(*_):
             expr = expr_var.get()
             if not expr.strip():
-                status.config(text="Type an expression", fg=COLOR_TEXT_DIM)
+                status.config(text="Type an expression", fg=theme.COLOR_TEXT_DIM)
                 validation["ast"] = None
                 validation["ok"] = False
                 if not name_touched["v"]:
@@ -3276,7 +2673,7 @@ class OscilloscopeApp:
                     name_var.set(expr.upper().replace(" ", ""))
                     name_trace_id[0] = name_var.trace_add("write", on_name_typed)
             except ValueError as e:
-                status.config(text=f"✗ {e}", fg=COLOR_DANGER)
+                status.config(text=f"✗ {e}", fg=theme.COLOR_DANGER)
                 validation["ast"] = None
                 validation["ok"] = False
 
@@ -3519,7 +2916,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Delete MATH channel")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 420, 200)
         win.transient(self.root)
@@ -3527,7 +2924,7 @@ class OscilloscopeApp:
 
         tk.Label(
             win, text=f"Delete {ch_name}?",
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 10, "bold")
         ).pack(padx=14, pady=(14, 4), anchor="w")
 
@@ -3536,11 +2933,11 @@ class OscilloscopeApp:
             win,
             text=f"The following MATH channel(s) depend on it and will\n"
                  f"also be deleted:\n\n   {dep_list}",
-            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
             font=("Segoe UI", 9), justify="left"
         ).pack(padx=14, pady=(0, 10), anchor="w")
 
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
 
         def do_ok():
@@ -3589,7 +2986,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("About")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 480, 380, min_w=440, min_h=320)
         self._apply_window_chrome(win)
@@ -3597,20 +2994,20 @@ class OscilloscopeApp:
         self._bind_escape_to_close(win)
 
         # Bottom bar primero para que el botón Close quede siempre visible
-        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom = tk.Frame(win, bg=theme.COLOR_BG)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
 
         # Logo / nombre prominente
         title_lbl = tk.Label(
             win, text=APP_NAME,
-            bg=COLOR_BG, fg=COLOR_ACCENT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_ACCENT,
             font=("Segoe UI", 16, "bold"),
         )
         title_lbl.pack(pady=(20, 4))
 
         version_lbl = tk.Label(
             win, text=f"Version {APP_VERSION}",
-            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
             font=("Segoe UI", 10),
         )
         version_lbl.pack(pady=(0, 14))
@@ -3618,22 +3015,22 @@ class OscilloscopeApp:
         # Descripción
         desc = tk.Label(
             win, text=APP_DESCRIPTION,
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 9),
             wraplength=420, justify="center",
         )
         desc.pack(padx=20, pady=4)
 
         # Info adicional
-        info_frame = tk.Frame(win, bg=COLOR_BG)
+        info_frame = tk.Frame(win, bg=theme.COLOR_BG)
         info_frame.pack(pady=(14, 4))
 
         def info_row(label, value):
-            row = tk.Frame(info_frame, bg=COLOR_BG)
+            row = tk.Frame(info_frame, bg=theme.COLOR_BG)
             row.pack(anchor="center", pady=1)
-            tk.Label(row, text=label, bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            tk.Label(row, text=label, bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                      font=("Segoe UI", 9)).pack(side=tk.LEFT)
-            tk.Label(row, text=value, bg=COLOR_BG, fg=COLOR_TEXT,
+            tk.Label(row, text=value, bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                      font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(4, 0))
 
         info_row("Author:",  APP_AUTHOR)
@@ -3652,7 +3049,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Settings")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 440, 680, min_w=400, min_h=480)
         self._apply_window_chrome(win)
@@ -3675,18 +3072,18 @@ class OscilloscopeApp:
         # Sección 1: Tema global
         # =====================
         tk.Label(content, text="App theme",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(anchor="w", padx=14, pady=(14, 4))
 
         tk.Label(content,
                  text="Changes colors of the whole UI. Plot colors below "
                       "are synchronized to the chosen theme.",
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 8), justify="left", wraplength=400
                  ).pack(anchor="w", padx=14, pady=(0, 6))
 
-        theme_frame = tk.Frame(content, bg=COLOR_BG)
+        theme_frame = tk.Frame(content, bg=theme.COLOR_BG)
         theme_frame.pack(fill=tk.X, padx=14, pady=(0, 4))
 
         # Botones-swatch para cada tema. Visualmente preview del color de fondo
@@ -3707,7 +3104,7 @@ class OscilloscopeApp:
                 bd=2, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=10, pady=8,
-                highlightbackground=t["ACCENT"] if name == CURRENT_THEME_NAME else t["BORDER"],
+                highlightbackground=t["ACCENT"] if name == theme.CURRENT_THEME_NAME else t["BORDER"],
                 highlightthickness=3,
                 command=lambda n=name: choose_theme(n),
             )
@@ -3727,7 +3124,7 @@ class OscilloscopeApp:
             # crezca/encoja y reflowea el grid → efecto "salto".
             for n, btn in theme_buttons.items():
                 t = THEMES[n]
-                is_active = (n == CURRENT_THEME_NAME)
+                is_active = (n == theme.CURRENT_THEME_NAME)
                 btn.config(
                     highlightbackground=t["ACCENT"] if is_active else t["BORDER"],
                 )
@@ -3736,7 +3133,7 @@ class OscilloscopeApp:
             self.apply_theme_runtime(name, sync_plot=True)
             # Refrescar la propia ventana
             try:
-                win.configure(bg=COLOR_BG)
+                win.configure(bg=theme.COLOR_BG)
                 refresh_theme_buttons()
                 refresh_swatches()
                 # Rerender de etiquetas de la propia ventana
@@ -3760,7 +3157,7 @@ class OscilloscopeApp:
         # físicos suelen traer pre-trigger negativo. Internamente la app siempre
         # normaliza a t=0 para simplificar; aquí elegimos qué mostrar al usuario.
         tk.Label(content, text="Time axis",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(anchor="w", padx=14, pady=(4, 4))
 
@@ -3769,11 +3166,11 @@ class OscilloscopeApp:
                       "data is always referenced from 0; this only changes "
                       "what you see in the X-axis ticks, cursors and the "
                       "decoder table.",
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 8), justify="left", wraplength=400
                  ).pack(anchor="w", padx=14, pady=(0, 6))
 
-        time_axis_frame = tk.Frame(content, bg=COLOR_BG)
+        time_axis_frame = tk.Frame(content, bg=theme.COLOR_BG)
         time_axis_frame.pack(fill=tk.X, padx=14, pady=(0, 4))
 
         # Usamos un StringVar interno como "radio" para garantizar mutua
@@ -3823,13 +3220,13 @@ class OscilloscopeApp:
         # Sección 2: Plot grid
         # =====================
         tk.Label(content, text="Plot grid (advanced)",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(anchor="w", padx=14, pady=(4, 4))
 
         tk.Label(content,
                  text="Fine-tune the oscilloscope plot independently of the app theme.",
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 8), justify="left", wraplength=400
                  ).pack(anchor="w", padx=14, pady=(0, 6))
 
@@ -3844,10 +3241,10 @@ class OscilloscopeApp:
             "Phosphor":      {"bg": "#0a1a0a", "grid_color": "#2d5a2d", "text_color": "#7fff7f"},
         }
 
-        tk.Label(content, text="Plot presets:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(content, text="Plot presets:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).pack(anchor="w", padx=14, pady=(4, 2))
 
-        preset_frame = tk.Frame(content, bg=COLOR_BG)
+        preset_frame = tk.Frame(content, bg=theme.COLOR_BG)
         preset_frame.pack(fill=tk.X, padx=14, pady=(0, 10))
 
         def apply_preset(p):
@@ -3886,10 +3283,10 @@ class OscilloscopeApp:
             preset_frame.columnconfigure(i % 2, weight=1)
 
         # Editores individuales
-        tk.Label(content, text="Custom:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(content, text="Custom:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).pack(anchor="w", padx=14, pady=(4, 2))
 
-        custom_frame = tk.Frame(content, bg=COLOR_BG)
+        custom_frame = tk.Frame(content, bg=theme.COLOR_BG)
         custom_frame.pack(fill=tk.X, padx=14, pady=(0, 10))
 
         swatches = {}
@@ -3932,14 +3329,14 @@ class OscilloscopeApp:
             ("grid_color", "Grid lines"),
             ("text_color", "Text / axis"),
         ]):
-            row = tk.Frame(custom_frame, bg=COLOR_BG)
+            row = tk.Frame(custom_frame, bg=theme.COLOR_BG)
             row.pack(fill=tk.X, pady=3)
-            tk.Label(row, text=label, bg=COLOR_BG, fg=COLOR_TEXT,
+            tk.Label(row, text=label, bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                      font=("Segoe UI", 9), width=14, anchor="w"
                      ).pack(side=tk.LEFT)
             sw = tk.Label(row, bg=self.grid_theme[key], width=4, height=1,
                           relief="flat", bd=1,
-                          highlightbackground=COLOR_BORDER, highlightthickness=1,
+                          highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
                           cursor="hand2")
             sw.pack(side=tk.LEFT, padx=(0, 8))
             sw.bind("<Button-1>", lambda e, k=key, l=label: pick_color(k, l))
@@ -3954,7 +3351,7 @@ class OscilloscopeApp:
         ttk.Separator(content, orient="horizontal").pack(fill=tk.X, padx=14, pady=10)
 
         tk.Label(content, text="Phosphor (intensity grading)",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(anchor="w", padx=14, pady=(4, 4))
 
@@ -3963,11 +3360,11 @@ class OscilloscopeApp:
                        "|dV/dt|. Flat segments stay bright, fast edges fade. "
                        "Disables the fast-redraw path while on, so it is "
                        "slightly heavier on the CPU."),
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 8), justify="left", wraplength=400
                  ).pack(anchor="w", padx=14, pady=(0, 6))
 
-        phos_frame = tk.Frame(content, bg=COLOR_BG)
+        phos_frame = tk.Frame(content, bg=theme.COLOR_BG)
         phos_frame.pack(fill=tk.X, padx=14, pady=(0, 4))
 
         # Toggle enable — la variable ya está enlazada con el trace que
@@ -3990,16 +3387,16 @@ class OscilloscopeApp:
         # mapeamos a 0..1 que es lo que consume el render.
         # Para no acoplar la lógica de mapping con el trace de persistencia
         # usamos una StringVar "display" intermedia + un wrapper.
-        sl_row = tk.Frame(phos_frame, bg=COLOR_BG)
+        sl_row = tk.Frame(phos_frame, bg=theme.COLOR_BG)
         sl_row.pack(fill=tk.X, pady=(0, 6))
         tk.Label(sl_row, text="Intensity:",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9), width=10, anchor="w"
                  ).pack(side=tk.LEFT)
 
         pct_var = tk.IntVar(value=int(round(self.phosphor_intensity.get() * 100)))
         pct_label = tk.Label(sl_row, text=f"{pct_var.get():3d}%",
-                             bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                             bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                              font=("Segoe UI", 9), width=5, anchor="e")
 
         def _on_pct_change(_v=None):
@@ -4011,8 +3408,8 @@ class OscilloscopeApp:
             sl_row, from_=0, to=100, orient=tk.HORIZONTAL,
             variable=pct_var, command=_on_pct_change,
             showvalue=False, length=240,
-            bg=COLOR_BG, fg=COLOR_TEXT,
-            troughcolor=COLOR_BG_ALT, activebackground=COLOR_ACCENT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
+            troughcolor=theme.COLOR_BG_ALT, activebackground=theme.COLOR_ACCENT,
             highlightthickness=0, bd=0,
         )
         scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 6))
@@ -4039,7 +3436,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Commands legend")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         win.resizable(False, False)
         # Geometry PRIMERO, transient DESPUÉS (anti-fantasma).
         self._center_dialog(win, 560, 680)
@@ -4048,12 +3445,12 @@ class OscilloscopeApp:
         self._bind_escape_to_close(win)
 
         # Header
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=40)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=40)
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(
             hdr, text="KEYBOARD SHORTCUTS",
-            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
             font=("Segoe UI", 11, "bold"),
         ).pack(side=tk.LEFT, padx=14, pady=10)
 
@@ -4091,27 +3488,27 @@ class OscilloscopeApp:
             ]),
         ]
 
-        body = tk.Frame(win, bg=COLOR_BG)
+        body = tk.Frame(win, bg=theme.COLOR_BG)
         body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(14, 6))
 
         for section, items in SECTIONS:
             tk.Label(
                 body, text=section.upper(),
-                bg=COLOR_BG, fg=COLOR_ACCENT,
+                bg=theme.COLOR_BG, fg=theme.COLOR_ACCENT,
                 font=("Segoe UI", 9, "bold"),
             ).pack(anchor="w", pady=(8, 2))
             for keys, desc in items:
-                row = tk.Frame(body, bg=COLOR_BG)
+                row = tk.Frame(body, bg=theme.COLOR_BG)
                 row.pack(fill=tk.X, pady=1)
                 tk.Label(
                     row, text=keys,
-                    bg=COLOR_BG, fg=COLOR_TEXT,
+                    bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                     font=("Consolas", 10, "bold"),
                     width=18, anchor="w",
                 ).pack(side=tk.LEFT)
                 tk.Label(
                     row, text=desc,
-                    bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                    bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                     font=("Segoe UI", 9),
                     anchor="w",
                 ).pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -4121,13 +3518,13 @@ class OscilloscopeApp:
             body,
             text=("Shortcuts are ignored while typing in any text field "
                   "(V/div, names, MATH, etc.)."),
-            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
             font=("Segoe UI", 8, "italic"),
             wraplength=500, justify="left",
         ).pack(anchor="w", pady=(14, 0))
 
         # Close
-        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom = tk.Frame(win, bg=theme.COLOR_BG)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=12)
         ttk.Button(bottom, text="Close", style="Accent.TButton",
                    command=win.destroy).pack(side=tk.RIGHT)
@@ -4193,7 +3590,7 @@ class OscilloscopeApp:
         # Si la packeáramos al final, Tk la pondría arriba (orden de
         # llamada manda, no el atributo side, cuando hay TOP+BOTTOM).
         # v1.30: separar la línea divisoria de los botones (pady arriba).
-        bottom = tk.Frame(win, bg=COLOR_BG)
+        bottom = tk.Frame(win, bg=theme.COLOR_BG)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(12, 10))
 
         # Separador visual entre contenido y bottom bar
@@ -4201,7 +3598,7 @@ class OscilloscopeApp:
         sep.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(4, 0))
 
         # Canvas scroll
-        canvas = tk.Canvas(win, bg=COLOR_BG,
+        canvas = tk.Canvas(win, bg=theme.COLOR_BG,
                            highlightthickness=0, bd=0)
         vbar = ttk.Scrollbar(win, orient="vertical",
                              command=canvas.yview)
@@ -4210,7 +3607,7 @@ class OscilloscopeApp:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Frame interior donde irá el contenido real
-        content = tk.Frame(canvas, bg=COLOR_BG)
+        content = tk.Frame(canvas, bg=theme.COLOR_BG)
         content_window = canvas.create_window((0, 0), window=content,
                                               anchor="nw")
 
@@ -4273,16 +3670,16 @@ class OscilloscopeApp:
 
         def on_enter(_e):
             try:
-                hb = hover_border or COLOR_ACCENT
-                hbg = hover_bg or COLOR_BG_HOVER
+                hb = hover_border or theme.COLOR_ACCENT
+                hbg = hover_bg or theme.COLOR_BG_HOVER
                 widget.config(highlightbackground=hb, bg=hbg)
             except tk.TclError:
                 pass
 
         def on_leave(_e):
             try:
-                nb = normal_border or COLOR_BORDER
-                nbg = normal_bg or COLOR_BG_ALT
+                nb = normal_border or theme.COLOR_BORDER
+                nbg = normal_bg or theme.COLOR_BG_ALT
                 widget.config(highlightbackground=nb, bg=nbg)
             except tk.TclError:
                 pass
@@ -4370,7 +3767,7 @@ class OscilloscopeApp:
         tb = tk.Toplevel(self.root)
         tb.withdraw()  # anti-flash
         tb.title("Annotations")
-        tb.configure(bg=COLOR_BG_ALT)
+        tb.configure(bg=theme.COLOR_BG_ALT)
         tb.transient(self.root)
         tb.resizable(False, False)
         # Colocarla arriba-centro del plot
@@ -4381,7 +3778,7 @@ class OscilloscopeApp:
         tb.geometry(f"+{rx + rw//2 - 180}+{ry + 60}")
 
         # Borde accent
-        inner = tk.Frame(tb, bg=COLOR_BG_ALT)
+        inner = tk.Frame(tb, bg=theme.COLOR_BG_ALT)
         inner.pack(padx=2, pady=2)
 
         # Botones de modo
@@ -4393,19 +3790,19 @@ class OscilloscopeApp:
             self.annotation_mode = new
             for name, b in mode_btns.items():
                 if name == new:
-                    b.config(bg=COLOR_ACCENT, fg="#000000")
+                    b.config(bg=theme.COLOR_ACCENT, fg="#000000")
                 else:
-                    b.config(bg=COLOR_BG_ALT, fg=COLOR_TEXT)
+                    b.config(bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT)
 
         def make_mode_btn(parent, text, mode, tooltip):
             b = tk.Button(
                 parent, text=text,
-                bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-                activebackground=COLOR_BG_HOVER,
+                bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+                activebackground=theme.COLOR_BG_HOVER,
                 bd=1, relief="flat",
                 font=("Segoe UI", 11, "bold"),
                 padx=8, pady=4,
-                highlightbackground=COLOR_BORDER,
+                highlightbackground=theme.COLOR_BORDER,
                 highlightthickness=1,
                 command=lambda: set_mode(mode),
             )
@@ -4414,10 +3811,10 @@ class OscilloscopeApp:
             def make_hover(bb, mm):
                 def enter(_e):
                     if self.annotation_mode != mm:
-                        bb.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+                        bb.config(highlightbackground=theme.COLOR_ACCENT, bg=theme.COLOR_BG_HOVER)
                 def leave(_e):
                     if self.annotation_mode != mm:
-                        bb.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+                        bb.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
                 return enter, leave
             e, l = make_hover(b, mode)
             b.bind("<Enter>", e)
@@ -4427,7 +3824,7 @@ class OscilloscopeApp:
                 Tooltip(b, tooltip)
             return b
 
-        row1 = tk.Frame(inner, bg=COLOR_BG_ALT)
+        row1 = tk.Frame(inner, bg=theme.COLOR_BG_ALT)
         row1.pack(fill=tk.X, padx=4, pady=(4, 0))
         make_mode_btn(row1, "✏ Draw",  "draw",
                       "Freehand draw\nClick and drag on the plot to draw strokes")
@@ -4448,30 +3845,30 @@ class OscilloscopeApp:
 
         clear_btn = tk.Button(
             row1, text="🗑 Clear",
-            bg=COLOR_BG_ALT, fg=COLOR_DANGER,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_DANGER,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 10, "bold"),
             padx=8, pady=4,
-            highlightbackground=COLOR_BORDER,
+            highlightbackground=theme.COLOR_BORDER,
             highlightthickness=1,
             command=clear_all,
         )
         clear_btn.pack(side=tk.LEFT, padx=(10, 2), pady=4)
-        self._add_hover_shadow(clear_btn, hover_border=COLOR_DANGER)
+        self._add_hover_shadow(clear_btn, hover_border=theme.COLOR_DANGER)
         Tooltip(clear_btn,
                 "Delete ALL annotations\n"
                 "This action can be undone with Ctrl+Z")
 
         # Segunda fila: color + width + close
-        row2 = tk.Frame(inner, bg=COLOR_BG_ALT)
+        row2 = tk.Frame(inner, bg=theme.COLOR_BG_ALT)
         row2.pack(fill=tk.X, padx=4, pady=(0, 4))
 
-        tk.Label(row2, text="Color:", bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+        tk.Label(row2, text="Color:", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 2))
         color_sw = tk.Label(row2, bg=self.annotation_color, width=3, height=1,
                             relief="flat", bd=1,
-                            highlightbackground=COLOR_BORDER, highlightthickness=1,
+                            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
                             cursor="hand2")
         color_sw.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -4484,23 +3881,23 @@ class OscilloscopeApp:
                 color_sw.config(bg=self.annotation_color)
         color_sw.bind("<Button-1>", pick_color)
 
-        tk.Label(row2, text="Width:", bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+        tk.Label(row2, text="Width:", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 2))
         width_btns = {}
         def set_width(w):
             self.annotation_width = w
             for ww, bb in width_btns.items():
-                bb.config(bg=COLOR_ACCENT if ww == w else COLOR_BG_ALT,
-                          fg="#000000" if ww == w else COLOR_TEXT)
+                bb.config(bg=theme.COLOR_ACCENT if ww == w else theme.COLOR_BG_ALT,
+                          fg="#000000" if ww == w else theme.COLOR_TEXT)
         for w in (1, 2, 3, 5):
             b = tk.Button(
                 row2, text=str(w),
-                bg=COLOR_ACCENT if w == self.annotation_width else COLOR_BG_ALT,
-                fg="#000000" if w == self.annotation_width else COLOR_TEXT,
+                bg=theme.COLOR_ACCENT if w == self.annotation_width else theme.COLOR_BG_ALT,
+                fg="#000000" if w == self.annotation_width else theme.COLOR_TEXT,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=6, pady=2,
-                highlightbackground=COLOR_BORDER, highlightthickness=1,
+                highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
                 command=lambda ww=w: set_width(ww),
             )
             b.pack(side=tk.LEFT, padx=1)
@@ -4509,10 +3906,10 @@ class OscilloscopeApp:
             def make_hover(bb, ww):
                 def enter(_e):
                     if self.annotation_width != ww:
-                        bb.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+                        bb.config(highlightbackground=theme.COLOR_ACCENT, bg=theme.COLOR_BG_HOVER)
                 def leave(_e):
                     if self.annotation_width != ww:
-                        bb.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+                        bb.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
                 return enter, leave
             e, l = make_hover(b, w)
             b.bind("<Enter>", e)
@@ -4545,15 +3942,15 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title(title)
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 320, 130)
         win.transient(self.root)
         win.grab_set()
-        tk.Label(win, text=message, bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(win, text=message, bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10), wraplength=280, justify="left"
                  ).pack(padx=14, pady=(18, 10))
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
         def yes():
             result["ok"] = True; win.destroy()
@@ -4695,7 +4092,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Annotation text")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         win.resizable(True, True)
         win.minsize(420, 280)
         # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
@@ -4704,14 +4101,14 @@ class OscilloscopeApp:
         win.grab_set()
 
         tk.Label(win, text="Annotation text:",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold")
                  ).pack(anchor="w", padx=14, pady=(14, 4))
 
         # Selector de tamaño
-        size_row = tk.Frame(win, bg=COLOR_BG)
+        size_row = tk.Frame(win, bg=theme.COLOR_BG)
         size_row.pack(fill=tk.X, padx=14, pady=(0, 6))
-        tk.Label(size_row, text="Size:", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        tk.Label(size_row, text="Size:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 6))
 
         SIZES = [10, 12, 14, 18, 24, 32, 48]
@@ -4728,19 +4125,19 @@ class OscilloscopeApp:
             on_size_change()
             for ss, bb in size_btns.items():
                 if ss == s:
-                    bb.config(bg=COLOR_ACCENT, fg="#000000")
+                    bb.config(bg=theme.COLOR_ACCENT, fg="#000000")
                 else:
-                    bb.config(bg=COLOR_BG_ALT, fg=COLOR_TEXT)
+                    bb.config(bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT)
 
         for s in SIZES:
             b = tk.Button(
                 size_row, text=str(s),
-                bg=COLOR_ACCENT if s == size_var.get() else COLOR_BG_ALT,
-                fg="#000000" if s == size_var.get() else COLOR_TEXT,
+                bg=theme.COLOR_ACCENT if s == size_var.get() else theme.COLOR_BG_ALT,
+                fg="#000000" if s == size_var.get() else theme.COLOR_TEXT,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=6, pady=2,
-                highlightbackground=COLOR_BORDER, highlightthickness=1,
+                highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
                 command=lambda ss=s: set_size(ss),
             )
             b.pack(side=tk.LEFT, padx=1)
@@ -4749,10 +4146,10 @@ class OscilloscopeApp:
             def make_hover(bb, ss):
                 def enter(_e):
                     if size_var.get() != ss:
-                        bb.config(highlightbackground=COLOR_ACCENT, bg=COLOR_BG_HOVER)
+                        bb.config(highlightbackground=theme.COLOR_ACCENT, bg=theme.COLOR_BG_HOVER)
                 def leave(_e):
                     if size_var.get() != ss:
-                        bb.config(highlightbackground=COLOR_BORDER, bg=COLOR_BG_ALT)
+                        bb.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
                 return enter, leave
             e, l = make_hover(b, s)
             b.bind("<Enter>", e)
@@ -4760,12 +4157,12 @@ class OscilloscopeApp:
 
         # IMPORTANTE: empaquetar los botones ANTES que el Text para que
         # reserven su espacio abajo aunque el texto crezca.
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=10)
 
         txt = tk.Text(win, height=5, font=("Consolas", 14),
-                      bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-                      insertbackground=COLOR_TEXT,
+                      bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+                      insertbackground=theme.COLOR_TEXT,
                       wrap="word")
         txt.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
         txt.focus_set()
@@ -5019,12 +4416,12 @@ class OscilloscopeApp:
             lbl = self._trigger_window._count_label
             n = len(self.trigger_events)
             if n == 0:
-                lbl.config(text="0 trigger events found", fg=COLOR_DANGER)
+                lbl.config(text="0 trigger events found", fg=theme.COLOR_DANGER)
             else:
                 idx_str = (f"{self.trigger_current_idx + 1}/{n}"
                            if self.trigger_current_idx >= 0 else f"—/{n}")
                 lbl.config(text=f"{n} trigger events found   ({idx_str})",
-                           fg=COLOR_ACCENT)
+                           fg=theme.COLOR_ACCENT)
         except (AttributeError, tk.TclError):
             pass
 
@@ -5117,7 +4514,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Trigger")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO (centra), chrome (transient) DESPUÉS. Si
         # transient se aplica antes de tener geometry, Tk en Windows
         # hace un deiconify transitorio que se percibe como fantasma.
@@ -5126,11 +4523,11 @@ class OscilloscopeApp:
 
         # Bottom bar reservada PRIMERO (ver Math): asegura que los botones
         # Close/Clear queden siempre visibles aunque la ventana se reduzca.
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
 
         # ---- Enable + source ----
-        header = tk.Frame(win, bg=COLOR_BG)
+        header = tk.Frame(win, bg=theme.COLOR_BG)
         header.pack(fill=tk.X, padx=14, pady=(14, 6))
 
         enable_var = tk.BooleanVar(value=self.trigger_config["enabled"])
@@ -5164,9 +4561,9 @@ class OscilloscopeApp:
                         ).pack(side=tk.LEFT)
 
         # Source
-        src_row = tk.Frame(win, bg=COLOR_BG)
+        src_row = tk.Frame(win, bg=theme.COLOR_BG)
         src_row.pack(fill=tk.X, padx=14, pady=(4, 6))
-        tk.Label(src_row, text="Source:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(src_row, text="Source:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         ch_names = [ch["name"] for ch in self.channels]
         src_idx = self.trigger_config["source"]
@@ -5187,9 +4584,9 @@ class OscilloscopeApp:
         src_combo.bind("<<ComboboxSelected>>", on_src_change)
 
         # Type
-        type_row = tk.Frame(win, bg=COLOR_BG)
+        type_row = tk.Frame(win, bg=theme.COLOR_BG)
         type_row.pack(fill=tk.X, padx=14, pady=(4, 6))
-        tk.Label(type_row, text="Type:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(type_row, text="Type:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         type_var = tk.StringVar(value=self.trigger_config["type"])
         type_combo = ttk.Combobox(type_row, textvariable=type_var,
@@ -5198,22 +4595,22 @@ class OscilloscopeApp:
         type_combo.pack(side=tk.LEFT)
 
         # ---- Edge frame ----
-        edge_frame = tk.LabelFrame(win, text=" Edge ", bg=COLOR_BG,
-                                   fg=COLOR_ACCENT, bd=1,
+        edge_frame = tk.LabelFrame(win, text=" Edge ", bg=theme.COLOR_BG,
+                                   fg=theme.COLOR_ACCENT, bd=1,
                                    font=("Segoe UI", 9, "bold"))
         slope_var = tk.StringVar(value=self.trigger_config["slope"])
-        slope_row = tk.Frame(edge_frame, bg=COLOR_BG)
+        slope_row = tk.Frame(edge_frame, bg=theme.COLOR_BG)
         slope_row.pack(fill=tk.X, padx=8, pady=(4, 4))
-        tk.Label(slope_row, text="Slope:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(slope_row, text="Slope:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Radiobutton(slope_row, text="Rising", variable=slope_var,
                         value="Rising").pack(side=tk.LEFT, padx=(0, 10))
         ttk.Radiobutton(slope_row, text="Falling", variable=slope_var,
                         value="Falling").pack(side=tk.LEFT)
 
-        edge_level_row = tk.Frame(edge_frame, bg=COLOR_BG)
+        edge_level_row = tk.Frame(edge_frame, bg=theme.COLOR_BG)
         edge_level_row.pack(fill=tk.X, padx=8, pady=(2, 6))
-        tk.Label(edge_level_row, text="Level (V):", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(edge_level_row, text="Level (V):", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         edge_level_var = tk.StringVar(value=f"{self.trigger_config['level']:g}")
         edge_level_entry = ttk.Entry(edge_level_row, textvariable=edge_level_var,
@@ -5221,23 +4618,23 @@ class OscilloscopeApp:
         edge_level_entry.pack(side=tk.LEFT)
 
         # ---- Width frame ----
-        width_frame = tk.LabelFrame(win, text=" Width ", bg=COLOR_BG,
-                                    fg=COLOR_ACCENT, bd=1,
+        width_frame = tk.LabelFrame(win, text=" Width ", bg=theme.COLOR_BG,
+                                    fg=theme.COLOR_ACCENT, bd=1,
                                     font=("Segoe UI", 9, "bold"))
 
         polarity_var = tk.StringVar(value=self.trigger_config["polarity"])
-        pol_row = tk.Frame(width_frame, bg=COLOR_BG)
+        pol_row = tk.Frame(width_frame, bg=theme.COLOR_BG)
         pol_row.pack(fill=tk.X, padx=8, pady=(4, 4))
-        tk.Label(pol_row, text="Polarity:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(pol_row, text="Polarity:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Radiobutton(pol_row, text="Positive", variable=polarity_var,
                         value="Positive").pack(side=tk.LEFT, padx=(0, 10))
         ttk.Radiobutton(pol_row, text="Negative", variable=polarity_var,
                         value="Negative").pack(side=tk.LEFT)
 
-        cond_row = tk.Frame(width_frame, bg=COLOR_BG)
+        cond_row = tk.Frame(width_frame, bg=theme.COLOR_BG)
         cond_row.pack(fill=tk.X, padx=8, pady=(2, 4))
-        tk.Label(cond_row, text="Condition:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(cond_row, text="Condition:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         cond_var = tk.StringVar(value=self.trigger_config["condition"])
         cond_combo = ttk.Combobox(cond_row, textvariable=cond_var,
@@ -5246,25 +4643,25 @@ class OscilloscopeApp:
                                   state="readonly", width=12)
         cond_combo.pack(side=tk.LEFT)
 
-        w1_row = tk.Frame(width_frame, bg=COLOR_BG)
+        w1_row = tk.Frame(width_frame, bg=theme.COLOR_BG)
         w1_row.pack(fill=tk.X, padx=8, pady=(2, 2))
-        tk.Label(w1_row, text="Width 1 (s):", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(w1_row, text="Width 1 (s):", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         w1_var = tk.StringVar(value=f"{self.trigger_config['width1']:g}")
         w1_entry = ttk.Entry(w1_row, textvariable=w1_var, width=12)
         w1_entry.pack(side=tk.LEFT)
 
-        w2_row = tk.Frame(width_frame, bg=COLOR_BG)
+        w2_row = tk.Frame(width_frame, bg=theme.COLOR_BG)
         w2_row.pack(fill=tk.X, padx=8, pady=(2, 2))
-        tk.Label(w2_row, text="Width 2 (s):", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(w2_row, text="Width 2 (s):", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         w2_var = tk.StringVar(value=f"{self.trigger_config['width2']:g}")
         w2_entry = ttk.Entry(w2_row, textvariable=w2_var, width=12)
         w2_entry.pack(side=tk.LEFT)
 
-        w_level_row = tk.Frame(width_frame, bg=COLOR_BG)
+        w_level_row = tk.Frame(width_frame, bg=theme.COLOR_BG)
         w_level_row.pack(fill=tk.X, padx=8, pady=(2, 6))
-        tk.Label(w_level_row, text="Level (V):", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(w_level_row, text="Level (V):", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
         w_level_var = tk.StringVar(value=f"{self.trigger_config['level']:g}")
         w_level_entry = ttk.Entry(w_level_row, textvariable=w_level_var,
@@ -5329,16 +4726,16 @@ class OscilloscopeApp:
         refresh_type_visibility()
 
         # ---- Resultados ----
-        results_frame = tk.Frame(win, bg=COLOR_BG)
+        results_frame = tk.Frame(win, bg=theme.COLOR_BG)
         results_frame.pack(fill=tk.X, padx=14, pady=(10, 4))
 
         count_label = tk.Label(results_frame, text="0 trigger events found",
-                               bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                               bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                                font=("Segoe UI", 10, "bold"))
         count_label.pack(side=tk.LEFT)
         win._count_label = count_label
 
-        nav_row = tk.Frame(win, bg=COLOR_BG)
+        nav_row = tk.Frame(win, bg=theme.COLOR_BG)
         nav_row.pack(fill=tk.X, padx=14, pady=(2, 6))
 
         def prev_ev():
@@ -5348,12 +4745,12 @@ class OscilloscopeApp:
 
         prev_btn = tk.Button(
             nav_row, text="◀  Prev",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 10, "bold"),
             padx=10, pady=4,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=prev_ev,
         )
         prev_btn.pack(side=tk.LEFT, padx=(0, 4))
@@ -5361,12 +4758,12 @@ class OscilloscopeApp:
 
         next_btn = tk.Button(
             nav_row, text="Next  ▶",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 10, "bold"),
             padx=10, pady=4,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=next_ev,
         )
         next_btn.pack(side=tk.LEFT, padx=(0, 4))
@@ -5547,7 +4944,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("XY mode")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 340, 280)
         self._apply_window_chrome(win)
@@ -5565,9 +4962,9 @@ class OscilloscopeApp:
         ch_names = [ch["name"] for ch in self.channels]
 
         def add_combo_row(label, key, default):
-            row = tk.Frame(win, bg=COLOR_BG)
+            row = tk.Frame(win, bg=theme.COLOR_BG)
             row.pack(fill=tk.X, padx=14, pady=(2, 4))
-            tk.Label(row, text=label, bg=COLOR_BG, fg=COLOR_TEXT,
+            tk.Label(row, text=label, bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                      font=("Segoe UI", 9), width=10, anchor="w"
                      ).pack(side=tk.LEFT)
             var = tk.StringVar(value=ch_names[default])
@@ -5594,9 +4991,9 @@ class OscilloscopeApp:
         add_combo_row("Y axis:", "y_idx", yi)
 
         # Style
-        style_row = tk.Frame(win, bg=COLOR_BG)
+        style_row = tk.Frame(win, bg=theme.COLOR_BG)
         style_row.pack(fill=tk.X, padx=14, pady=(6, 4))
-        tk.Label(style_row, text="Style:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(style_row, text="Style:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9), width=10, anchor="w"
                  ).pack(side=tk.LEFT)
         style_var = tk.StringVar(value=self.xy_config["style"])
@@ -5612,9 +5009,9 @@ class OscilloscopeApp:
         style_combo.bind("<<ComboboxSelected>>", on_style)
 
         # Window
-        win_row = tk.Frame(win, bg=COLOR_BG)
+        win_row = tk.Frame(win, bg=theme.COLOR_BG)
         win_row.pack(fill=tk.X, padx=14, pady=(6, 4))
-        tk.Label(win_row, text="Window:", bg=COLOR_BG, fg=COLOR_TEXT,
+        tk.Label(win_row, text="Window:", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9), width=10, anchor="w"
                  ).pack(side=tk.LEFT)
         win_var = tk.StringVar(value=self.xy_config["window"])
@@ -5658,12 +5055,12 @@ class OscilloscopeApp:
         # En modo XY el minimap no tiene sentido: ocultar contenido
         if self.xy_config.get("enabled"):
             c.create_text(w / 2, h / 2, text="XY mode — minimap disabled",
-                          fill=COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
+                          fill=theme.COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
             return
 
         if self.time is None or not self.channels or self.t_total <= 0:
             c.create_text(w / 2, h / 2, text="No data",
-                          fill=COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
+                          fill=theme.COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
             return
 
         # Decimación a ancho del canvas
@@ -5716,8 +5113,8 @@ class OscilloscopeApp:
             x1 = map_x(t_start)
             x2 = map_x(min(t_start + window, self.t_total))
             c.create_rectangle(x1, 1, x2, h - 1,
-                               outline=COLOR_ACCENT, width=1.5,
-                               fill=COLOR_ACCENT, stipple="gray25")
+                               outline=theme.COLOR_ACCENT, width=1.5,
+                               fill=theme.COLOR_ACCENT, stipple="gray25")
 
     def _minimap_click_to_time(self, x_pixel):
         """Convierte coordenada X del canvas a tiempo absoluto."""
@@ -5810,7 +5207,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Save image")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 360, 260)
         win.transient(self.root)
@@ -5818,7 +5215,7 @@ class OscilloscopeApp:
 
         tk.Label(
             win, text="Image options",
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 10, "bold")
         ).pack(padx=12, pady=(14, 8), anchor="w")
 
@@ -5855,7 +5252,7 @@ class OscilloscopeApp:
         # Selector de canal para escala vertical
         tk.Label(
             win, text="Show Y-scale ticks for channel:",
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 9)
         ).pack(anchor="w", padx=18, pady=(10, 2))
 
@@ -5868,7 +5265,7 @@ class OscilloscopeApp:
         )
         combo.pack(fill=tk.X, padx=18, pady=(0, 6))
 
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
 
         def on_cancel():
@@ -6217,8 +5614,8 @@ class OscilloscopeApp:
 
         menu = tk.Menu(
             self.root, tearoff=0,
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_ACCENT, activeforeground="#000000",
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
             bd=0,
         )
         menu.add_command(
@@ -6439,14 +5836,14 @@ class OscilloscopeApp:
         """
         toast = tk.Toplevel(self.root)
         toast.overrideredirect(True)
-        toast.configure(bg=COLOR_ACCENT)
+        toast.configure(bg=theme.COLOR_ACCENT)
         toast.attributes("-topmost", True)
 
-        inner = tk.Frame(toast, bg=COLOR_BG_ALT, padx=16, pady=8)
+        inner = tk.Frame(toast, bg=theme.COLOR_BG_ALT, padx=16, pady=8)
         inner.pack(padx=2, pady=2)
         tk.Label(
             inner, text=text,
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 10, "bold")
         ).pack()
 
@@ -6534,8 +5931,8 @@ class OscilloscopeApp:
         """Muestra un menú contextual bajo el botón Session con Save/Load."""
         menu = tk.Menu(
             self.root, tearoff=0,
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_ACCENT, activeforeground="#000000",
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
             bd=0,
         )
         menu.add_command(label="Save             Ctrl+S",
@@ -6572,18 +5969,18 @@ class OscilloscopeApp:
         if mode == "Fast":
             self._render_mode_btn.config(
                 text="Fast",
-                bg=COLOR_ACCENT, fg="#000000",
+                bg=theme.COLOR_ACCENT, fg="#000000",
                 activebackground="#6ccfff",
                 activeforeground="#000000",
-                highlightbackground=COLOR_ACCENT,
+                highlightbackground=theme.COLOR_ACCENT,
             )
         else:
             self._render_mode_btn.config(
                 text="Detail",
-                bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
-                activebackground=COLOR_BG_HOVER,
-                activeforeground=COLOR_ACCENT,
-                highlightbackground=COLOR_ACCENT,
+                bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
+                activebackground=theme.COLOR_BG_HOVER,
+                activeforeground=theme.COLOR_ACCENT,
+                highlightbackground=theme.COLOR_ACCENT,
             )
 
     # =============================================================
@@ -6669,7 +6066,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Unsaved changes")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         self._center_dialog(win, 460, 220)
         win.transient(self.root)
         win.grab_set()
@@ -6682,32 +6079,32 @@ class OscilloscopeApp:
         result = {"choice": "cancel"}  # default si cierran con la X del WM
 
         # Header del estilo del resto de diálogos (Trigger, XY, Load CSV…).
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=44)
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(hdr, text="UNSAVED CHANGES",
-                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                  font=("Segoe UI", 11, "bold")
                  ).pack(side=tk.LEFT, padx=14, pady=10)
 
         # Cuerpo: nombre de la sesión + acción que iba a pasar.
-        body = tk.Frame(win, bg=COLOR_BG)
+        body = tk.Frame(win, bg=theme.COLOR_BG)
         body.pack(fill=tk.BOTH, expand=True, padx=14, pady=(14, 6))
         tk.Label(body,
                  text=f"You have unsaved changes in '{self._session_display_name()}'.",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10, "bold"),
                  wraplength=420, justify="left", anchor="w"
                  ).pack(fill=tk.X)
         tk.Label(body,
                  text=f"Save before {context}?",
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9),
                  wraplength=420, justify="left", anchor="w"
                  ).pack(fill=tk.X, pady=(4, 0))
 
         # Botones: misma fila, alineados a la derecha, Save destacado.
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(fill=tk.X, padx=14, pady=(8, 12))
 
         def pick(choice):
@@ -7675,7 +7072,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Add Measurements")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, chrome (transient) DESPUÉS (evita fantasma).
         # Chrome unificado (icono + transient para taskbar en Windows).
         self._make_resizable_dialog(win, 640, 620, min_w=560, min_h=500)
@@ -7693,14 +7090,14 @@ class OscilloscopeApp:
         selected_name = tk.StringVar(value="Peak-Peak")
 
         # ---- Header ----
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=40)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=40)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="ADD MEASUREMENTS",
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT, padx=14, pady=8)
 
         # ---- Preview panel (imagen + descripción) ----
-        preview_frame = tk.Frame(win, bg=COLOR_BG_ALT, height=180)
+        preview_frame = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=180)
         preview_frame.pack(fill=tk.X, padx=10, pady=(8, 6))
         preview_frame.pack_propagate(False)
 
@@ -7709,16 +7106,16 @@ class OscilloscopeApp:
         canvas_holder.pack(side=tk.LEFT, padx=8, pady=8)
         canvas_holder.pack_propagate(False)
 
-        desc_frame = tk.Frame(preview_frame, bg=COLOR_BG_ALT)
+        desc_frame = tk.Frame(preview_frame, bg=theme.COLOR_BG_ALT)
         desc_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 8), pady=8)
 
         title_lbl = tk.Label(
-            desc_frame, text="", bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            desc_frame, text="", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 11, "bold"), anchor="w", justify="left")
         title_lbl.pack(anchor="w")
 
         desc_lbl = tk.Label(
-            desc_frame, text="", bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+            desc_frame, text="", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT_DIM,
             font=("Segoe UI", 9), anchor="nw", justify="left",
             wraplength=280)
         desc_lbl.pack(anchor="w", fill=tk.BOTH, expand=True, pady=(4, 0))
@@ -7740,11 +7137,11 @@ class OscilloscopeApp:
             desc_lbl.config(text=MEASUREMENT_DESCRIPTIONS.get(name, ""))
 
         # ---- Source + Add ----
-        source_row = tk.Frame(win, bg=COLOR_BG)
+        source_row = tk.Frame(win, bg=theme.COLOR_BG)
         source_row.pack(fill=tk.X, padx=10, pady=(6, 4))
 
         tk.Label(source_row, text="Source:",
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(4, 8))
 
         channel_names = [ch["name"] for ch in self.channels]
@@ -7756,7 +7153,7 @@ class OscilloscopeApp:
 
         # Combo de referencia (solo visible para medidas dual-channel)
         ref_lbl = tk.Label(source_row, text="vs",
-                           bg=COLOR_BG, fg=COLOR_TEXT,
+                           bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                            font=("Segoe UI", 10))
         ref_default = channel_names[1] if len(channel_names) > 1 else channel_names[0]
         ref_var = tk.StringVar(value=ref_default)
@@ -7784,7 +7181,7 @@ class OscilloscopeApp:
             if len(self.active_measurements) >= self.MAX_MEASUREMENTS:
                 msg_lbl.config(
                     text=f"Max {self.MAX_MEASUREMENTS} measurements reached.",
-                    fg=COLOR_DANGER)
+                    fg=theme.COLOR_DANGER)
                 return
             # Canal por nombre
             src_name = source_var.get()
@@ -7808,7 +7205,7 @@ class OscilloscopeApp:
                 if ref_idx == ch_idx:
                     msg_lbl.config(
                         text="Phase needs two different channels.",
-                        fg=COLOR_DANGER)
+                        fg=theme.COLOR_DANGER)
                     return
                 new_meas["ref_channel_idx"] = ref_idx
             self.active_measurements.append(new_meas)
@@ -7816,7 +7213,7 @@ class OscilloscopeApp:
             self._mark_dirty()
             msg_lbl.config(
                 text=f"Added {selected_name.get()} on {src_name}  ({len(self.active_measurements)}/{self.MAX_MEASUREMENTS})",
-                fg=COLOR_ACCENT)
+                fg=theme.COLOR_ACCENT)
 
         add_btn = ttk.Button(source_row, text="Add", command=on_add,
                              style="Accent.TButton")
@@ -7827,12 +7224,12 @@ class OscilloscopeApp:
         close_btn.pack(side=tk.RIGHT, padx=(4, 4))
 
         msg_lbl = tk.Label(source_row, text="",
-                           bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                           bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                            font=("Segoe UI", 8))
         msg_lbl.pack(side=tk.RIGHT, padx=(10, 10))
 
         # ---- Categorías de medidas ----
-        cats_frame = tk.Frame(win, bg=COLOR_BG)
+        cats_frame = tk.Frame(win, bg=theme.COLOR_BG)
         cats_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(6, 10))
 
         # Estado: solo una sección abierta a la vez (tipo accordion)
@@ -7842,20 +7239,20 @@ class OscilloscopeApp:
 
         def make_cat_section(parent, title, meas_dict):
             # Cabecera clicable
-            hdr_f = tk.Frame(parent, bg=COLOR_BG_ALT, height=28, cursor="hand2")
+            hdr_f = tk.Frame(parent, bg=theme.COLOR_BG_ALT, height=28, cursor="hand2")
             hdr_f.pack(fill=tk.X, pady=(6, 0))
             hdr_f.pack_propagate(False)
 
-            caret = tk.Label(hdr_f, text="▼", bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            caret = tk.Label(hdr_f, text="▼", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                              font=("Segoe UI", 9, "bold"))
             caret.pack(side=tk.LEFT, padx=(10, 6), pady=4)
-            title_lbl = tk.Label(hdr_f, text=title, bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            title_lbl = tk.Label(hdr_f, text=title, bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                                  font=("Segoe UI", 9, "bold"))
             title_lbl.pack(side=tk.LEFT, pady=4)
 
             section_carets[title] = caret
 
-            grid = tk.Frame(parent, bg=COLOR_BG)
+            grid = tk.Frame(parent, bg=theme.COLOR_BG)
             # Se empaqueta solo si está abierto
             section_grids[title] = grid
 
@@ -7864,14 +7261,14 @@ class OscilloscopeApp:
                 r, c = divmod(i, COLS)
                 btn = tk.Button(
                     grid, text=name,
-                    bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-                    activebackground=COLOR_BG_HOVER,
-                    activeforeground=COLOR_TEXT,
+                    bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+                    activebackground=theme.COLOR_BG_HOVER,
+                    activeforeground=theme.COLOR_TEXT,
                     bd=1, relief="flat",
                     font=("Segoe UI", 9),
                     padx=8, pady=6,
                     anchor="w", width=18,
-                    highlightbackground=COLOR_BORDER,
+                    highlightbackground=theme.COLOR_BORDER,
                     highlightthickness=1,
                 )
                 btn.grid(row=r, column=c, padx=3, pady=2, sticky="we")
@@ -7881,11 +7278,11 @@ class OscilloscopeApp:
                     # No sobrescribir si está seleccionado (borde accent gordo)
                     cur_thick = int(b.cget("highlightthickness"))
                     if cur_thick < 2:
-                        b.config(bg=COLOR_BG_HOVER, highlightbackground=COLOR_ACCENT)
+                        b.config(bg=theme.COLOR_BG_HOVER, highlightbackground=theme.COLOR_ACCENT)
                 def on_leave(e, b=btn):
                     cur_thick = int(b.cget("highlightthickness"))
                     if cur_thick < 2:
-                        b.config(bg=COLOR_BG_ALT, highlightbackground=COLOR_BORDER)
+                        b.config(bg=theme.COLOR_BG_ALT, highlightbackground=theme.COLOR_BORDER)
                 btn.bind("<Enter>", on_enter)
                 btn.bind("<Leave>", on_leave)
 
@@ -7895,10 +7292,10 @@ class OscilloscopeApp:
                         update_preview(n)
                         for child in grid.winfo_children():
                             if isinstance(child, tk.Button):
-                                child.config(highlightbackground=COLOR_BORDER,
+                                child.config(highlightbackground=theme.COLOR_BORDER,
                                              highlightthickness=1,
-                                             bg=COLOR_BG_ALT)
-                        b.config(highlightbackground=COLOR_ACCENT,
+                                             bg=theme.COLOR_BG_ALT)
+                        b.config(highlightbackground=theme.COLOR_ACCENT,
                                  highlightthickness=2)
                     return _click
                 btn.config(command=make_handler(name, btn))
@@ -8209,7 +7606,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Load CSV")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         self._center_dialog(win, 420, 230)
         win.transient(self.root)
         win.grab_set()
@@ -8218,10 +7615,10 @@ class OscilloscopeApp:
         result = {"mode": None}
 
         # Header
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=44)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="LOAD CSV",
-                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                  font=("Segoe UI", 11, "bold")
                  ).pack(side=tk.LEFT, padx=14, pady=10)
 
@@ -8229,13 +7626,13 @@ class OscilloscopeApp:
         tk.Label(win,
                  text=("A CSV is already loaded. What do you want to do "
                        "with the new file?"),
-                 bg=COLOR_BG, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 9),
                  wraplength=380, justify="left"
                  ).pack(padx=14, pady=(14, 8), anchor="w")
 
         # Opciones
-        opts_frame = tk.Frame(win, bg=COLOR_BG)
+        opts_frame = tk.Frame(win, bg=theme.COLOR_BG)
         opts_frame.pack(padx=14, pady=4, fill=tk.X)
 
         def pick(mode):
@@ -8445,19 +7842,19 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Confirm time column (append)")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         self._center_dialog(win, 680, 480)
         win.transient(self.root)
         win.grab_set()
 
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=44)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="SELECT TIME COLUMN OF NEW FILE",
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 11, "bold")
                  ).pack(side=tk.LEFT, padx=14, pady=10)
         tk.Label(hdr, text=os.path.basename(filename),
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)
                  ).pack(side=tk.RIGHT, padx=14, pady=10)
 
@@ -8466,7 +7863,7 @@ class OscilloscopeApp:
                        "high confidence. Pick the time column and its "
                        "unit so we can resample the new channels onto "
                        "the existing timebase."),
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9), wraplength=640, justify="left"
                  ).pack(padx=14, pady=(10, 6), anchor="w")
 
@@ -8507,10 +7904,10 @@ class OscilloscopeApp:
             tree.focus(str(best_j))
 
         # Selector de unidad
-        unit_row = tk.Frame(win, bg=COLOR_BG)
+        unit_row = tk.Frame(win, bg=theme.COLOR_BG)
         unit_row.pack(padx=14, pady=(4, 8), anchor="w")
         tk.Label(unit_row, text="Time unit:",
-                 bg=COLOR_BG, fg=COLOR_TEXT
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT
                  ).pack(side=tk.LEFT)
         unit_var = tk.StringVar(value=self._TIME_UNIT_CHOICES[0][0])
         unit_combo = ttk.Combobox(
@@ -8594,20 +7991,20 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Add channels")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         self._center_dialog(win, 560, 520)
         win.transient(self.root)
         win.grab_set()
 
         # Header
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=44)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="ADD CHANNELS",
-                 bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                  font=("Segoe UI", 11, "bold")
                  ).pack(side=tk.LEFT, padx=14, pady=10)
         tk.Label(hdr, text=os.path.basename(filename),
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)
                  ).pack(side=tk.RIGHT, padx=14, pady=10)
 
@@ -8625,14 +8022,14 @@ class OscilloscopeApp:
             f"current timebase."
         )
         tk.Label(win, text=info_text,
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9), justify="left"
                  ).pack(padx=14, pady=(10, 4), anchor="w")
 
         # Contador en vivo
         counter_var = tk.StringVar()
         counter_lbl = tk.Label(win, textvariable=counter_var,
-                               bg=COLOR_BG, fg=COLOR_ACCENT,
+                               bg=theme.COLOR_BG, fg=theme.COLOR_ACCENT,
                                font=("Segoe UI", 9, "bold"))
         counter_lbl.pack(padx=14, pady=(4, 6), anchor="w")
 
@@ -8641,13 +8038,13 @@ class OscilloscopeApp:
         list_frame.pack(padx=14, pady=4, fill=tk.BOTH, expand=True)
 
         # Scrollable inner frame
-        canvas = tk.Canvas(list_frame, bg=COLOR_BG, highlightthickness=0)
+        canvas = tk.Canvas(list_frame, bg=theme.COLOR_BG, highlightthickness=0)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll = ttk.Scrollbar(list_frame, orient="vertical",
                                command=canvas.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.configure(yscrollcommand=scroll.set)
-        inner = tk.Frame(canvas, bg=COLOR_BG)
+        inner = tk.Frame(canvas, bg=theme.COLOR_BG)
         inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
 
         def _on_inner_config(_e):
@@ -8676,7 +8073,7 @@ class OscilloscopeApp:
                     w.config(state="normal")
 
         for i, (col, nm) in enumerate(zip(new_cols, new_names)):
-            row = tk.Frame(inner, bg=COLOR_BG)
+            row = tk.Frame(inner, bg=theme.COLOR_BG)
             row.pack(fill=tk.X, pady=2)
             v = tk.BooleanVar(value=False)
             # Si caben todos sin tocar limit, dejarlos default-checked
@@ -8697,7 +8094,7 @@ class OscilloscopeApp:
             except Exception:
                 stats = f"{len(col)} samples"
             tk.Label(row, text=stats,
-                     bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                     bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                      font=("Segoe UI", 8)
                      ).pack(side=tk.LEFT, padx=10)
             check_vars.append(v)
@@ -8893,20 +8290,20 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("Confirm time column")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         self._center_dialog(win, 680, 520)
         win.transient(self.root)
         win.grab_set()
 
         # ---- Header ----
-        hdr = tk.Frame(win, bg=COLOR_BG_ALT, height=44)
+        hdr = tk.Frame(win, bg=theme.COLOR_BG_ALT, height=44)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="CONFIRM TIME COLUMN",
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 11, "bold")
                  ).pack(side=tk.LEFT, padx=14, pady=10)
         tk.Label(hdr, text=os.path.basename(filename),
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9)
                  ).pack(side=tk.RIGHT, padx=14, pady=10)
 
@@ -8933,7 +8330,7 @@ class OscilloscopeApp:
                 "treat the data as uniformly sampled."
             )
         tk.Label(win, text=explain_text,
-                 bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+                 bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                  font=("Segoe UI", 9), wraplength=640, justify="left"
                  ).pack(padx=14, pady=(10, 6), anchor="w")
 
@@ -9007,7 +8404,7 @@ class OscilloscopeApp:
             unit_var.set("seconds (s)")
 
         # Label que muestra dt_median ya convertido a segundos para feedback
-        feedback_lbl = tk.Label(win, text="", bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+        feedback_lbl = tk.Label(win, text="", bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
                                 font=("Segoe UI", 9, "italic"))
         feedback_lbl.pack(padx=14, pady=(0, 6), anchor="w")
 
@@ -9101,20 +8498,20 @@ class OscilloscopeApp:
         ventana nueva. Devuelve el Frame (con los mismos atributos de
         animación que antes) para poder ocultarlo luego."""
         # Frame contenedor, hijo directo de root
-        ov = tk.Frame(self.root, bg=COLOR_ACCENT, bd=0, highlightthickness=0)
-        inner = tk.Frame(ov, bg=COLOR_BG_ALT)
+        ov = tk.Frame(self.root, bg=theme.COLOR_ACCENT, bd=0, highlightthickness=0)
+        inner = tk.Frame(ov, bg=theme.COLOR_BG_ALT)
         inner.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
         ov._label = tk.Label(
             inner, text=text,
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 11, "bold")
         )
         ov._label.pack(expand=True, padx=20, pady=(16, 4))
 
         ov._dots_label = tk.Label(
             inner, text="●○○○",
-            bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
             font=("Consolas", 14, "bold")
         )
         ov._dots_label.pack(pady=(0, 16))
@@ -9269,7 +8666,7 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("MATH channels")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         # Geometry PRIMERO, transient DESPUÉS (evita fantasma).
         self._make_resizable_dialog(win, 380, 160)
         win.transient(self.root)
@@ -9277,7 +8674,7 @@ class OscilloscopeApp:
 
         tk.Label(
             win, text="Existing MATH channels",
-            bg=COLOR_BG, fg=COLOR_TEXT,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT,
             font=("Segoe UI", 10, "bold")
         ).pack(padx=14, pady=(14, 4), anchor="w")
 
@@ -9286,11 +8683,11 @@ class OscilloscopeApp:
             text=f"There {'is' if len(self.math_order)==1 else 'are'} "
                  f"{len(self.math_order)} MATH channel(s). "
                  f"Keep and recalculate\nwith the new data, or discard?",
-            bg=COLOR_BG, fg=COLOR_TEXT_DIM,
+            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
             font=("Segoe UI", 9), justify="left"
         ).pack(padx=14, pady=(0, 10), anchor="w")
 
-        btns = tk.Frame(win, bg=COLOR_BG)
+        btns = tk.Frame(win, bg=theme.COLOR_BG)
         btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
 
         def do_keep():
@@ -9632,21 +9029,21 @@ class OscilloscopeApp:
         win = tk.Toplevel(self.root)
         win.withdraw()  # anti-flash
         win.title("CSV Import — manual fallback")
-        win.configure(bg=COLOR_BG)
+        win.configure(bg=theme.COLOR_BG)
         self._center_dialog(win, 800, 600)
         win.transient(self.root)
 
         if error:
             tk.Label(
                 win, text=f"Auto-detection failed: {error}",
-                fg=COLOR_DANGER, bg=COLOR_BG,
+                fg=theme.COLOR_DANGER, bg=theme.COLOR_BG,
                 font=("Segoe UI", 9, "italic"),
                 wraplength=760, justify="left",
             ).pack(padx=12, pady=(10, 4), anchor="w")
 
         tk.Label(
             win, text="Preview (first 40 lines):",
-            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            fg=theme.COLOR_TEXT_DIM, bg=theme.COLOR_BG,
         ).pack(padx=12, pady=(6, 2), anchor="w")
 
         # Text widget con las primeras líneas, números de línea
@@ -9655,8 +9052,8 @@ class OscilloscopeApp:
         text = tk.Text(
             txt_frame,
             font=("Consolas", 9),
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            insertbackground=COLOR_TEXT,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            insertbackground=theme.COLOR_TEXT,
             height=15,
             wrap="none",
         )
@@ -10449,7 +9846,7 @@ class OscilloscopeApp:
             self.render_mode.get(),
             float(self.t_div.get()),     # t_div cambia los ticks y rango
             float(self.v_div.get()),     # v_div cambia el grid (eje Y screen)
-            CURRENT_THEME_NAME,
+            theme.CURRENT_THEME_NAME,
             id(self.time),                # cargar otro CSV cambia el array
             bool(self._cursors_vertical_active()),
             bool(self._cursors_horizontal_active()),
@@ -11476,14 +10873,14 @@ class OscilloscopeApp:
         """
         if name not in THEMES:
             return
-        if name == CURRENT_THEME_NAME and not sync_plot:
+        if name == theme.CURRENT_THEME_NAME and not sync_plot:
             return
 
         # Resolver fade desde config si no lo fuerza el caller
         if fade is None:
             fade = bool(load_user_config().get("theme_fade", True))
 
-        if fade and name != CURRENT_THEME_NAME:
+        if fade and name != theme.CURRENT_THEME_NAME:
             # Solo tiene sentido animar si CAMBIA el tema; si solo cambia
             # sync_plot pero el nombre es el mismo, ir directo.
             self._apply_theme_fade(name, sync_plot)
@@ -11992,7 +11389,7 @@ class FFTWindow:
 
     # -----------------------------
     def _build_ui(self):
-        self.win.configure(bg=COLOR_BG)
+        self.win.configure(bg=theme.COLOR_BG)
 
         # Panel de controles (arriba)
         ctrl = ttk.Frame(self.win, padding=10)
@@ -12132,7 +11529,7 @@ class FFTWindow:
 
         self.info_label = tk.Label(
             row3, text="",
-            fg=COLOR_TEXT_DIM, bg=COLOR_BG,
+            fg=theme.COLOR_TEXT_DIM, bg=theme.COLOR_BG,
             font=("Consolas", 9)
         )
         self.info_label.pack(side=tk.RIGHT, padx=10)
@@ -12208,7 +11605,7 @@ class FFTWindow:
 
         self.thd_label = tk.Label(
             row4, text="",
-            fg="#ffcc00", bg=COLOR_BG,
+            fg="#ffcc00", bg=theme.COLOR_BG,
             font=("Consolas", 10, "bold")
         )
         self.thd_label.pack(side=tk.RIGHT, padx=10)
@@ -12223,7 +11620,7 @@ class FFTWindow:
 
         # Colores del plot según el tema activo (PLOT_BG, PLOT_GRID,
         # PLOT_TEXT). En vez de hardcodear "black"/"white" leemos del tema.
-        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_theme = THEMES[theme.CURRENT_THEME_NAME]
         plot_bg   = plot_theme["PLOT_BG"]
         plot_text = plot_theme["PLOT_TEXT"]
 
@@ -12242,7 +11639,7 @@ class FFTWindow:
             family="monospace",
             bbox=dict(
                 facecolor=plot_bg,
-                edgecolor=COLOR_BORDER,
+                edgecolor=theme.COLOR_BORDER,
                 alpha=0.9,
                 boxstyle="round,pad=0.3"
             )
@@ -12870,7 +12267,7 @@ class FFTWindow:
         # Colores del plot según el tema activo. Se releen en cada redraw
         # para que un cambio de tema en runtime se refleje al siguiente
         # repaint del FFT.
-        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_theme = THEMES[theme.CURRENT_THEME_NAME]
         plot_bg   = plot_theme["PLOT_BG"]
         plot_grid = plot_theme["PLOT_GRID"]
         plot_text = plot_theme["PLOT_TEXT"]
@@ -12896,7 +12293,7 @@ class FFTWindow:
 
         self.ax.grid(True, color=plot_grid, linewidth=0.6)
         for spine in self.ax.spines.values():
-            spine.set_color(COLOR_BORDER)
+            spine.set_color(theme.COLOR_BORDER)
         self.ax.tick_params(colors=plot_text)
 
         self.ax.set_xlabel("Frequency", color=plot_text)
@@ -12968,7 +12365,7 @@ class FFTWindow:
 
         self.ax.set_xticks(xticks)
         self.ax.set_xticklabels([format_si(x, "Hz") for x in xticks])
-        plot_text = THEMES[CURRENT_THEME_NAME]["PLOT_TEXT"]
+        plot_text = THEMES[theme.CURRENT_THEME_NAME]["PLOT_TEXT"]
         for lbl in self.ax.get_xticklabels():
             lbl.set_color(plot_text)
 
@@ -13032,8 +12429,8 @@ class FFTWindow:
     def _show_context_menu(self, event):
         """Menú contextual del plot de la FFT. Acciones: guardar imagen,
         resetear acumuladores."""
-        menu = tk.Menu(self.win, tearoff=0, bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-                       activebackground=COLOR_ACCENT, activeforeground="#000000",
+        menu = tk.Menu(self.win, tearoff=0, bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+                       activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
                        bd=0)
 
         menu.add_command(label="Save image as PNG…",
@@ -13368,7 +12765,7 @@ class EyeDiagramWindow:
     # Construcción de UI
     # -----------------------------
     def _build_ui(self):
-        self.win.configure(bg=COLOR_BG)
+        self.win.configure(bg=theme.COLOR_BG)
 
         ctrl = ttk.Frame(self.win, padding=10)
         ctrl.pack(side=tk.TOP, fill=tk.X)
@@ -13403,12 +12800,12 @@ class EyeDiagramWindow:
         # exacta y se quiere "barrer" escalas rápido hasta que el ojo se abra.
         ui_up = tk.Button(
             row1, text="⯅",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 8, "bold"),
             padx=4, pady=0,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=lambda: self._step_ui("up"),
         )
         ui_up.pack(side=tk.LEFT, padx=(2, 0))
@@ -13417,12 +12814,12 @@ class EyeDiagramWindow:
 
         ui_dn = tk.Button(
             row1, text="⯆",
-            bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-            activebackground=COLOR_BG_HOVER,
+            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+            activebackground=theme.COLOR_BG_HOVER,
             bd=1, relief="flat",
             font=("Segoe UI", 8, "bold"),
             padx=4, pady=0,
-            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            highlightbackground=theme.COLOR_BORDER, highlightthickness=1,
             command=lambda: self._step_ui("down"),
         )
         ui_dn.pack(side=tk.LEFT, padx=(0, 4))
@@ -13524,7 +12921,7 @@ class EyeDiagramWindow:
         # Métrics label a la derecha
         self.metrics_label = tk.Label(
             row3, text="",
-            fg="#ffcc00", bg=COLOR_BG,
+            fg="#ffcc00", bg=theme.COLOR_BG,
             font=("Consolas", 10, "bold"),
             justify="right",
         )
@@ -13536,7 +12933,7 @@ class EyeDiagramWindow:
 
         # Colores del plot según el tema activo. _redraw los relee en cada
         # pintado para que un cambio de tema en runtime se aplique al ojo.
-        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_theme = THEMES[theme.CURRENT_THEME_NAME]
         plot_bg = plot_theme["PLOT_BG"]
 
         self.fig, self.ax = plt.subplots(figsize=(10, 5))
@@ -13922,7 +13319,7 @@ class EyeDiagramWindow:
         # Colores del plot según el tema activo. Releídos en cada redraw
         # para que un cambio de tema en runtime se aplique al eye sin
         # tener que cerrarlo y reabrirlo.
-        plot_theme = THEMES[CURRENT_THEME_NAME]
+        plot_theme = THEMES[theme.CURRENT_THEME_NAME]
         plot_bg   = plot_theme["PLOT_BG"]
         plot_grid = plot_theme["PLOT_GRID"]
         plot_text = plot_theme["PLOT_TEXT"]
@@ -13935,7 +13332,7 @@ class EyeDiagramWindow:
                     "No slices computed.\n"
                     "Try increasing 'Max traces', adjusting UI, or check "
                     "that the signal actually crosses the threshold.",
-                    color=COLOR_TEXT_DIM, ha="center", va="center",
+                    color=theme.COLOR_TEXT_DIM, ha="center", va="center",
                     transform=ax.transAxes, fontsize=11)
             ax.set_xticks([])
             ax.set_yticks([])
@@ -13988,7 +13385,7 @@ class EyeDiagramWindow:
         # Threshold horizontal
         thr = self.metrics.get("thr")
         if thr is not None:
-            ax.axhline(thr, color=COLOR_BORDER, linestyle=(0, (4, 3)),
+            ax.axhline(thr, color=theme.COLOR_BORDER, linestyle=(0, (4, 3)),
                        linewidth=0.8, alpha=0.7)
 
         # Marcadores verticales en límites de UI
@@ -13996,13 +13393,13 @@ class EyeDiagramWindow:
         n_ui = int(self.uis_per_view.get())
         for k in range(-n_ui // 2, n_ui // 2 + 1):
             x = k * ui
-            ax.axvline(x, color=COLOR_BORDER, linestyle=":",
+            ax.axvline(x, color=theme.COLOR_BORDER, linestyle=":",
                        linewidth=0.6, alpha=0.6)
 
         # Estilo
         ax.grid(True, color=plot_grid, linewidth=0.4, alpha=0.5)
         for spine in ax.spines.values():
-            spine.set_color(COLOR_BORDER)
+            spine.set_color(theme.COLOR_BORDER)
         ax.tick_params(colors=plot_text)
 
         # Eje X con formato SI (en segundos)
@@ -14120,27 +13517,27 @@ class DecoderWindow:
     _NONE_TOKEN = "— (none) —"
 
     def _build_ui(self):
-        self.win.configure(bg=COLOR_BG)
+        self.win.configure(bg=theme.COLOR_BG)
         # NO sobrescribir geometry aquí: el __init__ ya llamó a
         # _center_dialog(700, 960) que centra Y dimensiona. Hacer
         # geometry("780x720") aquí machacaba ese tamaño y dejaba la
         # tabla de frames cortada por la parte de abajo.
 
         # Header igual estilo MEAS
-        hdr = tk.Frame(self.win, bg=COLOR_BG_ALT, height=40)
+        hdr = tk.Frame(self.win, bg=theme.COLOR_BG_ALT, height=40)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="PROTOCOL DECODER",
-                 bg=COLOR_BG_ALT, fg=COLOR_TEXT,
+                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
                  font=("Segoe UI", 11, "bold")
                  ).pack(side=tk.LEFT, padx=14, pady=8)
         # Indicador del protocolo seleccionado a la derecha del header
         self._selected_lbl = tk.Label(
-            hdr, text="", bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            hdr, text="", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
             font=("Segoe UI", 10, "bold"))
         self._selected_lbl.pack(side=tk.RIGHT, padx=14, pady=8)
 
         # ---- Panel superior: acordeón de categorías ----
-        cats_outer = tk.Frame(self.win, bg=COLOR_BG)
+        cats_outer = tk.Frame(self.win, bg=theme.COLOR_BG)
         cats_outer.pack(fill=tk.X, padx=10, pady=(8, 4))
 
         self.protocol_var = tk.StringVar(value=DECODER_REGISTRY[0].name)
@@ -14154,20 +13551,20 @@ class DecoderWindow:
         self._proto_buttons = {}
 
         def make_cat_section(parent, title, decoder_list):
-            hdr_f = tk.Frame(parent, bg=COLOR_BG_ALT, height=28, cursor="hand2")
+            hdr_f = tk.Frame(parent, bg=theme.COLOR_BG_ALT, height=28, cursor="hand2")
             hdr_f.pack(fill=tk.X, pady=(6, 0))
             hdr_f.pack_propagate(False)
 
-            caret = tk.Label(hdr_f, text="▼", bg=COLOR_BG_ALT, fg=COLOR_ACCENT,
+            caret = tk.Label(hdr_f, text="▼", bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
                              font=("Segoe UI", 9, "bold"))
             caret.pack(side=tk.LEFT, padx=(10, 6), pady=4)
-            title_lbl = tk.Label(hdr_f, text=title, bg=COLOR_BG_ALT,
-                                 fg=COLOR_TEXT,
+            title_lbl = tk.Label(hdr_f, text=title, bg=theme.COLOR_BG_ALT,
+                                 fg=theme.COLOR_TEXT,
                                  font=("Segoe UI", 9, "bold"))
             title_lbl.pack(side=tk.LEFT, pady=4)
             section_carets[title] = caret
 
-            grid = tk.Frame(parent, bg=COLOR_BG)
+            grid = tk.Frame(parent, bg=theme.COLOR_BG)
             section_grids[title] = grid
 
             COLS = 2
@@ -14175,14 +13572,14 @@ class DecoderWindow:
                 r, c = divmod(i, COLS)
                 btn = tk.Button(
                     grid, text=dec_cls.name,
-                    bg=COLOR_BG_ALT, fg=COLOR_TEXT,
-                    activebackground=COLOR_BG_HOVER,
-                    activeforeground=COLOR_TEXT,
+                    bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
+                    activebackground=theme.COLOR_BG_HOVER,
+                    activeforeground=theme.COLOR_TEXT,
                     bd=1, relief="flat",
                     font=("Segoe UI", 9),
                     padx=8, pady=6,
                     anchor="w", width=28,
-                    highlightbackground=COLOR_BORDER,
+                    highlightbackground=theme.COLOR_BORDER,
                     highlightthickness=1,
                 )
                 btn.grid(row=r, column=c, padx=3, pady=2, sticky="we")
@@ -14195,12 +13592,12 @@ class DecoderWindow:
 
                 def on_enter(e, b=btn):
                     if int(b.cget("highlightthickness")) < 2:
-                        b.config(bg=COLOR_BG_HOVER,
-                                 highlightbackground=COLOR_ACCENT)
+                        b.config(bg=theme.COLOR_BG_HOVER,
+                                 highlightbackground=theme.COLOR_ACCENT)
                 def on_leave(e, b=btn):
                     if int(b.cget("highlightthickness")) < 2:
-                        b.config(bg=COLOR_BG_ALT,
-                                 highlightbackground=COLOR_BORDER)
+                        b.config(bg=theme.COLOR_BG_ALT,
+                                 highlightbackground=theme.COLOR_BORDER)
                 btn.bind("<Enter>", on_enter)
                 btn.bind("<Leave>", on_leave)
 
@@ -14208,10 +13605,10 @@ class DecoderWindow:
                     def _click():
                         # Repintar todos los botones a estado normal
                         for nm, btn_ref in self._proto_buttons.items():
-                            btn_ref.config(highlightbackground=COLOR_BORDER,
+                            btn_ref.config(highlightbackground=theme.COLOR_BORDER,
                                            highlightthickness=1,
-                                           bg=COLOR_BG_ALT)
-                        b.config(highlightbackground=COLOR_ACCENT,
+                                           bg=theme.COLOR_BG_ALT)
+                        b.config(highlightbackground=theme.COLOR_ACCENT,
                                  highlightthickness=2)
                         self.protocol_var.set(name)
                         self._on_protocol_changed()
@@ -14257,7 +13654,7 @@ class DecoderWindow:
         # bg viene del tema; lo refrescamos en _refresh_diagram.
         self.diagram_canvas = tk.Canvas(
             self.diagram_frame, height=130, bd=0, highlightthickness=0,
-            bg=COLOR_BG_ALT,
+            bg=theme.COLOR_BG_ALT,
         )
         self.diagram_canvas.pack(fill=tk.X, expand=False)
         # Repintar al redimensionar (el ancho cambia con la ventana).
@@ -14298,8 +13695,8 @@ class DecoderWindow:
         Tooltip(export_btn, "Save the decoded frames table to a CSV file")
 
         self.status_label = tk.Label(
-            btn_row, text="", bg=COLOR_BG,
-            fg=COLOR_TEXT_DIM, font=("Segoe UI", 9))
+            btn_row, text="", bg=theme.COLOR_BG,
+            fg=theme.COLOR_TEXT_DIM, font=("Segoe UI", 9))
         self.status_label.pack(side=tk.RIGHT, padx=10)
 
         # Tabla de resultados
@@ -14330,7 +13727,7 @@ class DecoderWindow:
         # Marcar como seleccionado el botón del protocolo inicial
         init_btn = self._proto_buttons.get(self.protocol_var.get())
         if init_btn is not None:
-            init_btn.config(highlightbackground=COLOR_ACCENT,
+            init_btn.config(highlightbackground=theme.COLOR_ACCENT,
                             highlightthickness=2)
 
     def _on_protocol_changed(self):
@@ -14359,7 +13756,7 @@ class DecoderWindow:
         if not ch_names:
             tk.Label(self.channel_map_frame,
                      text="No channels loaded. Open a CSV first.",
-                     bg=COLOR_BG_ALT, fg=COLOR_TEXT_DIM
+                     bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT_DIM
                      ).pack(anchor="w")
         else:
             # Layout: cabecera + filas. Obligatorios primero, opcionales después
@@ -14440,7 +13837,7 @@ class DecoderWindow:
         c.delete("all")
 
         # Asegurar fondo coherente con el tema actual
-        c.configure(bg=COLOR_BG_ALT)
+        c.configure(bg=theme.COLOR_BG_ALT)
 
         # El widget puede no estar aún mapeado: usar winfo_width como mejor
         # aproximación, con fallback al request.
@@ -14450,15 +13847,15 @@ class DecoderWindow:
         h = int(c.cget("height"))
 
         theme = {
-            "bg":     COLOR_BG_ALT,
-            "fg":     COLOR_TEXT,
-            "dim":    COLOR_TEXT_DIM,
-            "accent": COLOR_ACCENT,
+            "bg":     theme.COLOR_BG_ALT,
+            "fg":     theme.COLOR_TEXT,
+            "dim":    theme.COLOR_TEXT_DIM,
+            "accent": theme.COLOR_ACCENT,
             "ok":     "#7fdb7f",
             "err":    "#ff6b6b",
             "data":   "#5fa8ff",
             "ctrl":   "#888888",
-            "border": COLOR_BORDER,
+            "border": theme.COLOR_BORDER,
         }
 
         drew = False
@@ -14476,7 +13873,7 @@ class DecoderWindow:
             c.create_text(
                 w / 2, h / 2,
                 text="(no diagram available for this protocol)",
-                fill=COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
+                fill=theme.COLOR_TEXT_DIM, font=("Segoe UI", 9, "italic"))
 
     def _collect_params(self):
         """Lee los param_vars y devuelve dict {name: value} con conversiones
