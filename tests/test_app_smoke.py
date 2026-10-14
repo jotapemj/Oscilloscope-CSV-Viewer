@@ -78,6 +78,38 @@ class FakeClipboardAPI:
             CloseClipboard=fn("CloseClipboard", lambda: 1))
 
 
+MESSAGEBOX_FNS = ("showinfo", "showwarning", "showerror", "askyesno",
+                  "askyesnocancel", "askokcancel", "askquestion",
+                  "askretrycancel")
+
+
+def install_modal_guard(record):
+    """wait_window y messagebox no bloquean: registran y vuelven (el
+    diálogo queda como "cancelado"). Lanzar o destruir dentro de un
+    callback de Tk acaba en segfault. tearDown convierte el registro en
+    fallo. Devuelve los patchers para pararlos en tearDownClass."""
+    def no_wait(widget, window=None):
+        w = window or widget
+        try:
+            title = w.title()
+        except Exception:
+            title = str(w)
+        record.append(f"wait_window: {title}")
+
+    def no_box(name):
+        def f(title=None, message=None, **kw):
+            record.append(f"messagebox.{name}: {title}")
+            return None
+        return f
+
+    patchers = [mock.patch("tkinter.Misc.wait_window", no_wait)]
+    patchers += [mock.patch(f"tkinter.messagebox.{n}", no_box(n))
+                 for n in MESSAGEBOX_FNS]
+    for p in patchers:
+        p.start()
+    return patchers
+
+
 class AppSmoke(unittest.TestCase):
 
     @classmethod
@@ -92,6 +124,8 @@ class AppSmoke(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.env = mock.patch.dict(os.environ, {"OCV_CONFIG_DIR": cls.tmp.name})
         cls.env.start()
+        cls.modals = []
+        cls.guards = install_modal_guard(cls.modals)
         theme.apply_theme(cls.root, "Dark")
         cls.app = main.OscilloscopeApp(cls.root)
         cls.csv = os.path.join(cls.tmp.name, "capture.csv")
@@ -106,8 +140,18 @@ class AppSmoke(unittest.TestCase):
         try:
             cls.root.destroy()
         finally:
+            for p in cls.guards:
+                p.stop()
             cls.env.stop()
             cls.tmp.cleanup()
+
+    def tearDown(self):
+        # Cualquier modal no simulado por el test es un fallo
+        opened, self.modals[:] = list(self.modals), []
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel) and w.grab_current() is not None:
+                w.grab_release()
+        self.assertEqual(opened, [], "diálogos modales inesperados")
 
     def pump(self):
         self.root.update_idletasks()
@@ -356,22 +400,95 @@ class AppSmoke(unittest.TestCase):
         app._xy_window.destroy()
         app._xy_window = None
 
-    def test_session_roundtrip(self):
-        """Guardar .ocv y volver a cargarlo restaura los canales."""
-        path = os.path.join(self.tmp.name, "s.ocv")
-        self.app.channels[0]["v_div"] = 0.5
-        self.assertTrue(self.app._write_session_to(path))
-        self.app.channels[0]["v_div"] = 2.0
+    def load(self, path, keep_math=False):
+        """load_session con diálogos simulados. La carga es asíncrona: los
+        mocks siguen activos hasta que termina."""
         self.app.session_path = None        # para detectar fin de carga
         with mock.patch("tkinter.filedialog.askopenfilename",
-                        return_value=path):
+                        return_value=path),                 mock.patch.object(self.app, "_prompt_save_if_dirty",
+                                  return_value=True),                 mock.patch.object(self.app, "_ask_keep_math_on_new_csv",
+                                  return_value=keep_math):
             self.app.load_session()
-        self.assertTrue(wait_until(
-            self.root, lambda: self.app.session_path == path
-            and not self.app.session_dirty))
-        self.assertEqual(self.app.channels[0]["v_div"], 0.5)
-        self.assertEqual(self.app.session_path, path)
-        self.assertFalse(self.app.session_dirty)
+            self.assertTrue(wait_until(
+                self.root, lambda: self.app.session_path == path
+                and not self.app.session_dirty))
+            wait_until(self.root, lambda: False, timeout=0.3)
+
+    def test_session_roundtrip(self):
+        """Guardar .ocv y recargar restaura canales, MATH, trigger,
+        cursores, anotaciones y medidas; título sin asterisco."""
+        app = self.app
+        path = os.path.join(self.tmp.name, "s.ocv")
+        app.channels[0]["v_div"] = 0.5
+        app.channels[1]["unit"] = "A"
+        app.channels[1]["name"] = "IOUT"
+        res = app._resolve_refs(main.math_parse("CH1*2"))
+        self.assertTrue(app._create_math_channel("CH1*2", res, "M1"))
+        app.trigger_config.update(enabled=True, source=1, level=1.65)
+        app.cursors_enabled.set(True)
+        app.cursor_x = [1e-3, 2e-3]
+        app.annotations.append({"type": "stroke", "color": "#ff0000",
+                                "width": 2, "ch_idx": 0,
+                                "points": [(1e-3, 0.2), (2e-3, 0.4)]})
+        app.active_measurements.append(
+            {"channel_idx": 1, "name": "Frequency", "channel_idx2": None})
+        self.assertTrue(app._write_session_to(path))
+
+        # Ensuciar todo y recargar
+        app.channels[0]["v_div"] = 2.0
+        app.channels[1]["unit"] = "V"
+        app.trigger_config["enabled"] = False
+        app.cursor_x = [0.0, 0.0]
+        app.annotations.clear()
+        app.active_measurements.clear()
+        self.load(path)
+
+        self.assertEqual(app.channels[0]["v_div"], 0.5)
+        self.assertEqual(app.channels[1]["unit"], "A")
+        self.assertEqual(app.channels[1]["name"], "IOUT")
+        self.assertEqual([c["name"] for c in app.channels if "math" in c],
+                         ["M1"])
+        m1 = next(c for c in app.channels if "math" in c)
+        np.testing.assert_allclose(m1["voltage"],
+                                   2 * app.channels[0]["voltage"])
+        self.assertTrue(app.trigger_config["enabled"])
+        self.assertEqual(app.trigger_config["level"], 1.65)
+        self.assertEqual(list(app.cursor_x), [1e-3, 2e-3])
+        self.assertEqual([a["points"][0] for a in app.annotations],
+                         [(1e-3, 0.2)] if isinstance(
+                             app.annotations[0]["points"][0], tuple)
+                         else [[1e-3, 0.2]])
+        self.assertEqual([m["name"] for m in app.active_measurements],
+                         ["Frequency"])
+        self.assertEqual(self.root.title(), "s — Oscilloscope CSV Viewer")
+
+        # Dejar el estado como lo esperan los demás tests
+        m1_idx = app.channels.index(m1)
+        app._delete_channel(m1_idx)
+        app.trigger_config["enabled"] = False
+        app.annotations.clear()
+        app.active_measurements.clear()
+        app._refresh_trigger()
+
+    def test_dirty_title_and_prompt(self):
+        """Asterisco en el título y las tres salidas del prompt."""
+        app = self.app
+        path = os.path.join(self.tmp.name, "d.ocv")
+        self.assertTrue(app._write_session_to(path))
+        self.assertFalse(self.root.title().startswith("*"))
+        app._mark_dirty()
+        self.assertTrue(self.root.title().startswith("*d"))
+        for choice, expected in (("cancel", False), ("discard", True)):
+            with mock.patch.object(app, "_ask_save_changes_dialog",
+                                   return_value=choice):
+                self.assertIs(app._prompt_save_if_dirty(), expected)
+            self.assertTrue(app.session_dirty)
+        os.remove(path)
+        with mock.patch.object(app, "_ask_save_changes_dialog",
+                               return_value="save"):
+            self.assertTrue(app._prompt_save_if_dirty())
+        self.assertTrue(os.path.exists(path))
+        self.assertFalse(app.session_dirty)
 
 
 if __name__ == "__main__":
