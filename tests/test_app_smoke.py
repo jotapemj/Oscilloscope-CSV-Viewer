@@ -3,7 +3,10 @@
 No mide píxeles; comprueba que los caminos principales se ejecutan sin
 excepción tras mover código entre módulos (imports, nombres, wiring).
 """
+import ctypes
 import os
+import struct
+import sys
 import tempfile
 import time
 import tkinter as tk
@@ -37,6 +40,42 @@ def wait_until(root, cond, timeout=15.0):
             return True
         time.sleep(0.01)
     return False
+
+
+class FakeClipboardAPI:
+    """user32/kernel32 falsos: memoria real, portapapeles del usuario intacto."""
+
+    def __init__(self):
+        self.buffers, self.calls, self.clip = {}, [], None
+        api = self
+
+        def fn(name, impl):
+            def f(*a):
+                api.calls.append(name)
+                return impl(*a)
+            return f
+
+        def alloc(flags, size):
+            buf = ctypes.create_string_buffer(size)
+            h = 1000 + len(self.buffers)
+            self.buffers[h] = buf
+            return h
+
+        def set_data(fmt, h):
+            self.clip = (fmt, h)
+            return h
+
+        self.kernel32 = Ev(
+            GlobalAlloc=fn("GlobalAlloc", alloc),
+            GlobalLock=fn("GlobalLock",
+                          lambda h: ctypes.addressof(self.buffers[h])),
+            GlobalUnlock=fn("GlobalUnlock", lambda h: 1),
+            GlobalFree=fn("GlobalFree", lambda h: 0))
+        self.user32 = Ev(
+            OpenClipboard=fn("OpenClipboard", lambda hwnd: 1),
+            EmptyClipboard=fn("EmptyClipboard", lambda: 1),
+            SetClipboardData=fn("SetClipboardData", set_data),
+            CloseClipboard=fn("CloseClipboard", lambda: 1))
 
 
 class AppSmoke(unittest.TestCase):
@@ -122,6 +161,42 @@ class AppSmoke(unittest.TestCase):
             timeout=5))
         self.app.apply_theme_runtime("Dark", sync_plot=True, fade=False)
         self.assertEqual(theme.CURRENT_THEME_NAME, "Dark")
+
+    def test_export_image(self):
+        """Diálogo de exportación y PNG en carpeta temporal."""
+        app = self.app
+        before = set(self.root.winfo_children())
+        app._open_save_image_dialog()
+        self.pump()
+        for w in set(self.root.winfo_children()) - before:
+            w.destroy()
+        out = os.path.join(self.tmp.name, "export.png")
+        with mock.patch("tkinter.filedialog.asksaveasfilename",
+                        return_value=out):
+            app._save_image_as(include_cursors=True, include_meas=True,
+                               include_annot=True)
+        with open(out, "rb") as fh:
+            self.assertEqual(fh.read(8), b"\x89PNG\r\n\x1a\n")
+
+    @unittest.skipUnless(sys.platform == "win32", "portapapeles solo Windows")
+    def test_clipboard_dib(self):
+        """DIB 32 bpp top-down, BGRA, y Windows se queda el handle."""
+        app = self.app
+        api = FakeClipboardAPI()
+        with mock.patch("ctypes.windll", Ev(user32=api.user32,
+                                            kernel32=api.kernel32)):
+            app._copy_plot_to_clipboard()
+        self.assertIsNotNone(api.clip, api.calls)
+        fmt, h = api.clip
+        self.assertEqual(fmt, 8)                       # CF_DIB
+        self.assertNotIn("GlobalFree", api.calls)      # ownership
+        raw = api.buffers[h].raw
+        size, width, height, planes, bpp = struct.unpack_from("<IiiHH", raw)
+        w, hgt = app.canvas.get_width_height()
+        self.assertEqual((size, width, height, planes, bpp),
+                         (40, w, -hgt, 1, 32))
+        rgba = np.asarray(app.canvas.buffer_rgba())
+        self.assertEqual(raw[40:44], bytes(rgba[0, 0, [2, 1, 0, 3]]))
 
     def test_minimap(self):
         """Clic fuera del rectángulo salta; arrastre mueve; rueda hace zoom."""
