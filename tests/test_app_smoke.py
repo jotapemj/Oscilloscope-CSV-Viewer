@@ -657,6 +657,91 @@ class AppSmoke(unittest.TestCase):
         app.auto_fit()
         self.pump()
 
+    def key(self, seq, widget=None):
+        w = widget or self.app.canvas.get_tk_widget()
+        w.focus_force()
+        self.pump()
+        w.event_generate(seq, when="now")
+        self.pump()
+
+    def test_hotkeys(self):
+        """Atajos globales por event_generate: cableado + guard de Entry."""
+        app = self.app
+        app.auto_fit()
+        app.t_div.set(app.t_total / 40)
+        app.on_time_div_change()
+        self.key("<Key-2>")
+        self.assertEqual(app.active_channel_idx, 1)
+        entry = next(w for w in self.all_widgets()
+                     if w.winfo_class() in ("TEntry", "TSpinbox", "Entry")
+                     and w.winfo_ismapped())
+        self.key("<Key-1>", widget=entry)      # escribiendo: ignorar
+        self.assertEqual(app.active_channel_idx, 1)
+        self.key("<Key-1>")
+        self.assertEqual(app.active_channel_idx, 0)
+
+        off, vd = app.v_offset.get(), app.v_div.get()
+        self.key("<Up>")                       # traza sube 0.1 div
+        self.assertAlmostEqual(app.v_offset.get(), off - 0.1 * vd)
+        self.key("<Down>")
+        self.assertAlmostEqual(app.v_offset.get(), off)
+        self.key("<Shift-Up>")
+        self.assertNotEqual(app.v_div.get(), vd)
+        self.key("<Shift-Down>")
+        self.assertAlmostEqual(app.v_div.get(), vd)
+        td, to = app.t_div.get(), app.t_offset.get()
+        self.key("<Right>")
+        self.assertGreater(app.t_offset.get(), to)
+        self.key("<Control-Shift-Up>")
+        self.assertNotEqual(app.t_div.get(), td)
+
+        app.cursors_enabled.set(False)
+        app.on_cursors_toggle()
+        self.key("<Control-Left>")             # mueve X1 y activa cursores
+        self.assertTrue(app.cursors_enabled.get())
+        state = app.cursors_enabled.get()
+        self.key("<Key-c>")
+        self.assertNotEqual(app.cursors_enabled.get(), state)
+        vis = app.channels[1]["visible"].get()
+        self.key("<Control-Key-2>")
+        self.assertNotEqual(app.channels[1]["visible"].get(), vis)
+        self.key("<Control-Key-2>")
+        self.key("<Key-g>")
+        self.key("<Key-0>")
+        app.auto_fit()
+        self.pump()
+
+    def all_widgets(self, w=None):
+        w = w or self.root
+        out = [w]
+        for c in w.winfo_children():
+            out += self.all_widgets(c)
+        return out
+
+    def test_mouse_select_and_drag(self):
+        """Clic sobre la traza de CH2 la activa; arrastrar mueve la vista."""
+        app = self.app
+        app.auto_fit()
+        app.set_active_channel(0)
+        self.pump()
+        ch = app.channels[1]
+        k = int(np.argmax(ch["voltage"] > 3.0)) + 50    # en el nivel alto
+        x = app.time[k] - app.t_offset.get()
+        y = (ch["voltage"][k] - ch["v_offset"]) / ch["v_div"] * app.v_div.get()
+        app.on_mouse_press(self.mpl_event(x, y))
+        app.on_mouse_release(self.mpl_event(x, y))
+        self.assertEqual(app.active_channel_idx, 1)
+        app.t_div.set(app.t_total / 40)
+        app.on_time_div_change()
+        before = (app.t_offset.get(), app.v_offset.get())
+        app.on_mouse_press(self.mpl_event(x, y + 3 * app.v_div.get()))
+        app.on_mouse_move(self.mpl_event(x - 2 * app.t_div.get(), y))
+        app.on_mouse_release(self.mpl_event(x - 2 * app.t_div.get(), y))
+        self.assertNotEqual((app.t_offset.get(), app.v_offset.get()), before)
+        app.set_active_channel(0)
+        app.auto_fit()
+        self.pump()
+
     def test_center_dialog_on_main_window(self):
         """El diálogo se centra sobre la ventana principal (coords
         absolutas), no sobre la pantalla primaria (gotcha multimonitor)."""
