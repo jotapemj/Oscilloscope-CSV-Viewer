@@ -149,6 +149,40 @@ class AppSmoke(unittest.TestCase):
         app.auto_fit()
         self.pump()
 
+    def test_trigger(self):
+        """Edge y Width sobre el cuadrado de 1 kHz de CH2 (4 periodos)."""
+        app = self.app
+        app.open_trigger_window()
+        self.pump()
+        self.assertIsNotNone(app._trigger_window)
+        cfg = app.trigger_config
+        cfg.update(enabled=True, source=1, type="Edge", slope="Rising",
+                   level=1.65)
+        app._refresh_trigger()
+        self.pump()
+        rising = [e["t_trigger"] for e in app.trigger_events]
+        self.assertEqual(len(rising), 4, rising)
+        self.assertAlmostEqual(rising[1] - rising[0], 1e-3, delta=2e-6)
+        app.t_div.set(50e-6)
+        app.on_time_div_change()
+        app._trigger_goto(+2)
+        self.pump()
+        t_center = app.t_offset.get() + app.t_div.get() * main.H_DIVS / 2
+        self.assertAlmostEqual(t_center, rising[2], delta=2e-6)
+        cfg.update(type="Width", polarity="Positive", condition="Width >",
+                   width1=0.4e-3)
+        app._refresh_trigger()
+        self.assertEqual(len(app.trigger_events), 4)
+        cfg.update(width1=0.6e-3)
+        app._refresh_trigger()
+        self.assertEqual(app.trigger_events, [])
+        cfg["enabled"] = False
+        app._refresh_trigger()
+        app._trigger_window.destroy()
+        app._trigger_window = None
+        app.auto_fit()
+        self.pump()
+
     def test_xy_mode(self):
         """XY on/off; al salir el plot temporal vuelve a tener trazas."""
         app = self.app
