@@ -10999,15 +10999,6 @@ class OscilloscopeApp:
                     cb()
             except Exception:
                 pass
-        # v1.30: repintar el icono tuerca de la top bar. tk.Canvas guarda
-        # los items con su color absoluto, así que un cambio de tema sin
-        # repintar deja la tuerca con el accent del tema viejo.
-        try:
-            cb = getattr(self, "_gear_redraw", None)
-            if cb is not None:
-                cb()
-        except Exception:
-            pass
             # Cambiar el tema GLOBAL invalida las personalizaciones de
             # Advanced (que aplicaban sobre el tema anterior). Eliminamos
             # esa clave del config persistido para no arrastrarlas al
@@ -11017,6 +11008,16 @@ class OscilloscopeApp:
                 save_user_config({"grid_theme": None})
             except Exception:
                 pass
+
+        # v1.30: repintar el icono tuerca de la top bar. tk.Canvas guarda
+        # los items con su color absoluto, así que un cambio de tema sin
+        # repintar deja la tuerca con el accent del tema viejo.
+        try:
+            cb = getattr(self, "_gear_redraw", None)
+            if cb is not None:
+                cb()
+        except Exception:
+            pass
 
         # Re-render del plot principal con los nuevos colores
         try:
