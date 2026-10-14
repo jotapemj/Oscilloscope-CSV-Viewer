@@ -544,6 +544,38 @@ class AppSmoke(unittest.TestCase):
         app.active_measurements.clear()
         app._refresh_trigger()
 
+    def test_dialogs(self):
+        """About, Settings y leyenda de atajos se abren; toast no rompe."""
+        app = self.app
+        for opener in ("_open_about_window", "_open_grid_view_window",
+                       "_open_commands_legend_dialog"):
+            with self.subTest(dialog=opener):
+                before = set(self.root.winfo_children())
+                getattr(app, opener)()
+                self.pump()
+                new = self.new_toplevels(before)
+                self.assertTrue(new, f"{opener} no abrió ventana")
+                for w in new:
+                    w.destroy()
+        app._show_toast("hello", duration_ms=50)
+        wait_until(self.root, lambda: False, timeout=0.5)
+
+    def test_center_dialog_on_main_window(self):
+        """El diálogo se centra sobre la ventana principal (coords
+        absolutas), no sobre la pantalla primaria (gotcha multimonitor)."""
+        app = self.app
+        win = tk.Toplevel(self.root)
+        win.attributes("-alpha", 0.0)
+        app._center_dialog(win, 300, 200)
+        self.pump()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        cx = win.winfo_rootx() + win.winfo_width() / 2
+        cy = win.winfo_rooty() + win.winfo_height() / 2
+        self.assertAlmostEqual(cx, rx + rw / 2, delta=40)
+        self.assertAlmostEqual(cy, ry + rh / 2, delta=60)
+        win.destroy()
+
     def test_dirty_title_and_prompt(self):
         """Asterisco en el título y las tres salidas del prompt."""
         app = self.app
