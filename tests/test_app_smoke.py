@@ -16,7 +16,7 @@ from unittest import mock
 
 import numpy as np
 
-import main
+from ocv.ui.app.app import OscilloscopeApp
 from ocv.core.math_expr import math_parse
 from ocv.core.scope import H_DIVS, TIME_DIV_VALUES
 from ocv.ui import theme
@@ -129,7 +129,7 @@ class AppSmoke(unittest.TestCase):
         cls.modals = []
         cls.guards = install_modal_guard(cls.modals)
         theme.apply_theme(cls.root, "Dark")
-        cls.app = main.OscilloscopeApp(cls.root)
+        cls.app = OscilloscopeApp(cls.root)
         cls.csv = os.path.join(cls.tmp.name, "capture.csv")
         write_csv(cls.csv)
         cls.app._load_csv_from_path(cls.csv)

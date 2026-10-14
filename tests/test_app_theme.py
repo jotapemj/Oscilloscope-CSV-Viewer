@@ -5,7 +5,7 @@ import tkinter as tk
 import unittest
 from unittest import mock
 
-import main
+from ocv.ui.app.app import OscilloscopeApp
 from ocv.core import config
 from ocv.ui import theme
 
@@ -53,7 +53,7 @@ class ApplyThemeImmediate(unittest.TestCase):
         self.app = FakeApp(self.root)
 
     def apply(self, name, sync_plot):
-        main.OscilloscopeApp._apply_theme_immediate(self.app, name, sync_plot)
+        OscilloscopeApp._apply_theme_immediate(self.app, name, sync_plot)
 
     def test_global_theme_drops_custom_grid(self):
         """Tema global (sync_plot) borra la personalización Advanced
