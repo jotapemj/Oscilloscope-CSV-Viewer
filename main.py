@@ -13794,7 +13794,7 @@ class DecoderWindow:
             w = c.winfo_reqwidth() or 600
         h = int(c.cget("height"))
 
-        theme = {
+        dgm_theme = {
             "bg":     theme.COLOR_BG_ALT,
             "fg":     theme.COLOR_TEXT,
             "dim":    theme.COLOR_TEXT_DIM,
@@ -13809,7 +13809,7 @@ class DecoderWindow:
         drew = False
         try:
             drew = bool(
-                self.current_decoder_cls.draw_diagram(c, 0, 0, w, h, theme))
+                self.current_decoder_cls.draw_diagram(c, 0, 0, w, h, dgm_theme))
         except Exception:
             # Si el diagrama falla, no rompemos la ventana — sólo logueamos.
             import traceback
