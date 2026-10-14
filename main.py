@@ -2005,7 +2005,7 @@ class OscilloscopeApp:
             menu = tk.Menu(
                 self.root, tearoff=0,
                 bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
-                activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
+                activebackground=theme.COLOR_ACCENT, activeforeground=theme.COLOR_TEXT_ON_ACCENT,
                 bd=0,
             )
             menu.add_command(
@@ -2258,7 +2258,7 @@ class OscilloscopeApp:
         def refresh_styles():
             for u, w in cells.items():
                 if u == selected["unit"]:
-                    w.config(bg=theme.COLOR_ACCENT, fg="#000000",
+                    w.config(bg=theme.COLOR_ACCENT, fg=theme.COLOR_TEXT_ON_ACCENT,
                              relief="sunken",
                              highlightbackground=theme.COLOR_ACCENT)
                 else:
@@ -3799,7 +3799,7 @@ class OscilloscopeApp:
             self.annotation_mode = new
             for name, b in mode_btns.items():
                 if name == new:
-                    b.config(bg=theme.COLOR_ACCENT, fg="#000000")
+                    b.config(bg=theme.COLOR_ACCENT, fg=theme.COLOR_TEXT_ON_ACCENT)
                 else:
                     b.config(bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT)
 
@@ -3897,12 +3897,12 @@ class OscilloscopeApp:
             self.annotation_width = w
             for ww, bb in width_btns.items():
                 bb.config(bg=theme.COLOR_ACCENT if ww == w else theme.COLOR_BG_ALT,
-                          fg="#000000" if ww == w else theme.COLOR_TEXT)
+                          fg=theme.COLOR_TEXT_ON_ACCENT if ww == w else theme.COLOR_TEXT)
         for w in (1, 2, 3, 5):
             b = tk.Button(
                 row2, text=str(w),
                 bg=theme.COLOR_ACCENT if w == self.annotation_width else theme.COLOR_BG_ALT,
-                fg="#000000" if w == self.annotation_width else theme.COLOR_TEXT,
+                fg=theme.COLOR_TEXT_ON_ACCENT if w == self.annotation_width else theme.COLOR_TEXT,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=6, pady=2,
@@ -4134,7 +4134,7 @@ class OscilloscopeApp:
             on_size_change()
             for ss, bb in size_btns.items():
                 if ss == s:
-                    bb.config(bg=theme.COLOR_ACCENT, fg="#000000")
+                    bb.config(bg=theme.COLOR_ACCENT, fg=theme.COLOR_TEXT_ON_ACCENT)
                 else:
                     bb.config(bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT)
 
@@ -4142,7 +4142,7 @@ class OscilloscopeApp:
             b = tk.Button(
                 size_row, text=str(s),
                 bg=theme.COLOR_ACCENT if s == size_var.get() else theme.COLOR_BG_ALT,
-                fg="#000000" if s == size_var.get() else theme.COLOR_TEXT,
+                fg=theme.COLOR_TEXT_ON_ACCENT if s == size_var.get() else theme.COLOR_TEXT,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
                 padx=6, pady=2,
@@ -5624,7 +5624,7 @@ class OscilloscopeApp:
         menu = tk.Menu(
             self.root, tearoff=0,
             bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
-            activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
+            activebackground=theme.COLOR_ACCENT, activeforeground=theme.COLOR_TEXT_ON_ACCENT,
             bd=0,
         )
         menu.add_command(
@@ -5941,7 +5941,7 @@ class OscilloscopeApp:
         menu = tk.Menu(
             self.root, tearoff=0,
             bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
-            activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
+            activebackground=theme.COLOR_ACCENT, activeforeground=theme.COLOR_TEXT_ON_ACCENT,
             bd=0,
         )
         menu.add_command(label="Save             Ctrl+S",
@@ -5978,9 +5978,9 @@ class OscilloscopeApp:
         if mode == "Fast":
             self._render_mode_btn.config(
                 text="Fast",
-                bg=theme.COLOR_ACCENT, fg="#000000",
-                activebackground="#6ccfff",
-                activeforeground="#000000",
+                bg=theme.COLOR_ACCENT, fg=theme.COLOR_TEXT_ON_ACCENT,
+                activebackground=theme.COLOR_ACCENT_HOVER,
+                activeforeground=theme.COLOR_TEXT_ON_ACCENT_HOVER,
                 highlightbackground=theme.COLOR_ACCENT,
             )
         else:
@@ -10965,8 +10965,9 @@ class OscilloscopeApp:
         if name not in THEMES:
             return
 
+        prev = theme.CURRENT_THEME_NAME
         apply_theme(self.root, name)
-        _retheme_tk_widgets(self.root)
+        _retheme_tk_widgets(self.root, prev_theme=prev)
 
         # Refrescar Toplevels abiertos (FFT, trigger, XY, etc.) — son hijos
         # de root pero no aparecen en winfo_children() de root directamente
@@ -10974,7 +10975,7 @@ class OscilloscopeApp:
         try:
             for tl in self.root.winfo_children():
                 if isinstance(tl, tk.Toplevel):
-                    _retheme_tk_widgets(tl)
+                    _retheme_tk_widgets(tl, prev_theme=prev)
                     # ttk.Treeview no se refresca solo aunque el Style cambie.
                     # Truco: cambiar la propiedad `style` a algo trivialmente
                     # distinto y volver fuerza un re-cálculo.
@@ -12376,7 +12377,7 @@ class FFTWindow:
         """Menú contextual del plot de la FFT. Acciones: guardar imagen,
         resetear acumuladores."""
         menu = tk.Menu(self.win, tearoff=0, bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,
-                       activebackground=theme.COLOR_ACCENT, activeforeground="#000000",
+                       activebackground=theme.COLOR_ACCENT, activeforeground=theme.COLOR_TEXT_ON_ACCENT,
                        bd=0)
 
         menu.add_command(label="Save image as PNG…",

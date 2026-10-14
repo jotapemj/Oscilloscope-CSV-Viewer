@@ -51,7 +51,7 @@ THEMES = {
         "BORDER":     "#c8c8c8",
         "TEXT":       "#1a1a1a",
         "TEXT_DIM":   "#666666",
-        "ACCENT":     "#0078d4",
+        "ACCENT":     "#0070c4",   # ≥4.5:1 sobre BG (antes #0078d4: 4.15)
         "ACCENT_2":   "#005a9e",
         "DANGER":     "#d13438",
         # Plot: fondo claro, grid gris, texto oscuro
@@ -132,6 +132,10 @@ def _refresh_color_globals(theme_name):
     g["COLOR_ACCENT"]    = t["ACCENT"]
     g["COLOR_ACCENT_2"]  = t["ACCENT_2"]
     g["COLOR_DANGER"]    = t["DANGER"]
+    g["COLOR_ACCENT_HOVER"]         = t["ACCENT_HOVER"]
+    g["COLOR_TEXT_ON_ACCENT"]       = t["TEXT_ON_ACCENT"]
+    g["COLOR_TEXT_ON_ACCENT_HOVER"] = t["TEXT_ON_ACCENT_HOVER"]
+    g["COLOR_TEXT_ON_ACCENT_2"]     = t["TEXT_ON_ACCENT_2"]
     g["CURRENT_THEME_NAME"] = theme_name
 
 
@@ -191,6 +195,46 @@ def lerp_theme(t1, t2, t):
             # No-color o tipos mixtos: mantenemos v1 hasta que el fade acabe
             out[k] = v1
     return out
+
+
+def contrast_ratio(c1, c2):
+    """Contraste WCAG 2.x entre dos colores hex (1.0 .. 21.0).
+    Acepta también "black"/"white" (los usa Dark en PLOT_*)."""
+    named = {"black": "#000000", "white": "#ffffff"}
+
+    def lum(c):
+        c = named.get(c, c)
+        def ch(x):
+            x /= 255
+            return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+        r, g, b = (ch(x) for x in _hex_to_rgb(c))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    hi, lo = sorted((lum(c1), lum(c2)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def text_on(bg):
+    """Negro o blanco, el que más contraste dé sobre `bg`."""
+    black, white = contrast_ratio("#000000", bg), contrast_ratio("#ffffff", bg)
+    return "#000000" if black >= white else "#ffffff"
+
+
+def _derive_roles(t):
+    """Roles calculados: hover del acento (punto medio ACCENT→ACCENT_2) y
+    texto legible sobre cada estado del acento."""
+    t["ACCENT_HOVER"] = lerp_color(t["ACCENT"], t["ACCENT_2"], 0.5)
+    t["TEXT_ON_ACCENT"] = text_on(t["ACCENT"])
+    t["TEXT_ON_ACCENT_HOVER"] = text_on(t["ACCENT_HOVER"])
+    t["TEXT_ON_ACCENT_2"] = text_on(t["ACCENT_2"])
+
+
+for _t in THEMES.values():
+    _derive_roles(_t)
+
+COLOR_ACCENT_HOVER         = THEMES["Dark"]["ACCENT_HOVER"]
+COLOR_TEXT_ON_ACCENT       = THEMES["Dark"]["TEXT_ON_ACCENT"]
+COLOR_TEXT_ON_ACCENT_HOVER = THEMES["Dark"]["TEXT_ON_ACCENT_HOVER"]
+COLOR_TEXT_ON_ACCENT_2     = THEMES["Dark"]["TEXT_ON_ACCENT_2"]
 
 
 # =============================
@@ -277,7 +321,7 @@ def apply_theme(root, name="Dark"):
     style.configure(
         "Accent.TButton",
         background=COLOR_ACCENT,
-        foreground="#000000",
+        foreground=COLOR_TEXT_ON_ACCENT,
         bordercolor=COLOR_ACCENT,
         lightcolor=COLOR_ACCENT,
         darkcolor=COLOR_ACCENT,
@@ -287,8 +331,10 @@ def apply_theme(root, name="Dark"):
     )
     style.map(
         "Accent.TButton",
-        background=[("active", "#6ccfff"), ("pressed", COLOR_ACCENT_2)],
-        foreground=[("active", "#000000"), ("pressed", "#ffffff")],
+        # pressed antes que active: al pulsar, ambos estados están activos
+        background=[("pressed", COLOR_ACCENT_2), ("active", COLOR_ACCENT_HOVER)],
+        foreground=[("pressed", COLOR_TEXT_ON_ACCENT_2),
+                    ("active", COLOR_TEXT_ON_ACCENT_HOVER)],
     )
 
     # --- Checkbutton ---
@@ -309,7 +355,7 @@ def apply_theme(root, name="Dark"):
             ("selected", COLOR_ACCENT),
             ("!selected", COLOR_BG_ALT),
         ],
-        indicatorforeground=[("selected", "#ffffff")],
+        indicatorforeground=[("selected", COLOR_TEXT_ON_ACCENT)],
     )
 
     # --- Radiobutton ---
@@ -331,6 +377,7 @@ def apply_theme(root, name="Dark"):
             ("!selected", COLOR_BG_ALT),
             ("active", COLOR_BG_HOVER),
         ],
+        indicatorforeground=[("selected", COLOR_TEXT_ON_ACCENT)],
     )
 
     # --- Entry / Spinbox / Combobox ---
@@ -354,9 +401,12 @@ def apply_theme(root, name="Dark"):
             darkcolor=[("focus", COLOR_ACCENT)],
             fieldbackground=[("readonly", COLOR_BG_ALT)],
             foreground=[("readonly", COLOR_TEXT)],
-            arrowcolor=[("hover", "#000000"),
-                        ("active", "#000000"),
-                        ("pressed", "#000000"),
+            # Antes: flecha negra en hover (invisible en temas oscuros) y
+            # fondo gris claro de clam al pulsar.
+            background=[("pressed", COLOR_BG_ACTIVE),
+                        ("active", COLOR_BG_HOVER),
+                        ("hover", COLOR_BG_HOVER)],
+            arrowcolor=[("disabled", COLOR_TEXT_DIM),
                         ("!disabled", COLOR_TEXT)],
         )
 
@@ -365,7 +415,7 @@ def apply_theme(root, name="Dark"):
     root.option_add("*TCombobox*Listbox.background", COLOR_BG_ALT)
     root.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", COLOR_ACCENT)
-    root.option_add("*TCombobox*Listbox.selectForeground", "#000000")
+    root.option_add("*TCombobox*Listbox.selectForeground", COLOR_TEXT_ON_ACCENT)
 
     # --- Scale (sliders) ---
     style.configure(
@@ -397,7 +447,7 @@ def apply_theme(root, name="Dark"):
     style.map(
         "Treeview",
         background=[("selected", COLOR_ACCENT)],
-        foreground=[("selected", "#000000")],
+        foreground=[("selected", COLOR_TEXT_ON_ACCENT)],
     )
     style.configure(
         "Treeview.Heading",
@@ -444,7 +494,7 @@ def apply_theme(root, name="Dark"):
     root.option_add("*Background", COLOR_BG)
     root.option_add("*Foreground", COLOR_TEXT)
     root.option_add("*selectBackground", COLOR_ACCENT)
-    root.option_add("*selectForeground", "#000000")
+    root.option_add("*selectForeground", COLOR_TEXT_ON_ACCENT)
     root.option_add("*Toplevel.background", COLOR_BG)
     root.option_add("*Menu.background", COLOR_BG_ALT)
     root.option_add("*Menu.foreground", COLOR_TEXT)
@@ -456,7 +506,7 @@ def apply_dark_theme(root):
     apply_theme(root, "Dark")
 
 
-def _retheme_tk_widgets(widget, _depth=0):
+def _retheme_tk_widgets(widget, _depth=0, prev_theme=None):
     """Recorre el árbol de widgets a partir de `widget` y reescribe bg/fg de
     los tk.* clásicos (Frame, Label, Button, Canvas) usando las constantes
     COLOR_* actuales.
@@ -480,9 +530,9 @@ def _retheme_tk_widgets(widget, _depth=0):
     de tema (botones del selector de tema en Appearance) que deben
     mantener su apariencia original siempre.
 
-    Cuidado: como el cambio de tema modifica COLOR_*, comparamos contra los
-    valores del tema ANTERIOR (que pasamos como argumento, ver el método
-    apply_theme_runtime de la app).
+    `prev_theme`: tema del que vienen los widgets. Desempata colores que
+    tienen varios roles según el tema (#ffffff es BG_ALT en Light y TEXT
+    en High Contrast). Sin él, se usa la heurística por tipo de atributo.
     """
     # Skip widgets explícitamente marcados como protegidos contra retheme.
     # Tampoco descendemos: si todo un subárbol debe quedar fijo (poco
@@ -506,7 +556,7 @@ def _retheme_tk_widgets(widget, _depth=0):
         except (tk.TclError, AttributeError):
             current_bg = None
 
-        new_bg = _map_legacy_color(current_bg, "bg")
+        new_bg = _map_legacy_color(current_bg, "bg", prev_theme)
         if new_bg is not None:
             try:
                 widget.configure(bg=new_bg)
@@ -517,7 +567,7 @@ def _retheme_tk_widgets(widget, _depth=0):
         try:
             if "fg" in widget.keys():
                 current_fg = widget.cget("fg")
-                new_fg = _map_legacy_color(current_fg, "fg")
+                new_fg = _map_legacy_color(current_fg, "fg", prev_theme)
                 if new_fg is not None:
                     widget.configure(fg=new_fg)
         except (tk.TclError, AttributeError):
@@ -528,7 +578,7 @@ def _retheme_tk_widgets(widget, _depth=0):
             try:
                 if attr in widget.keys():
                     cur = widget.cget(attr)
-                    mapped = _map_legacy_color(cur, "border")
+                    mapped = _map_legacy_color(cur, "border", prev_theme)
                     if mapped is not None:
                         widget.configure(**{attr: mapped})
             except (tk.TclError, AttributeError):
@@ -540,7 +590,7 @@ def _retheme_tk_widgets(widget, _depth=0):
     except Exception:
         children = []
     for child in children:
-        _retheme_tk_widgets(child, _depth + 1)
+        _retheme_tk_widgets(child, _depth + 1, prev_theme)
 
 
 # Mapa inverso: dado un color (de cualquier tema), devuelve la "etiqueta" que
@@ -560,7 +610,7 @@ def _rebuild_legacy_reverse():
 _rebuild_legacy_reverse()
 
 
-def _map_legacy_color(hex_value, kind):
+def _map_legacy_color(hex_value, kind, prev_theme=None):
     """Dado un color hex que estaba en un widget, intentar identificar su
     'rol' y devolver el equivalente en el tema ACTUAL.
 
@@ -579,6 +629,9 @@ def _map_legacy_color(hex_value, kind):
     # podemos identificarlo. Para simplicidad: si el rol contiene 'TEXT' y
     # kind=='fg', preferir TEXT. Si kind=='border', preferir BORDER.
     candidates = _LEGACY_COLOR_REVERSE[h]
+    from_prev = [c for c in candidates if c[0] == prev_theme]
+    if from_prev:
+        candidates = from_prev
     preferred_role = None
     if kind == "fg":
         for _, role in candidates:

@@ -6,21 +6,8 @@ from tkinter import ttk
 from ocv.ui import theme
 
 MIN_TEXT = 4.5       # WCAG AA texto normal
-
-
-def _lum(hex_color):
-    def ch(c):
-        c /= 255
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-    r, g, b = (ch(x) for x in theme._hex_to_rgb(hex_color))
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def contrast(fg, bg):
-    named = {"black": "#000000", "white": "#ffffff"}
-    hi, lo = sorted((_lum(named.get(fg, fg)), _lum(named.get(bg, bg))),
-                    reverse=True)
-    return (hi + 0.05) / (lo + 0.05)
+MIN_UI = 3.0         # WCAG 1.4.11 componentes no textuales (flechas, ticks)
+contrast = theme.contrast_ratio
 
 
 class Palette(unittest.TestCase):
@@ -62,27 +49,83 @@ class Contrast(unittest.TestCase):
                     ("PLOT_TEXT", "PLOT_BG"),
                     ("PLOT_TEXT", "PLOT_TIME_LBL_BG")], MIN_TEXT)
 
-    def test_accent_button(self):
-        """Botón Accent en reposo: texto negro sobre ACCENT."""
-        for name, t in theme.THEMES.items():
-            with self.subTest(theme=name):
-                self.assertGreaterEqual(contrast("#000000", t["ACCENT"]),
-                                        MIN_TEXT)
-
-    # Pendiente decisión de diseño (bitácora): Light ACCENT/BG = 4.15
-    @unittest.expectedFailure
     def test_accent_headers(self):
         """Cabeceras en color ACCENT sobre BG."""
         self.check([("ACCENT", "BG")], MIN_TEXT)
 
-    # Pendiente decisión de diseño: High Contrast 1.72, Blueprint 2.90
-    @unittest.expectedFailure
-    def test_accent_button_pressed(self):
-        """Botón Accent pulsado: texto blanco sobre ACCENT_2."""
-        for name, t in theme.THEMES.items():
+    def test_text_on_accent_states(self):
+        """Texto calculado sobre acento en reposo, hover y pulsado."""
+        self.check([("TEXT_ON_ACCENT", "ACCENT"),
+                    ("TEXT_ON_ACCENT_HOVER", "ACCENT_HOVER"),
+                    ("TEXT_ON_ACCENT_2", "ACCENT_2")], MIN_TEXT)
+
+
+class StyleStates(unittest.TestCase):
+    """Contraste medido sobre ttk.Style real, estado a estado."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.root = tk.Tk()
+        except tk.TclError as e:
+            raise unittest.SkipTest(f"Tk no disponible: {e}")
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        theme.apply_theme(cls.root, "Dark")
+        cls.root.destroy()
+
+    def each_theme(self):
+        for name in theme.THEMES:
+            theme.apply_theme(self.root, name)
+            yield name, ttk.Style(self.root)
+
+    def test_accent_button(self):
+        """Botón Accent: reposo, hover y pulsado."""
+        for name, st in self.each_theme():
+            for state in ([], ["active"], ["pressed", "active"]):
+                with self.subTest(theme=name, state=state):
+                    bg = st.lookup("Accent.TButton", "background", state)
+                    fg = st.lookup("Accent.TButton", "foreground", state)
+                    self.assertGreaterEqual(contrast(fg, bg), MIN_TEXT,
+                                            f"{fg} on {bg}")
+
+    def test_pressed_differs_from_hover(self):
+        """El estado pulsado se ve (antes 'active' lo tapaba)."""
+        for name, st in self.each_theme():
             with self.subTest(theme=name):
-                self.assertGreaterEqual(contrast("#ffffff", t["ACCENT_2"]),
-                                        MIN_TEXT)
+                self.assertEqual(
+                    st.lookup("Accent.TButton", "background",
+                              ["pressed", "active"]),
+                    theme.THEMES[name]["ACCENT_2"])
+
+    def test_spin_combo_arrow(self):
+        """Flecha de Combobox/Spinbox visible en hover, active y pressed."""
+        for name, st in self.each_theme():
+            for w in ("TCombobox", "TSpinbox"):
+                for state in (["hover"], ["active"], ["pressed"], []):
+                    with self.subTest(theme=name, widget=w, state=state):
+                        bg = st.lookup(w, "background", state)
+                        arrow = st.lookup(w, "arrowcolor", state)
+                        self.assertGreaterEqual(contrast(arrow, bg), MIN_UI,
+                                                f"{arrow} on {bg}")
+
+    def test_checkbox_tick(self):
+        """Tick del checkbox legible sobre el indicador seleccionado."""
+        for name, st in self.each_theme():
+            with self.subTest(theme=name):
+                ind = st.lookup("TCheckbutton", "indicatorcolor", ["selected"])
+                tick = st.lookup("TCheckbutton", "indicatorforeground",
+                                 ["selected"])
+                self.assertGreaterEqual(contrast(tick, ind), MIN_UI)
+
+    def test_treeview_selection(self):
+        for name, st in self.each_theme():
+            with self.subTest(theme=name):
+                bg = st.lookup("Treeview", "background", ["selected"])
+                fg = st.lookup("Treeview", "foreground", ["selected"])
+                self.assertGreaterEqual(contrast(fg, bg), MIN_TEXT)
 
 
 class LiveRetheme(unittest.TestCase):
@@ -135,6 +178,21 @@ class LiveRetheme(unittest.TestCase):
         self.assertEqual(canvas.cget("highlightbackground"), blue["BORDER"])
         self.assertEqual(swatch.cget("bg"), dark["BG"])
         frame.destroy()
+
+    def test_accent_text_follows_theme(self):
+        """Texto sobre acento (blanco en Light) → color correcto en Dark.
+        Sin tema de origen, #ffffff se confundía con TEXT de High Contrast."""
+        light, dark = theme.THEMES["Light"], theme.THEMES["Dark"]
+        theme.apply_theme(self.root, "Light")
+        lbl = tk.Label(self.root, bg=light["ACCENT"],
+                       fg=light["TEXT_ON_ACCENT"])
+        theme.apply_theme(self.root, "Dark")
+        theme._retheme_tk_widgets(self.root, prev_theme="Light")
+        self.assertEqual(lbl.cget("bg"), dark["ACCENT"])
+        self.assertEqual(lbl.cget("fg"), dark["TEXT_ON_ACCENT"])
+        self.assertGreaterEqual(contrast(lbl.cget("fg"), lbl.cget("bg")),
+                                MIN_TEXT)
+        lbl.destroy()
 
 
 if __name__ == "__main__":
