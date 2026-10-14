@@ -808,6 +808,51 @@ class AppSmoke(unittest.TestCase):
         popup.assert_called_once()
         self.pump()
 
+    def test_phosphor_and_protocol_overlay(self):
+        """Fósforo: LineCollection con tope de segmentos en ambos caminos;
+        al apagar vuelve a Line2D. Overlay de tramas de protocolo."""
+        app = self.app
+        app.auto_fit()
+        app.phosphor_enabled.set(True)         # su trace ya redibuja
+        self.pump()
+        app._last_structure_fingerprint = None  # forzar camino completo
+        app.update_plot()
+        self.pump()
+
+        def collections():
+            return [a for a in app._channel_lines.values()
+                    if hasattr(a, "set_segments")]
+
+        # minmax_decimate(cap // 2 buckets) da hasta 4 puntos por bucket:
+        # el tope real es 2 * cap (típico ~cap). Sin tope: un segmento por
+        # muestra visible.
+        cap = 2 * app._PHOSPHOR_MAX_SEGMENTS
+        lcs = collections()
+        self.assertEqual(len(lcs), len(app.channels))
+        self.assertTrue(all(len(lc.get_segments()) <= cap for lc in lcs),
+                        [len(lc.get_segments()) for lc in lcs])
+        app.t_offset.set(app.t_offset.get() + 1e-9)
+        app.update_plot()                      # mismo fingerprint: rápido
+        self.pump()
+        lcs = collections()
+        self.assertTrue(lcs)
+        self.assertTrue(all(len(lc.get_segments()) <= cap for lc in lcs))
+        app.phosphor_enabled.set(False)
+        app.update_plot()
+        self.pump()
+        self.assertFalse(collections())
+        self.assertTrue(all(hasattr(a, "set_data")
+                            for a in app._channel_lines.values()))
+
+        frames = [{"t_start": 1e-4, "t_end": 2e-4, "type": "data",
+                   "value": 0x41, "label": "0x41 'A'", "color": "#5fa8ff",
+                   "error": False}]
+        app._set_protocol_frames(frames, {"primary": 1})
+        self.pump()
+        app._set_protocol_frames([], {})
+        app._schedule_update_plot()
+        wait_until(self.root, lambda: False, timeout=0.3)
+
     def test_center_dialog_on_main_window(self):
         """El diálogo se centra sobre la ventana principal (coords
         absolutas), no sobre la pantalla primaria (gotcha multimonitor)."""
