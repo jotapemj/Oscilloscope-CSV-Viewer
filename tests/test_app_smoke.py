@@ -110,6 +110,16 @@ class AppSmoke(unittest.TestCase):
                 self.assertEqual(theme.CURRENT_THEME_NAME, name)
         self.app._apply_theme_immediate("Dark", sync_plot=True)
 
+    def test_theme_fade(self):
+        """Cambio de tema con fundido: overlay, animación y limpieza."""
+        self.app.apply_theme_runtime("Blueprint", sync_plot=True, fade=True)
+        self.assertTrue(wait_until(
+            self.root, lambda: theme.CURRENT_THEME_NAME == "Blueprint"
+            and getattr(self.app, "_theme_fade_overlay", None) is None,
+            timeout=5))
+        self.app.apply_theme_runtime("Dark", sync_plot=True, fade=False)
+        self.assertEqual(theme.CURRENT_THEME_NAME, "Dark")
+
     def test_session_roundtrip(self):
         """Guardar .ocv y volver a cargarlo restaura los canales."""
         path = os.path.join(self.tmp.name, "s.ocv")
