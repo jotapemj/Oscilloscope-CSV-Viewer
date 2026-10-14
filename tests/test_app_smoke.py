@@ -560,6 +560,45 @@ class AppSmoke(unittest.TestCase):
         app._show_toast("hello", duration_ms=50)
         wait_until(self.root, lambda: False, timeout=0.5)
 
+    def test_measurements_and_cursors(self):
+        """Medidas reales vía la app y lectura de cursores."""
+        app = self.app
+        app.auto_fit()
+        self.pump()
+        app.active_measurements[:] = [
+            {"channel_idx": 1, "name": "Frequency", "channel_idx2": None},
+            {"channel_idx": 0, "name": "Peak-Peak", "channel_idx2": None},
+        ]
+        app.open_meas_window()
+        app._rebuild_measurements_panel()
+        app.update_plot()
+        self.pump()
+        res = {r["name"]: r for r in app.compute_measurements()}
+        self.assertAlmostEqual(res["Frequency"]["value"], 1e3, delta=1.0)
+        self.assertEqual(res["Frequency"]["unit"], "Hz")
+        self.assertAlmostEqual(res["Peak-Peak"]["value"], 2.0, delta=0.01)
+        app._remove_measurement(0)
+        self.assertEqual([m["name"] for m in app.active_measurements],
+                         ["Peak-Peak"])
+        app.active_measurements.clear()
+        app._rebuild_measurements_panel()
+
+        app.cursors_enabled.set(True)
+        app.on_cursors_toggle()
+        app.center_cursors()
+        self.pump()
+        t1, t2 = app.cursor_x
+        window = app.t_div.get() * H_DIVS
+        self.assertAlmostEqual(t2 - t1, window / 2, delta=window * 1e-9)
+        app.update_cursors_info_label()
+        self.assertIn("Δt:", app.cursors_info_label.get_text())
+        app.cursors_enabled.set(False)
+        app.on_cursors_toggle()
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel):
+                w.destroy()
+        self.pump()
+
     def test_center_dialog_on_main_window(self):
         """El diálogo se centra sobre la ventana principal (coords
         absolutas), no sobre la pantalla primaria (gotcha multimonitor)."""
