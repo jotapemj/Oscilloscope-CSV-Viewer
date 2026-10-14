@@ -198,6 +198,39 @@ class AppSmoke(unittest.TestCase):
         rgba = np.asarray(app.canvas.buffer_rgba())
         self.assertEqual(raw[40:44], bytes(rgba[0, 0, [2, 1, 0, 3]]))
 
+    def test_math_channels(self):
+        """M1 = CH1*2, M2 = M1+CH2; ciclo rechazado; borrado en cascada."""
+        app = self.app
+        app.open_math_window()
+        self.pump()
+        ch1 = app.channels[0]["voltage"].copy()
+        ch2 = app.channels[1]["voltage"].copy()
+
+        def create(expr, name):
+            res = app._resolve_refs(main.math_parse(expr))
+            return app._create_math_channel(expr, res, name)
+
+        self.assertTrue(create("CH1*2", "M1"))
+        m1 = len(app.channels) - 1
+        self.assertTrue(create("M1+CH2", "M2"))
+        m2 = len(app.channels) - 1
+        np.testing.assert_allclose(app.channels[m1]["voltage"], 2 * ch1)
+        np.testing.assert_allclose(app.channels[m2]["voltage"], 2 * ch1 + ch2)
+        self.assertTrue(app._math_would_create_cycle(m1, {m2}))
+        self.assertFalse(app._math_would_create_cycle(m2, {0, 1}))
+        app.update_plot()
+        self.pump()
+        with mock.patch.object(app, "_ask_delete_cascade",
+                               return_value=True) as ask:
+            app._delete_channel(m1)
+        ask.assert_called_once()
+        self.assertEqual(len(app.channels), 2)
+        np.testing.assert_allclose(app.channels[0]["voltage"], ch1)
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel):
+                w.destroy()
+        self.pump()
+
     def mpl_event(self, xdata, ydata, button=1):
         """Evento matplotlib mínimo con coordenadas de datos y de píxel."""
         x, y = self.app.ax.transData.transform((xdata, ydata))
