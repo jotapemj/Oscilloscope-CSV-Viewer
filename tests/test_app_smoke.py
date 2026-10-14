@@ -198,6 +198,53 @@ class AppSmoke(unittest.TestCase):
         rgba = np.asarray(app.canvas.buffer_rgba())
         self.assertEqual(raw[40:44], bytes(rgba[0, 0, [2, 1, 0, 3]]))
 
+    def mpl_event(self, xdata, ydata, button=1):
+        """Evento matplotlib mínimo con coordenadas de datos y de píxel."""
+        x, y = self.app.ax.transData.transform((xdata, ydata))
+        return Ev(inaxes=self.app.ax, button=button, xdata=xdata,
+                  ydata=ydata, x=x, y=y)
+
+    def test_annotations(self):
+        """Trazo, fijado a la escala de su canal, deshacer/rehacer, borrar."""
+        app = self.app
+        app.open_annotation_toolbar()
+        self.pump()
+        app.set_active_channel(0)
+        app.channels[1]["v_div"] = app.channels[0]["v_div"] * 4
+        n0 = len(app.annotations)
+        app.annotation_mode = "draw"
+        x0 = app.t_div.get()                       # 1 div desde el borde
+        y0 = app.v_div.get() * 1.5                 # 1.5 div sobre GND
+        app._on_annotation_press(self.mpl_event(x0, y0))
+        app._on_annotation_move(self.mpl_event(x0 * 2, y0))
+        app._on_annotation_release(self.mpl_event(x0 * 2, y0))
+        self.assertEqual(len(app.annotations), n0 + 1)
+        stroke = app.annotations[-1]
+        self.assertEqual(stroke["ch_idx"], 0)
+
+        def divs_on_screen():
+            # Altura en divisiones con la escala del canal activo
+            v_real = stroke["points"][0][1]
+            return app._annot_screen_from_v_real(v_real, 0) / app.v_div.get()
+
+        before = divs_on_screen()
+        self.assertAlmostEqual(before, 1.5, places=9)
+        app.set_active_channel(1)                  # otro V/div
+        self.pump()
+        self.assertAlmostEqual(divs_on_screen(), before, places=9)
+        app.set_active_channel(0)
+
+        app._undo_annotation_action()
+        self.assertEqual(len(app.annotations), n0)
+        app._redo_annotation_action()
+        self.assertEqual(len(app.annotations), n0 + 1)
+        app.annotation_mode = "erase"
+        app._on_annotation_press(self.mpl_event(x0 * 2, y0))   # vértice
+        self.assertEqual(len(app.annotations), n0)
+        app.annotation_mode = None
+        app.update_plot()
+        self.pump()
+
     def test_minimap(self):
         """Clic fuera del rectángulo salta; arrastre mueve; rueda hace zoom."""
         app = self.app
