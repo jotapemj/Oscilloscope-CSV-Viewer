@@ -18,7 +18,7 @@ import numpy as np
 
 import main
 from ocv.core.math_expr import math_parse
-from ocv.core.scope import H_DIVS
+from ocv.core.scope import H_DIVS, TIME_DIV_VALUES
 from ocv.ui import theme
 
 
@@ -597,6 +597,64 @@ class AppSmoke(unittest.TestCase):
         for w in self.root.winfo_children():
             if isinstance(w, tk.Toplevel):
                 w.destroy()
+        self.pump()
+
+    def test_scales(self):
+        """Pivote V/div sobre GND, tick 0 V limpio, "1." tecleado, t/div
+        al vecino, snap de GND a la rejilla."""
+        app = self.app
+        app.set_active_channel(0)
+        app.v_div.set(0.5)
+        app.on_v_div_change()
+        app.v_offset.set(-0.5)                 # GND 1 div por encima
+        app.on_v_div_change()
+        gnd_divs = -app.v_offset.get() / app.v_div.get()
+        app._step_v_div("up")                  # 0.5 → 1
+        self.pump()
+        self.assertAlmostEqual(app.v_div.get(), 1.0)
+        self.assertAlmostEqual(-app.v_offset.get() / app.v_div.get(),
+                               gnd_divs, places=9)
+        app.update_plot()
+        self.pump()
+        labels = [t.get_text() for t in app.ax.get_yticklabels()]
+        self.assertIn("0 V", labels, labels)
+        self.assertFalse([x for x in labels if "e-" in x], labels)
+
+        # Secuencia que deja residuo float (-1.8e-15 V) sin el snap a cero
+        app.v_div.set(0.1)
+        app.on_v_div_change()
+        app.v_offset.set(-3 * 0.1)             # -0.30000000000000004, como
+        app.on_v_div_change()                  # sale de sliders/snap reales
+        while app.v_div.get() < 10:
+            app._step_v_div("up")              # redibujo completo
+            self.pump()
+            for path in ("full", "fast"):
+                labels = [t.get_text() for t in app.ax.get_yticklabels()]
+                self.assertFalse([x for x in labels if "e-" in x],
+                                 f"{path} V/div {app.v_div.get()}: {labels}")
+                app.update_plot()              # siguiente: camino rápido
+                self.pump()
+
+        app.v_div_display.set("2.")            # fix #4 por la UI
+        app._on_v_div_typed()
+        self.assertAlmostEqual(app.v_div.get(), 2.0)
+
+        before = app.t_div.get()
+        app._step_t_div("down")
+        self.assertLess(app.t_div.get(), before)
+        self.assertIn(app.t_div.get(), TIME_DIV_VALUES)
+
+        app.v_offset.set(-0.37 * app.v_div.get())
+        app.on_v_div_change()
+        app._snap_channel_gnd_to_grid(0)
+        ch = app.channels[0]
+        divs = -ch["v_offset"] / ch["v_div"]
+        self.assertAlmostEqual(divs, round(divs), places=9)
+
+        app.center_trace()
+        v = ch["voltage"]
+        self.assertAlmostEqual(ch["v_offset"], (v.max() + v.min()) / 2)
+        app.auto_fit()
         self.pump()
 
     def test_center_dialog_on_main_window(self):
