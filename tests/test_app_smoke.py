@@ -162,6 +162,78 @@ class AppSmoke(unittest.TestCase):
         self.assertEqual(len(self.app.channels), 2, names)
         self.assertEqual(len(self.app.time), 4000)
 
+    def open_via_menu(self, path, mode="replace"):
+        """load_csv como desde el botón: modo y fichero simulados, mocks
+        activos durante toda la carga asíncrona."""
+        with mock.patch.object(self.app, "_ask_load_mode",
+                               return_value=mode), \
+                mock.patch.object(self.app, "_prompt_save_if_dirty",
+                                  return_value=True), \
+                mock.patch("tkinter.filedialog.askopenfilename",
+                           return_value=path):
+            self.app.load_csv()
+            wait_until(self.root, lambda: False, timeout=1.5)
+
+    def new_toplevels(self, before):
+        return [w for w in self.root.winfo_children()
+                if w not in before and isinstance(w, tk.Toplevel)]
+
+    def test_csv_paths(self):
+        """Reemplazar, añadir, columna de tiempo dudosa y fichero basura."""
+        app = self.app
+        d = self.tmp.name
+        # 1) Reemplazo por un CSV de 3 canales
+        t = np.arange(2000) / 2e6
+        p3 = os.path.join(d, "three.csv")
+        with open(p3, "w", encoding="utf-8") as fh:
+            fh.write("Time,A,B,C\n")
+            for x in t:
+                fh.write(f"{x:.9e},{np.sin(x * 1e4):.6f},1.0,{x * 100:.6f}\n")
+        self.open_via_menu(p3)
+        self.assertEqual([c["name"] for c in app.channels], ["A", "B", "C"])
+        self.assertEqual(len(app.time), 2000)
+
+        # 2) Añadir: otro muestreo, se interpola a la base existente
+        n_before = len(app.channels)
+        nt = np.arange(500) / 0.5e6
+        app._append_channels(nt, [nt * 1e3], ["RAMP"], None)
+        self.pump()
+        self.assertEqual(len(app.channels), n_before + 1)
+        ramp = app.channels[-1]["voltage"]
+        self.assertEqual(len(ramp), len(app.time))
+        np.testing.assert_allclose(ramp[100], app.time[100] * 1e3, rtol=1e-6)
+
+        # 3) Tiempo en ns sin unidad (dt = 10 > 1 s): diálogo de tiempo
+        pus = os.path.join(d, "nano.csv")
+        with open(pus, "w", encoding="utf-8") as fh:
+            fh.write("t_ns,V\n")
+            for k in range(300):
+                fh.write(f"{k * 10},{np.sin(k / 9):.5f}\n")
+        before = set(self.root.winfo_children())
+        self.open_via_menu(pus)
+        new = self.new_toplevels(before)
+        self.assertTrue(new, "no se abrió el diálogo de columna de tiempo")
+        for w in new:
+            w.destroy()
+
+        # 4) Basura: diálogo de importación con el error
+        pbad = os.path.join(d, "bad.csv")
+        with open(pbad, "w", encoding="utf-8") as fh:
+            fh.write("hello\nworld\n")
+        before = set(self.root.winfo_children())
+        self.open_via_menu(pbad)
+        new = self.new_toplevels(before)
+        self.assertTrue(new, "no se abrió el diálogo de importación")
+        for w in new:
+            w.destroy()
+
+        # Restaurar el CSV de partida para el resto de tests
+        self.open_via_menu(self.csv)
+        self.assertTrue(wait_until(self.root,
+                                   lambda: len(app.channels) == 2))
+        app.auto_fit()
+        self.pump()
+
     def test_plot_and_measurements(self):
         """Redibujo completo y medidas sin excepción."""
         self.app.update_plot()
