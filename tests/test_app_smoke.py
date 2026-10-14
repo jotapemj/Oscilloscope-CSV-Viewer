@@ -742,6 +742,72 @@ class AppSmoke(unittest.TestCase):
         app.auto_fit()
         self.pump()
 
+    def find(self, root, cls_names, text=None):
+        for w in self.all_widgets(root):
+            if w.winfo_class() not in cls_names:
+                continue
+            if text is None or str(w.cget("text")) == text:
+                return w
+        raise AssertionError(f"no {cls_names} {text!r} en {root}")
+
+    def test_channel_panel_dialogs(self):
+        """Unidad (A en el eje), renombrar, color, modo render, menú."""
+        app = self.app
+        app.set_active_channel(0)
+        self.pump()
+        rows_before = len(app.channels_frame.winfo_children())
+        self.assertGreater(rows_before, 0)
+
+        before = set(self.root.winfo_children())
+        app._open_unit_picker_dialog(0)
+        self.pump()
+        (dlg,) = self.new_toplevels(before)
+        self.find(dlg, ("Label",), "A").event_generate("<Button-1>")
+        self.find(dlg, ("TButton",), "OK").invoke()
+        self.pump()
+        self.assertEqual(app.channels[0]["unit"], "A")
+        app.update_plot()
+        self.pump()
+        labels = [t.get_text() for t in app.ax.get_yticklabels() if t.get_text()]
+        self.assertTrue(all(x.endswith("A") for x in labels), labels)
+        app.channels[0]["unit"] = "V"
+        app._last_structure_fingerprint = None
+        app._update_v_div_display()
+
+        old = app.channels[0]["name"]
+        before = set(self.root.winfo_children())
+        app._open_rename_dialog(0)
+        self.pump()
+        (dlg,) = self.new_toplevels(before)
+        entry = self.find(dlg, ("TEntry",))
+        entry.delete(0, "end")
+        entry.insert(0, "VIN")
+        entry.event_generate("<Return>")
+        self.pump()
+        self.assertEqual(app.channels[0]["name"], "VIN")
+        app.channels[0]["name"] = old
+        app._rebuild_channels_panel()
+
+        before = set(self.root.winfo_children())
+        app._open_color_picker(0)
+        self.pump()
+        for w in self.new_toplevels(before):
+            w.destroy()
+
+        mode = app.render_mode.get()
+        app._toggle_render_mode()
+        self.assertNotEqual(app.render_mode.get(), mode)
+        if app.render_mode.get() == "Fast":
+            self.assertEqual(app._render_mode_btn.cget("fg"),
+                             theme.COLOR_TEXT_ON_ACCENT)
+        app._toggle_render_mode()
+        self.assertEqual(app.render_mode.get(), mode)
+
+        with mock.patch("tkinter.Menu.tk_popup") as popup:
+            app._open_session_menu()
+        popup.assert_called_once()
+        self.pump()
+
     def test_center_dialog_on_main_window(self):
         """El diálogo se centra sobre la ventana principal (coords
         absolutas), no sobre la pantalla primaria (gotcha multimonitor)."""
