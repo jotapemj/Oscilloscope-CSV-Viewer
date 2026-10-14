@@ -17,6 +17,8 @@ from unittest import mock
 import numpy as np
 
 import main
+from ocv.core.math_expr import math_parse
+from ocv.core.scope import H_DIVS
 from ocv.ui import theme
 
 
@@ -323,7 +325,7 @@ class AppSmoke(unittest.TestCase):
         ch2 = app.channels[1]["voltage"].copy()
 
         def create(expr, name):
-            res = app._resolve_refs(main.math_parse(expr))
+            res = app._resolve_refs(math_parse(expr))
             return app._create_math_channel(expr, res, name)
 
         self.assertTrue(create("CH1*2", "M1"))
@@ -438,7 +440,7 @@ class AppSmoke(unittest.TestCase):
         app.on_time_div_change()
         app._trigger_goto(+2)
         self.pump()
-        t_center = app.t_offset.get() + app.t_div.get() * main.H_DIVS / 2
+        t_center = app.t_offset.get() + app.t_div.get() * H_DIVS / 2
         self.assertAlmostEqual(t_center, rising[2], delta=2e-6)
         cfg.update(type="Width", polarity="Positive", condition="Width >",
                    width1=0.4e-3)
@@ -494,7 +496,7 @@ class AppSmoke(unittest.TestCase):
         app.channels[0]["v_div"] = 0.5
         app.channels[1]["unit"] = "A"
         app.channels[1]["name"] = "IOUT"
-        res = app._resolve_refs(main.math_parse("CH1*2"))
+        res = app._resolve_refs(math_parse("CH1*2"))
         self.assertTrue(app._create_math_channel("CH1*2", res, "M1"))
         app.trigger_config.update(enabled=True, source=1, level=1.65)
         app.cursors_enabled.set(True)
