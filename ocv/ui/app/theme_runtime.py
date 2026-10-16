@@ -257,6 +257,13 @@ class ThemeRuntimeMixin:
         except Exception:
             pass
 
+        # Toggle Detail/Fast: sus colores dependen del modo, el remapeo
+        # genérico no los conoce (activebackground quedaba del tema viejo)
+        try:
+            self._update_render_mode_btn_visual()
+        except Exception:
+            pass
+
         # Re-render del plot principal con los nuevos colores
         try:
             self.update_plot()

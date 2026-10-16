@@ -112,13 +112,16 @@ class StyleStates(unittest.TestCase):
                                                 f"{arrow} on {bg}")
 
     def test_checkbox_tick(self):
-        """Tick del checkbox legible sobre el indicador seleccionado."""
+        """Bug #21: tick legible sobre la casilla. 'clam' pinta la casilla
+        con indicatorbackground (indicatorcolor lo ignora)."""
         for name, st in self.each_theme():
-            with self.subTest(theme=name):
-                ind = st.lookup("TCheckbutton", "indicatorcolor", ["selected"])
-                tick = st.lookup("TCheckbutton", "indicatorforeground",
-                                 ["selected"])
-                self.assertGreaterEqual(contrast(tick, ind), MIN_UI)
+            for w in ("TCheckbutton", "TRadiobutton"):
+                for state in (["selected"], ["selected", "active"]):
+                    with self.subTest(theme=name, widget=w, state=state):
+                        box = st.lookup(w, "indicatorbackground", state)
+                        tick = st.lookup(w, "indicatorforeground", state)
+                        self.assertGreaterEqual(contrast(tick, box), MIN_UI,
+                                                f"{tick} on {box}")
 
     def test_treeview_selection(self):
         for name, st in self.each_theme():

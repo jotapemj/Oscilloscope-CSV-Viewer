@@ -330,6 +330,39 @@ class AppSmoke(unittest.TestCase):
             self.root.geometry(geom)
             self.pump()
 
+    def test_render_toggle_contrast(self):
+        """Bug #21: toggle Fast legible en reposo, hover y tras cambiar
+        de tema (antes el hover genérico ponía fondo oscuro con texto
+        negro, y quedaba así al salir)."""
+        app = self.app
+        b = app._render_mode_btn
+        mode = app.render_mode.get()
+
+        def cr(bg_opt, fg_opt):
+            return theme.contrast_ratio(b.cget(bg_opt), b.cget(fg_opt))
+        try:
+            for name in theme.THEMES:
+                app._apply_theme_immediate(name, sync_plot=False)
+                for m in ("Fast", "Detail"):
+                    app.render_mode.set(m)
+                    app._update_render_mode_btn_visual()
+                    with self.subTest(theme=name, mode=m):
+                        b.event_generate("<Enter>")
+                        self.pump()
+                        self.assertGreaterEqual(cr("bg", "fg"), 4.5, "hover")
+                        self.assertGreaterEqual(
+                            cr("activebackground", "activeforeground"), 4.5,
+                            "active")
+                        b.event_generate("<Leave>")
+                        self.pump()
+                        self.assertGreaterEqual(cr("bg", "fg"), 4.5, "leave")
+                        if m == "Fast":
+                            self.assertEqual(b.cget("bg"), theme.COLOR_ACCENT)
+        finally:
+            app._apply_theme_immediate("Dark", sync_plot=True)
+            app.render_mode.set(mode)
+            app._update_render_mode_btn_visual()
+
     def test_export_annotations_on_screen_scale(self):
         """Bug #15: anotaciones exportadas en y_screen, no en voltios
         reales; una fuera de rango no estira la imagen."""

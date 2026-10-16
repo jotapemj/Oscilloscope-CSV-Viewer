@@ -345,13 +345,19 @@ def apply_theme(root, name="Dark"):
         focuscolor=COLOR_BG,
         indicatorcolor=COLOR_BG_ALT,
         indicatorbackground=COLOR_BG_ALT,
-        indicatorforeground="#ffffff",   # ⬅️ tick blanco (la "X")
+        indicatorforeground=COLOR_TEXT,
     )
     style.map(
         "TCheckbutton",
         background=[("active", COLOR_BG)],
         foreground=[("active", COLOR_ACCENT)],
+        # 'clam' pinta la casilla con indicatorbackground; indicatorcolor
+        # solo lo usan otros temas ttk (se deja por si acaso)
         indicatorcolor=[
+            ("selected", COLOR_ACCENT),
+            ("!selected", COLOR_BG_ALT),
+        ],
+        indicatorbackground=[
             ("selected", COLOR_ACCENT),
             ("!selected", COLOR_BG_ALT),
         ],
@@ -376,6 +382,10 @@ def apply_theme(root, name="Dark"):
             ("selected", COLOR_ACCENT),
             ("!selected", COLOR_BG_ALT),
             ("active", COLOR_BG_HOVER),
+        ],
+        indicatorbackground=[
+            ("selected", COLOR_ACCENT),
+            ("!selected", COLOR_BG_ALT),
         ],
         indicatorforeground=[("selected", COLOR_TEXT_ON_ACCENT)],
     )

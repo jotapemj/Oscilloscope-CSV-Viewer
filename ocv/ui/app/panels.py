@@ -80,7 +80,10 @@ class PanelsMixin:
             highlightthickness=1,
             command=self._toggle_render_mode,
         )
-        self._add_hover_shadow(self._render_mode_btn)
+        self._render_mode_btn.bind(
+            "<Enter>", lambda e: self._update_render_mode_btn_visual(hover=True))
+        self._render_mode_btn.bind(
+            "<Leave>", lambda e: self._update_render_mode_btn_visual())
         self._render_mode_btn.pack(side=tk.LEFT, padx=(8, 2))
         self._update_render_mode_btn_visual()
         Tooltip(self._render_mode_btn,
@@ -1040,26 +1043,38 @@ class PanelsMixin:
         # Redibujar con el modo nuevo
         self.update_plot()
 
-    def _update_render_mode_btn_visual(self):
-        """Refresca el look del boton segun el modo actual.
-        Detail -> borde acento azul, texto acento.
-        Fast   -> fondo acento, texto negro (activo)."""
+    def _update_render_mode_btn_visual(self, hover=False):
+        """Refresca el look del boton segun el modo actual y el tema.
+        Detail -> borde acento, texto acento.
+        Fast   -> fondo acento, texto legible sobre acento (activo).
+        hover: lo llaman <Enter>/<Leave>; no usa el hover genérico porque
+        ese pone fondo oscuro sin tocar el texto (negro sobre oscuro)."""
         if not hasattr(self, "_render_mode_btn") or self._render_mode_btn is None:
             return
-        mode = self.render_mode.get()
-        if mode == "Fast":
+
+        def readable(fg, bg):
+            # fg preferido si se lee; si no, texto del tema o blanco/negro
+            for c in (fg, theme.COLOR_TEXT):
+                if theme.contrast_ratio(c, bg) >= 4.5:
+                    return c
+            return theme.text_on(bg)
+
+        if self.render_mode.get() == "Fast":
+            bg = theme.COLOR_ACCENT_HOVER if hover else theme.COLOR_ACCENT
             self._render_mode_btn.config(
                 text="Fast",
-                bg=theme.COLOR_ACCENT, fg=theme.COLOR_TEXT_ON_ACCENT,
-                activebackground=theme.COLOR_ACCENT_HOVER,
-                activeforeground=theme.COLOR_TEXT_ON_ACCENT_HOVER,
+                bg=bg, fg=theme.text_on(bg),
+                activebackground=theme.COLOR_ACCENT_2,
+                activeforeground=theme.COLOR_TEXT_ON_ACCENT_2,
                 highlightbackground=theme.COLOR_ACCENT,
             )
         else:
+            bg = theme.COLOR_BG_HOVER if hover else theme.COLOR_BG_ALT
             self._render_mode_btn.config(
                 text="Detail",
-                bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
-                activebackground=theme.COLOR_BG_HOVER,
-                activeforeground=theme.COLOR_ACCENT,
+                bg=bg, fg=readable(theme.COLOR_ACCENT, bg),
+                activebackground=theme.COLOR_BG_ACTIVE,
+                activeforeground=readable(theme.COLOR_ACCENT,
+                                          theme.COLOR_BG_ACTIVE),
                 highlightbackground=theme.COLOR_ACCENT,
             )
