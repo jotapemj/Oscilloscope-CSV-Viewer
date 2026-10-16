@@ -79,6 +79,26 @@ class CsvSmart(unittest.TestCase):
         self.assertEqual(r["time_col_index"], 1)
         self.assertEqual(r["col_names"], ["CH1"])
 
+    def test_peak_detect_pairs(self):
+        """Bug #19: export peak detect (cada instante dos veces, mín/máx)
+        se reconoce como tiempo sin preguntar."""
+        lines = ["in s,C1 in V"]
+        for i in range(60):
+            t = -1e-3 + i * 9.28e-8
+            lines += [f"{t:.8E},{12.69 + i % 3 * 0.01:.5E}",
+                      f"{t:.8E},{13.03 + i % 2 * 0.01:.5E}"]
+        r = csv_io._read_csv_smart(self.write("\n".join(lines) + "\n"))
+        self.assertEqual(r["time_confidence"], "high")
+        self.assertEqual(r["time_col_index"], 0)
+        self.assertEqual(len(r["time"]), 120)
+
+    def test_staircase_is_not_time(self):
+        """Columna escalonada (contador, runs largos) no es tiempo."""
+        s = csv_io._score_time_column(np.repeat(np.arange(20.0), 5))
+        self.assertEqual(s["score"], 0.0)
+        s = csv_io._score_time_column(np.repeat(np.arange(20.0), 2))
+        self.assertGreater(s["score"], 0.85)
+
     def test_no_time_uses_metadata(self):
         """Sin columna de tiempo: se reconstruye con XIncrement/XStart."""
         head = "XIncrement,2e-6\nXStart,-1e-4\nCH1,CH2\n"

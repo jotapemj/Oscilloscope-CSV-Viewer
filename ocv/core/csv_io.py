@@ -160,7 +160,7 @@ def _score_time_column(col):
     cv_robust: float, jumps: int, reason: str}. score alto = candidato fuerte.
 
     Criterios (todos pesan):
-      - monotonía estricta creciente (must)
+      - monotonía creciente (must); estricta salvo pares peak detect
       - dt mediana > 0 (must)
       - coeficiente de variación ROBUSTO bajo: IQR(diffs)/median(diffs)
         (resiste outliers puntuales mucho mejor que std/mean)
@@ -173,9 +173,16 @@ def _score_time_column(col):
                 "reason": "too few rows"}
     diffs = np.diff(col)
     if np.any(diffs <= 0):
-        return {"score": 0.0, "monotonic": False, "dt_median": 0.0,
-                "cv_robust": float("inf"), "jumps": 0,
-                "reason": "not strictly monotonic"}
+        # Peak detect (R&S y otros): cada instante sale 2 veces (mín, máx).
+        # Se acepta creciente no estricto con repeticiones de 2 como máximo;
+        # runs más largos = escalera (contador), no tiempo.
+        pos = diffs > 0
+        runs = np.diff(np.flatnonzero(np.concatenate(([True], pos, [True]))))
+        if np.any(diffs < 0) or not pos.any() or runs.max() > 2:
+            return {"score": 0.0, "monotonic": False, "dt_median": 0.0,
+                    "cv_robust": float("inf"), "jumps": 0,
+                    "reason": "not strictly monotonic"}
+        diffs = diffs[pos]
 
     dt_median = float(np.median(diffs))
     if dt_median <= 0:
