@@ -1,4 +1,6 @@
 """Main window placement: restore saved geometry if still visible, else centre; Windows taskbar app id."""
+import re
+
 from ocv.core.config import save_user_config
 
 
@@ -25,45 +27,21 @@ from ocv.core.config import save_user_config
 # ventana intersectan el área de la pantalla primaria. Esto tolera setups
 # multi-monitor sin sacar la ventana fuera del área usable.
 
+_GEOM_RE = re.compile(r"(\d+)x(\d+)(\+-?\d+|-\d+)(\+-?\d+|-\d+)")
+
+
 def _parse_geometry_string(s):
-    """Parsea 'WxH+X+Y' o 'WxH-X-Y' a tupla (w, h, x, y) o None si falla."""
+    """Parsea 'WxH+X+Y' a tupla (w, h, x, y) o None si falla.
+
+    Offsets: '+N', '-N' y '+-N'. Tk en Windows da '+-1920' cuando la
+    ventana está en un monitor a la izquierda/encima de la primaria."""
     if not isinstance(s, str):
         return None
-    try:
-        # Formatos posibles: '1536x960+100+50', '1536x960-50+50', etc.
-        # Encontrar el separador después de WxH (puede ser + o -)
-        i_x = s.find("x")
-        if i_x <= 0:
-            return None
-        w = int(s[:i_x])
-        rest = s[i_x + 1:]
-        # rest = "960+100+50" o similar
-        # Buscar primer + o - desde posición 1 (la altura puede ser 960
-        # sin signo, así que evitamos confundir con un negativo)
-        i_sign = -1
-        for j in range(1, len(rest)):
-            if rest[j] in "+-":
-                i_sign = j
-                break
-        if i_sign < 0:
-            # Solo "WxH" sin posición — no nos sirve
-            return None
-        h = int(rest[:i_sign])
-        # rest[i_sign:] empieza con + o - y trae "X+Y" o "X-Y"
-        tail = rest[i_sign:]
-        # Buscar segundo + o - desde posición 1 de tail
-        i_sign2 = -1
-        for j in range(1, len(tail)):
-            if tail[j] in "+-":
-                i_sign2 = j
-                break
-        if i_sign2 < 0:
-            return None
-        x = int(tail[:i_sign2])
-        y = int(tail[i_sign2:])
-        return (w, h, x, y)
-    except (ValueError, IndexError):
+    m = _GEOM_RE.fullmatch(s)
+    if m is None:
         return None
+    # int() no acepta '+-N': quitar el '+' delante
+    return tuple(int(g[1:]) if g[0] == "+" else int(g) for g in m.groups())
 
 
 def _position_main_window(root, user_config):
