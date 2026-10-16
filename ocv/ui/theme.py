@@ -642,6 +642,11 @@ def _map_legacy_color(hex_value, kind, prev_theme=None):
     from_prev = [c for c in candidates if c[0] == prev_theme]
     if from_prev:
         candidates = from_prev
+    elif any(c[0] == CURRENT_THEME_NAME for c in candidates):
+        # Ya es un color del tema actual (segunda pasada): no tocar.
+        # Re-mapearlo por hex es ambiguo (#ffffff = TEXT de High Contrast
+        # y TEXT_ON_ACCENT de Light → acababa negro sobre negro).
+        return None
     preferred_role = None
     if kind == "fg":
         for _, role in candidates:

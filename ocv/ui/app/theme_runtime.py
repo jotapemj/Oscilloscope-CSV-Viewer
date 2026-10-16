@@ -207,13 +207,12 @@ class ThemeRuntimeMixin:
         apply_theme(self.root, name)
         _retheme_tk_widgets(self.root, prev_theme=prev)
 
-        # Refrescar Toplevels abiertos (FFT, trigger, XY, etc.) — son hijos
-        # de root pero no aparecen en winfo_children() de root directamente
-        # en todas las versiones de Tk. Iterar explícitamente:
+        # Toplevels abiertos (FFT, trigger, XY...): el barrido de root ya
+        # los recorre (son hijos de root); no repetirlo, una segunda pasada
+        # re-mapeaba colores ya convertidos. Aquí solo el refresco ttk.
         try:
             for tl in self.root.winfo_children():
                 if isinstance(tl, tk.Toplevel):
-                    _retheme_tk_widgets(tl, prev_theme=prev)
                     # ttk.Treeview no se refresca solo aunque el Style cambie.
                     # Truco: cambiar la propiedad `style` a algo trivialmente
                     # distinto y volver fuerza un re-cálculo.

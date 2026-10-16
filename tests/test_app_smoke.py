@@ -330,6 +330,52 @@ class AppSmoke(unittest.TestCase):
             self.root.geometry(geom)
             self.pump()
 
+    def low_contrast_texts(self, min_ratio=4.5):
+        """Textos tk (Label/Button) con fg/bg por debajo de min_ratio."""
+        bad, stack = [], [self.root]
+        while stack:
+            w = stack.pop()
+            stack.extend(w.winfo_children())
+            if getattr(w, "_theme_protected", False):
+                continue
+            if w.winfo_class() not in ("Label", "Button"):
+                continue
+            try:
+                text, fg, bg = w.cget("text"), w.cget("fg"), w.cget("bg")
+            except tk.TclError:
+                continue
+            # "■" = muestra de color del canal, no texto
+            if str(text).strip() in ("", "■") or not fg.startswith("#") \
+                    or not bg.startswith("#"):
+                continue
+            if theme.contrast_ratio(fg, bg) < min_ratio:
+                bad.append(f"{str(text)[:30]!r} {fg} on {bg}")
+        return bad
+
+    def test_theme_switch_contrast(self):
+        """Bug #21: con Settings abierta, ningún cambio de tema deja texto
+        ilegible (antes: negro sobre negro al pasar a High Contrast)."""
+        app = self.app
+        before = set(self.root.winfo_children())
+        app._open_grid_view_window()
+        self.pump()
+        try:
+            names = list(theme.THEMES)
+            for a in names:
+                for b in names:
+                    if a == b:
+                        continue
+                    app._apply_theme_immediate(a, sync_plot=False)
+                    app._apply_theme_immediate(b, sync_plot=False)
+                    with self.subTest(frm=a, to=b):
+                        self.assertEqual(self.low_contrast_texts(), [])
+        finally:
+            for w in self.new_toplevels(before):
+                w.destroy()
+            app._appearance_swatch_refresh = None
+            app._apply_theme_immediate("Dark", sync_plot=True)
+            self.pump()
+
     def test_render_toggle_contrast(self):
         """Bug #21: toggle Fast legible en reposo, hover y tras cambiar
         de tema (antes el hover genérico ponía fondo oscuro con texto

@@ -197,6 +197,30 @@ class LiveRetheme(unittest.TestCase):
                                 MIN_TEXT)
         lbl.destroy()
 
+    def test_retheme_twice_is_stable(self):
+        """Bug #21: una pasada extra sin tema de origen (la de la ventana
+        Settings) no debe re-mapear colores ya convertidos. Antes, #ffffff
+        (TEXT de High Contrast) se leía como TEXT_ON_ACCENT de Light →
+        negro. Dos pasadas CON origen son ambiguas por diseño: la app hace
+        una sola (ver test de contraste en el smoke)."""
+        for a in theme.THEMES:
+            for b in theme.THEMES:
+                if a == b:
+                    continue
+                with self.subTest(frm=a, to=b):
+                    ta, tb = theme.THEMES[a], theme.THEMES[b]
+                    theme.apply_theme(self.root, a)
+                    lbl = tk.Label(self.root, bg=ta["BG"], fg=ta["TEXT"])
+                    dim = tk.Label(self.root, bg=ta["BG"], fg=ta["TEXT_DIM"])
+                    theme.apply_theme(self.root, b)
+                    theme._retheme_tk_widgets(self.root, prev_theme=a)
+                    theme._retheme_tk_widgets(self.root)
+                    self.assertEqual((lbl.cget("bg"), lbl.cget("fg")),
+                                     (tb["BG"], tb["TEXT"]))
+                    self.assertEqual(dim.cget("fg"), tb["TEXT_DIM"])
+                    lbl.destroy()
+                    dim.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

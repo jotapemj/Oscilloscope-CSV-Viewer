@@ -6,7 +6,7 @@ from tkinter import ttk
 from ocv.core.config import save_user_config
 from ocv.resources import _resource_path
 from ocv.ui import theme
-from ocv.ui.theme import _retheme_tk_widgets, THEMES
+from ocv.ui.theme import THEMES
 from ocv.ui.widgets import Tooltip
 
 
@@ -194,8 +194,8 @@ class DialogsMixin:
                 win.configure(bg=theme.COLOR_BG)
                 refresh_theme_buttons()
                 refresh_swatches()
-                # Rerender de etiquetas de la propia ventana
-                _retheme_tk_widgets(win)
+                # Las etiquetas de esta ventana ya las remapea
+                # apply_theme_runtime (barrido desde root)
             except Exception:
                 pass
 
