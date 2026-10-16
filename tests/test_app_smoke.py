@@ -474,19 +474,23 @@ class AppSmoke(unittest.TestCase):
         app._xy_window.destroy()
         app._xy_window = None
 
-    def load(self, path, keep_math=False):
+    def load(self, path):
         """load_session con diálogos simulados. La carga es asíncrona: los
-        mocks siguen activos hasta que termina."""
+        mocks siguen activos hasta que termina. Devuelve el mock de la
+        pregunta "¿mantener MATH?" (responde Keep, el peor caso)."""
         self.app.session_path = None        # para detectar fin de carga
         with mock.patch("tkinter.filedialog.askopenfilename",
-                        return_value=path),                 mock.patch.object(self.app, "_prompt_save_if_dirty",
-                                  return_value=True),                 mock.patch.object(self.app, "_ask_keep_math_on_new_csv",
-                                  return_value=keep_math):
+                        return_value=path), \
+                mock.patch.object(self.app, "_prompt_save_if_dirty",
+                                  return_value=True), \
+                mock.patch.object(self.app, "_ask_keep_math_on_new_csv",
+                                  return_value=True) as ask_keep:
             self.app.load_session()
             self.assertTrue(wait_until(
                 self.root, lambda: self.app.session_path == path
                 and not self.app.session_dirty))
             wait_until(self.root, lambda: False, timeout=0.3)
+        return ask_keep
 
     def test_session_roundtrip(self):
         """Guardar .ocv y recargar restaura canales, MATH, trigger,
@@ -515,8 +519,10 @@ class AppSmoke(unittest.TestCase):
         app.cursor_x = [0.0, 0.0]
         app.annotations.clear()
         app.active_measurements.clear()
-        self.load(path)
+        ask_keep = self.load(path)
 
+        # Bug #12: la sesión manda; ni pregunta ni MATH duplicados
+        ask_keep.assert_not_called()
         self.assertEqual(app.channels[0]["v_div"], 0.5)
         self.assertEqual(app.channels[1]["unit"], "A")
         self.assertEqual(app.channels[1]["name"], "IOUT")

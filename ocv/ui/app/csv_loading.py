@@ -64,7 +64,8 @@ class CsvLoadingMixin:
             self.current_brand = parsed.get("brand")
 
             def do_load():
-                self._load_channels(time, columns, col_names)
+                # La sesión trae sus MATH: descartar los actuales sin preguntar
+                self._load_channels(time, columns, col_names, ask_keep_math=False)
                 # Dejamos un tick para que _load_channels acabe el auto_fit
                 self.root.after(50, lambda: self._hide_loading_overlay(overlay))
                 if on_loaded is not None:
@@ -1047,9 +1048,11 @@ class CsvLoadingMixin:
         except Exception:
             pass
 
-    def _load_channels(self, time, voltage_columns, col_names):
+    def _load_channels(self, time, voltage_columns, col_names,
+                       ask_keep_math=True):
         """Sustituye todos los canales actuales por los nuevos.
-        Si había canales MATH, pregunta al usuario qué hacer con ellos."""
+        Si había canales MATH y ask_keep_math, pregunta qué hacer con
+        ellos; si no, se descartan."""
         time = np.asarray(time, dtype=float)
         # Preservar el origen real ANTES de normalizar al 0. Esto permite
         # mostrar tiempos absolutos del CSV en las etiquetas del eje X y
@@ -1062,7 +1065,7 @@ class CsvLoadingMixin:
         # Decidir qué hacer con los MATH existentes
         keep_math = False
         math_snapshots = []
-        if self.math_order:
+        if self.math_order and ask_keep_math:
             keep_math = self._ask_keep_math_on_new_csv()
             if keep_math:
                 # Guardar copia de las expresiones y nombres ANTES de resetear
