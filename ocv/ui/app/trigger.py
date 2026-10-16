@@ -3,7 +3,7 @@ import tkinter as tk
 
 from tkinter import ttk
 
-from ocv.core.measurements import _find_crossings
+from ocv.core.measurements import _find_trigger_crossings
 from ocv.core.scope import H_DIVS, V_DIVS
 from ocv.ui import theme
 from ocv.ui.widgets import Tooltip
@@ -33,7 +33,7 @@ class TriggerMixin:
         if cfg["type"] == "Edge":
             lvl = float(cfg["level"])
             edge = "rising" if cfg["slope"] == "Rising" else "falling"
-            crossings = _find_crossings(t, v, lvl, edge=edge)
+            crossings = _find_trigger_crossings(t, v, lvl, edge=edge)
             for c in crossings:
                 self.trigger_events.append({
                     "t_trigger": float(c),
@@ -46,8 +46,8 @@ class TriggerMixin:
             lvl = float(cfg["level"])
             if cfg["polarity"] == "Positive":
                 # Pulso positivo: rising -> falling
-                rises = _find_crossings(t, v, lvl, edge="rising")
-                falls = _find_crossings(t, v, lvl, edge="falling")
+                rises = _find_trigger_crossings(t, v, lvl, edge="rising")
+                falls = _find_trigger_crossings(t, v, lvl, edge="falling")
                 pulses = []
                 for r in rises:
                     nxt = falls[falls > r]
@@ -55,8 +55,8 @@ class TriggerMixin:
                         pulses.append((r, nxt[0]))
             else:
                 # Pulso negativo: falling -> rising
-                rises = _find_crossings(t, v, lvl, edge="rising")
-                falls = _find_crossings(t, v, lvl, edge="falling")
+                rises = _find_trigger_crossings(t, v, lvl, edge="rising")
+                falls = _find_trigger_crossings(t, v, lvl, edge="falling")
                 pulses = []
                 for f in falls:
                     nxt = rises[rises > f]

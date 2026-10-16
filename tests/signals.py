@@ -235,3 +235,13 @@ def can(frames, bitrate=500e3, oversample=16, idle_bits=12):
         bits += can_frame_bits(**fr) + [1] * idle_bits
     t, (v,) = _expand([(b,) for b in bits], oversample, bitrate * oversample)
     return t, v
+
+
+def peak_detect(t, v, spread):
+    """Simula un export en modo peak detect: cada instante sale dos veces,
+    como (mín, máx) separados `spread` (ruido dentro del intervalo)."""
+    t2 = np.repeat(t, 2)
+    v2 = np.empty(2 * len(v))
+    v2[0::2] = v - spread / 2
+    v2[1::2] = v + spread / 2
+    return t2, v2

@@ -83,6 +83,46 @@ def _find_crossings(t, v, level, edge="rising"):
     return np.array([_interp_crossing(t, v, i, level) for i in idxs])
 
 
+def _find_trigger_crossings(t, v, level, edge="rising", hyst_frac=0.05):
+    """Cruces de trigger con histéresis, como un osciloscopio: un flanco
+    de subida solo cuenta si antes la señal bajó de level - h (y al revés
+    para bajada). Evita flancos falsos por ruido o por exports en peak
+    detect (pares mín/máx en el mismo instante).
+
+    h = hyst_frac · rango robusto (p1..p99), limitado a la mitad de la
+    distancia entre level y el extremo de armado para no perder eventos
+    con el nivel pegado al suelo/techo. edge: "rising" | "falling".
+    """
+    v = np.asarray(v, dtype=float)
+    n = len(v)
+    if n < 2:
+        return np.array([])
+    p_lo, p_hi = np.percentile(v, [1, 99])
+    h = hyst_frac * (p_hi - p_lo)
+    if edge == "rising":
+        h = min(h, 0.5 * max(0.0, level - float(v.min())))
+        set_mask, reset_mask = v >= level, v < level - h
+    else:
+        h = min(h, 0.5 * max(0.0, float(v.max()) - level))
+        set_mask, reset_mask = v >= level + h, v < level
+    if h <= 0:
+        return _find_crossings(t, v, level, edge=edge)
+
+    # Schmitt vectorizado: estado = último set/reset visto
+    ev = np.full(n, -1, dtype=np.int8)
+    ev[set_mask] = 1
+    ev[reset_mask] = 0
+    last = np.where(ev >= 0, np.arange(n), 0)
+    np.maximum.accumulate(last, out=last)
+    state = ev[last]
+    # Sin evento previo: estado según el lado de level
+    state[state < 0] = 1 if v[0] >= level else 0
+    d = np.diff(state.astype(np.int8))
+    # Índice previo al cambio: v[i] y v[i+1] quedan a ambos lados de level
+    idxs = np.where(d == (1 if edge == "rising" else -1))[0]
+    return np.array([_interp_crossing(t, v, i, level) for i in idxs])
+
+
 # =============================
 # Basic / Horizontal measurements
 # =============================

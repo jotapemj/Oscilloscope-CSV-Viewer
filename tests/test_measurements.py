@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 from ocv.core import measurements as meas
-from tests.signals import trapezoid, sine
+from tests.signals import peak_detect, trapezoid, sine
 
 
 class PulseTrain(unittest.TestCase):
@@ -117,3 +117,46 @@ class Degenerate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TriggerCrossings(unittest.TestCase):
+    """Bug #18: trigger con histéresis. Trapecio 0..13 V (tipo LIN),
+    flancos lentos, en peak detect con pares separados 0.5 V."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.t, cls.v = trapezoid(high=13.0)
+        cls.tp, cls.vp = peak_detect(cls.t, cls.v, 0.5)
+
+    def test_clean_same_as_plain_crossings(self):
+        for edge in ("rising", "falling"):
+            with self.subTest(edge=edge):
+                got = meas._find_trigger_crossings(self.t, self.v, 5.0, edge)
+                ref = meas._find_crossings(self.t, self.v, 5.0, edge)
+                np.testing.assert_allclose(got, ref)
+                self.assertEqual(len(got), 3)
+
+    def test_peak_detect_no_false_edges(self):
+        # Sin histéresis el pareo mín/máx da flancos falsos
+        plain = meas._find_crossings(self.tp, self.vp, 5.0, "rising")
+        self.assertGreater(len(plain), 3)
+        for edge in ("rising", "falling"):
+            with self.subTest(edge=edge):
+                got = meas._find_trigger_crossings(self.tp, self.vp, 5.0, edge)
+                self.assertEqual(len(got), 3)
+
+    def test_rising_time_accurate(self):
+        got = meas._find_trigger_crossings(self.tp, self.vp, 5.0, "rising")
+        # Cruce real de 5 V: 5/13 del flanco de 20 µs; pares ±0.25 V
+        expected = np.array([0.0, 1e-3, 2e-3]) + 20e-6 * 5.0 / 13.0
+        np.testing.assert_allclose(got, expected, atol=1e-6)
+
+    def test_level_near_rails(self):
+        """Nivel pegado al techo/suelo: la histéresis no mata eventos."""
+        up = meas._find_trigger_crossings(self.tp, self.vp, 12.9, "rising")
+        down = meas._find_trigger_crossings(self.tp, self.vp, 0.1, "falling")
+        self.assertEqual((len(up), len(down)), (3, 3))
+
+    def test_level_out_of_range(self):
+        got = meas._find_trigger_crossings(self.t, self.v, 20.0, "rising")
+        self.assertEqual(len(got), 0)
