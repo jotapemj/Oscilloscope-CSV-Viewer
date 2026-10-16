@@ -180,7 +180,10 @@ class PanelsMixin:
             highlightthickness=1,
             cursor="hand2",
         )
-        gear_btn.pack(side=tk.RIGHT, padx=12, pady=8)
+        # before=tools_frame: el packer reparte espacio en orden de
+        # empaquetado; así Settings/About nunca se aplastan con ventana
+        # estrecha (se recorta antes el grupo de cursores).
+        gear_btn.pack(side=tk.RIGHT, padx=12, pady=8, before=tools_frame)
 
         # Canvas con tuerca dibujada
         gear_size = 22
@@ -294,7 +297,7 @@ class PanelsMixin:
             highlightthickness=1,
             cursor="hand2",
         )
-        about_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=8)
+        about_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=8, before=tools_frame)
         about_label = tk.Label(
             about_btn, text="ⓘ  About",
             bg=theme.COLOR_BG_ALT, fg=theme.COLOR_TEXT,

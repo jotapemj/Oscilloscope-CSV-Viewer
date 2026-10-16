@@ -303,6 +303,33 @@ class AppSmoke(unittest.TestCase):
         with open(out, "rb") as fh:
             self.assertEqual(fh.read(8), b"\x89PNG\r\n\x1a\n")
 
+    def find_label(self, text):
+        stack = [self.root]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, tk.Label) and w.cget("text") == text:
+                return w
+            stack.extend(w.winfo_children())
+        return None
+
+    def test_topbar_narrow_window(self):
+        """Bug #20: con ventana estrecha About y Settings no se aplastan."""
+        geom = self.root.geometry()
+        try:
+            self.root.geometry("900x700")
+            wait_until(self.root, lambda: self.root.winfo_width() == 900,
+                       timeout=2)
+            self.pump()
+            for text in ("ⓘ  About", "Settings"):
+                with self.subTest(text=text):
+                    lab = self.find_label(text)
+                    self.assertIsNotNone(lab)
+                    self.assertGreaterEqual(lab.winfo_width(),
+                                            lab.winfo_reqwidth())
+        finally:
+            self.root.geometry(geom)
+            self.pump()
+
     def test_export_annotations_on_screen_scale(self):
         """Bug #15: anotaciones exportadas en y_screen, no en voltios
         reales; una fuera de rango no estira la imagen."""
