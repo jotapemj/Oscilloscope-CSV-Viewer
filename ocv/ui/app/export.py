@@ -278,31 +278,37 @@ class ExportMixin:
                 txt = "   |   ".join(lines)
                 fig.text(0.5, 0.01, txt, ha="center", fontsize=8, color="black")
 
-        # Annotations (strokes + texto)
+        # Annotations (strokes + texto). Guardadas en voltios reales del
+        # canal ch_idx: pasar a y_screen como en pantalla. Recortadas al
+        # eje para que una fuera de rango no estire la imagen (bbox tight).
         if include_annot and self.annotations:
             for a in self.annotations:
+                a_ch = a.get("ch_idx")
                 if a["type"] == "stroke":
                     pts = a["points"]
                     if len(pts) < 2:
                         continue
                     xs = [p[0] - t_start for p in pts]
-                    ys = [p[1] for p in pts]
+                    ys = [self._annot_screen_from_v_real(p[1], a_ch)
+                          for p in pts]
                     if max(xs) < 0 or min(xs) > window:
                         continue
                     ax.plot(xs, ys, color=a["color"],
                             linewidth=a.get("width", 2),
                             solid_capstyle="round",
                             solid_joinstyle="round",
-                            zorder=5)
+                            zorder=5, clip_on=True)
                 else:  # text
                     t, v = a["pos"]
                     if not (t_start <= t <= t_end):
                         continue
-                    ax.text(t - t_start, v, a["content"],
+                    ax.text(t - t_start,
+                            self._annot_screen_from_v_real(v, a_ch),
+                            a["content"],
                             color=a["color"], fontsize=a.get("size", 10),
                             fontfamily="Consolas",
                             verticalalignment="center",
-                            zorder=5)
+                            zorder=5, clip_on=True)
 
         fig.tight_layout(rect=(0, 0.04 if include_meas else 0, 1, 1))
         return fig

@@ -296,6 +296,39 @@ class AppSmoke(unittest.TestCase):
         with open(out, "rb") as fh:
             self.assertEqual(fh.read(8), b"\x89PNG\r\n\x1a\n")
 
+    def test_export_annotations_on_screen_scale(self):
+        """Bug #15: anotaciones exportadas en y_screen, no en voltios
+        reales; una fuera de rango no estira la imagen."""
+        import io
+        app = self.app
+        ch = app.channels[0]
+        saved = (ch["v_offset"], app.active_channel_idx, list(app.annotations))
+        try:
+            app.set_active_channel(0)
+            ch["v_offset"] = 10.0
+            v_div = app.v_div.get()
+            app.annotations[:] = [
+                {"type": "text", "pos": (1e-4, 10.0 + 2 * ch["v_div"]),
+                 "content": "IN", "color": "#ffff00", "ch_idx": 0},
+                {"type": "text", "pos": (1e-4, 10.0 + 500 * ch["v_div"]),
+                 "content": "FAR", "color": "#ffff00", "ch_idx": 0},
+                {"type": "stroke", "color": "#ff0000", "width": 2,
+                 "ch_idx": 0, "points": [(1e-4, 10.0), (2e-4, 10.0)]},
+            ]
+            fig = app._build_export_figure(False, False, include_annot=True)
+            ax = fig.axes[0]
+            txt = {t.get_text(): t for t in ax.texts}
+            self.assertAlmostEqual(txt["IN"].get_position()[1], 2 * v_div)
+            stroke = ax.lines[-1]
+            np.testing.assert_allclose(stroke.get_ydata(), [0.0, 0.0])
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=50, bbox_inches="tight")
+            w, h = struct.unpack(">II", buf.getvalue()[16:24])
+            self.assertLess(h, w, f"imagen estirada: {w}x{h}")
+        finally:
+            ch["v_offset"], idx, app.annotations[:] = saved
+            app.set_active_channel(idx)
+
     @unittest.skipUnless(sys.platform == "win32", "portapapeles solo Windows")
     def test_clipboard_dib(self):
         """DIB 32 bpp top-down, BGRA, y Windows se queda el handle."""
