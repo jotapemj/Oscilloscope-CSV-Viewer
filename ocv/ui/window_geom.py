@@ -24,8 +24,8 @@ from ocv.core.config import save_user_config
 #   3. Si nunca se guardó nada (primer arranque): centrar.
 #
 # Definimos "razonablemente visible" como: al menos 80 píxeles de la
-# ventana intersectan el área de la pantalla primaria. Esto tolera setups
-# multi-monitor sin sacar la ventana fuera del área usable.
+# ventana intersectan el escritorio virtual (todos los monitores). Si el
+# monitor guardado ya no existe, la ventana cae fuera y se centra.
 
 _GEOM_RE = re.compile(r"(\d+)x(\d+)(\+-?\d+|-\d+)(\+-?\d+|-\d+)")
 
@@ -57,13 +57,19 @@ def _position_main_window(root, user_config):
     Llamar DESPUÉS de root.geometry() inicial (que solo fija tamaño) y
     ANTES de deiconify(). El estado zoomed se aplica más tarde.
     """
-    # Pantalla primaria — Tk no expone múltiples monitores. Aceptamos la
-    # limitación: el "razonablemente visible" se mide contra el primario.
+    # Pantalla primaria: tamaño de referencia y destino del centrado
     try:
         scr_w = root.winfo_screenwidth()
         scr_h = root.winfo_screenheight()
     except Exception:
         scr_w, scr_h = 1920, 1080
+    # Escritorio virtual (en Windows, caja de todos los monitores; x/y
+    # negativas si hay uno a la izq./encima). Mismo truco que los tooltips.
+    try:
+        vx, vy = root.winfo_vrootx(), root.winfo_vrooty()
+        vw, vh = root.winfo_vrootwidth(), root.winfo_vrootheight()
+    except Exception:
+        vx, vy, vw, vh = 0, 0, scr_w, scr_h
 
     # Intentar usar la geometría guardada
     saved = user_config.get("main_window_geom")
@@ -79,10 +85,10 @@ def _position_main_window(root, user_config):
     if parsed is not None:
         w, h, x, y = parsed
         # Validar que la ventana queda con al menos 80 px visibles
-        # dentro del área de la pantalla primaria (tolerante a multi-mon).
+        # dentro del escritorio virtual
         MIN_VISIBLE = 80
-        visible_horiz = (x + w > MIN_VISIBLE) and (x < scr_w - MIN_VISIBLE)
-        visible_vert  = (y + h > MIN_VISIBLE) and (y < scr_h - MIN_VISIBLE)
+        visible_horiz = (x + w > vx + MIN_VISIBLE) and (x < vx + vw - MIN_VISIBLE)
+        visible_vert  = (y + h > vy + MIN_VISIBLE) and (y < vy + vh - MIN_VISIBLE)
         # Tamaños sanos: ni minúscula ni gigantesca. El mínimo (400x300)
         # rechaza geometrías "default" minúsculas que Windows Tk asigna
         # a veces al des-maximizar sin tiempo de update.

@@ -85,19 +85,16 @@ class PositionMainWindow(unittest.TestCase):
         self.assertEqual(root.geom, CENTERED)
 
     # Bug #14: solo se aceptaba la primaria
-    @unittest.expectedFailure
     def test_secondary_left_restored(self):
         left = (-1920, 0, 3840, 1080)
         self.assertEqual(self.place("1200x800+-1800+50", left),
                          "1200x800+-1800+50")
 
-    @unittest.expectedFailure
     def test_secondary_right_restored(self):
         right = (0, 0, 3840, 1080)
         self.assertEqual(self.place("1200x800+2100+50", right),
                          "1200x800+2100+50")
 
-    @unittest.expectedFailure
     def test_secondary_above_restored(self):
         above = (0, -1080, 1920, 2160)
         self.assertEqual(self.place("1200x800+100+-900", above),
