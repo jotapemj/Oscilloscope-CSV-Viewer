@@ -740,6 +740,13 @@ class AppSmoke(unittest.TestCase):
         self.assertGreater(app.t_offset.get(), to)
         self.key("<Control-Shift-Up>")
         self.assertNotEqual(app.t_div.get(), td)
+        # Bug #17: alejar con el atajo se para al ver toda la señal
+        for _ in range(40):
+            self.key("<Control-Shift-Down>")
+        self.assertLessEqual(app.t_div.get() * H_DIVS,
+                             app.t_total * (1 + 1e-9))
+        app.auto_fit()
+        self.pump()
 
         app.cursors_enabled.set(False)
         app.on_cursors_toggle()

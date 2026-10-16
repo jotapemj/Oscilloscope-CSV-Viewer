@@ -4,7 +4,7 @@ import tkinter as tk
 
 from tkinter import ttk
 
-from ocv.core.scope import H_DIVS, TIME_DIV_VALUES, V_DIV_VALUES, V_DIVS
+from ocv.core.scope import H_DIVS, V_DIV_VALUES, V_DIVS
 from ocv.core.si_format import format_si
 
 
@@ -269,21 +269,8 @@ class InputMixin:
         if self._hotkey_guard():
             return
         try:
-            current = self.t_div.get()
-            # Buscar el vecino canónico en TIME_DIV_VALUES.
-            if direction > 0:
-                target = next((v for v in TIME_DIV_VALUES if v > current * 1.0001),
-                              TIME_DIV_VALUES[-1])
-            else:
-                target = next((v for v in reversed(TIME_DIV_VALUES)
-                               if v < current * 0.9999), TIME_DIV_VALUES[0])
-            if abs(target - current) < 1e-15:
-                return
-            self._updating_display = True
-            self.t_div_display.set(format_si(target, "s"))
-            self._updating_display = False
-            self.t_div.set(target)
-            self.on_time_div_change()
+            # Misma lógica que el spinbox: capado a ver toda la señal
+            self._step_t_div("up" if direction > 0 else "down")
         except Exception:
             pass
 
