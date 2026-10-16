@@ -191,8 +191,15 @@ class AppSmoke(unittest.TestCase):
             fh.write("Time,A,B,C\n")
             for x in t:
                 fh.write(f"{x:.9e},{np.sin(x * 1e4):.6f},1.0,{x * 100:.6f}\n")
+        app.annotations.append({"type": "text", "pos": (1e-4, 0.5),
+                                "content": "OLD", "color": "#ffff00",
+                                "ch_idx": 0})
+        app._push_undo_annotation("add", [(0, app.annotations[0])])
         self.open_via_menu(p3)
         self.assertEqual([c["name"] for c in app.channels], ["A", "B", "C"])
+        # Bug #16: las anotaciones del CSV anterior no se arrastran
+        self.assertEqual(app.annotations, [])
+        self.assertEqual(app._undo_stack, [])
         self.assertEqual(len(app.time), 2000)
 
         # 2) Añadir: otro muestreo, se interpola a la base existente

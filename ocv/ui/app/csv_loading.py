@@ -1080,6 +1080,12 @@ class CsvLoadingMixin:
         self.time = time
         self.t_total = time[-1]
 
+        # Anotaciones del CSV anterior no aplican al nuevo (una sesión
+        # restaura las suyas después)
+        self.annotations = []
+        self._undo_stack = []
+        self._redo_stack = []
+
         # Heurística: si el CSV es enorme, arrancar en modo Fast para que
         # pan/zoom vayan fluidos de entrada. El usuario puede volver a Detail
         # con el toggle de la topbar cuando quiera ver fino.
