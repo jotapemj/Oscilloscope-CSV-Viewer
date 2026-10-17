@@ -26,6 +26,17 @@ class FormatSI(unittest.TestCase):
         """sig_figs=3 recorta etiquetas de ticks."""
         self.assertEqual(si.format_si(33.3332e-6, "s", sig_figs=3), "33.3 µs")
 
+    def test_rounding_crosses_prefix(self):
+        """Bug #23: si el redondeo llega a 1000, sube de prefijo.
+        Antes: '1e+03 µs' en el tick de 1 ms."""
+        f = si.format_si
+        self.assertEqual(f(999.96e-6, "s", sig_figs=3), "1 ms")
+        self.assertEqual(f(-999.96e-6, "s", sig_figs=3), "-1 ms")
+        self.assertEqual(f(1e-3 * (1 - 1e-12), "s"), "1 ms")
+        self.assertEqual(f(0.9999999, "V", sig_figs=3), "1 V")
+        self.assertEqual(f(999999.9, "Hz", sig_figs=3), "1 MHz")
+        self.assertEqual(f(999.4e-6, "s", sig_figs=3), "999 µs")
+
     def test_zero_noise(self):
         """|x| < 1e-15 se muestra como 0."""
         self.assertEqual(si.format_si(1e-16, "V"), "0 V")

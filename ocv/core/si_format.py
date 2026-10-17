@@ -60,6 +60,9 @@ def format_si(value, unit, sig_figs=6):
         (1e-12, "p"),
     ]
 
+    # Redondear ANTES de elegir prefijo: 999.96 µs con 3 cifras es 1 ms,
+    # no "1e+03 µs"
+    value = float(f"{value:.{sig_figs}g}")
     for scale, prefix in prefixes:
         if abs(value) >= scale:
             scaled = value / scale
