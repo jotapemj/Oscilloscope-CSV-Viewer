@@ -1,6 +1,8 @@
 """MATH channel expression parser and evaluator."""
 import numpy as np
 
+from ocv.core.dsp import repeated_time_index
+
 
 # =============================
 # MATH expression parser + evaluator
@@ -237,8 +239,15 @@ def math_eval_with(ast, time, lookup):
                 # integral acumulada (trapezoidal)
                 return np.concatenate(([0.0], np.cumsum(0.5 * (x[1:] + x[:-1]) * np.diff(time))))
             if fn == "DIFF":
-                # diferencia centrada, bordes con forward/backward
-                return np.gradient(x, time)
+                # diferencia centrada, bordes con forward/backward. Peak
+                # detect (instantes repetidos): derivar la media de cada
+                # instante y repartirla; si no, dt = 0 → inf
+                idx = repeated_time_index(time)
+                if idx is None:
+                    return np.gradient(x, time)
+                tu, inv = idx
+                xu = np.bincount(inv, weights=x) / np.bincount(inv)
+                return np.gradient(xu, tu)[inv]
         if tag == "fn2":
             a = ev(n[2]); b = ev(n[3])
             if n[1] == "MIN": return np.minimum(a, b)

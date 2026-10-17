@@ -5,7 +5,7 @@ import tkinter as tk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from ocv.core.dsp import minmax_decimate
+from ocv.core.dsp import minmax_decimate, repeated_time_index
 from ocv.core.scope import H_DIVS, V_DIVS
 from ocv.core.si_format import DEFAULT_UNIT, format_si
 from ocv.ui import theme
@@ -436,8 +436,20 @@ class PlotMixin:
 
         dt = _np.diff(t)
         dy = _np.diff(y)
-        dt_safe = _np.where(dt == 0, 1e-30, dt)
-        slope = _np.abs(dy / dt_safe)
+        idx = repeated_time_index(t)
+        if idx is None:
+            dt_safe = _np.where(dt == 0, 1e-30, dt)
+            slope = _np.abs(dy / dt_safe)
+        else:
+            # Peak detect (mín/máx con el mismo instante): pendiente de la
+            # media de cada instante, aplicada a sus segmentos. Con dt = 0
+            # la mitad salían ~infinitos y el zigzag del ruido tapaba la
+            # señal: sin graduación.
+            tu, inv = idx
+            yu = _np.bincount(inv, weights=y) / _np.bincount(inv)
+            su = _np.abs(_np.gradient(yu, tu)) if len(tu) > 1 \
+                else _np.zeros(len(tu))
+            slope = su[inv[:-1]]
 
         if slope.size:
             # Percentil 95 como "max" robusto. Si todos son 0 da 0, manejado

@@ -70,6 +70,15 @@ class Eval(unittest.TestCase):
         np.testing.assert_allclose(run("DIFF(CH1)", ch={0: 3 * t}, time=t),
                                    3.0, atol=1e-9)
 
+    def test_diff_peak_detect(self):
+        """Bug #22: con instantes repetidos (peak detect) DIFF no divide
+        por dt=0: deriva la media de cada par. Rampa 3t ± 0.25."""
+        t = np.repeat(np.linspace(0, 1, 101), 2)
+        x = 3 * t + np.tile([-0.25, 0.25], 101)
+        d = run("DIFF(CH1)", ch={0: x}, time=t)
+        self.assertEqual(len(d), len(t))
+        np.testing.assert_allclose(d, 3.0, atol=1e-9)
+
     def test_math_ref(self):
         """M1 se resuelve desde m_arrays."""
         a = np.arange(11.0)

@@ -11,6 +11,7 @@ from ocv.core.dsp import (
     apply_window,
     FFT_WINDOWS,
     FFT_Y_SCALES,
+    merge_repeated_times,
     scale_unit,
     vrms_to_scale,
 )
@@ -84,11 +85,13 @@ class FFTWindow:
 
     def __init__(self, scope):
         self.scope = scope
-        self.time = scope.time
         # Canal seleccionado (por defecto, el activo del scope)
         self.source_idx = scope.active_channel_idx
-        self.voltage = scope.channels[self.source_idx]["voltage"] \
+        voltage = scope.channels[self.source_idx]["voltage"] \
             if scope.channels else scope.voltage
+        # Peak detect: un valor por instante; si no, dt sale a la mitad,
+        # fs al doble y las N muestras cubren la mitad del tiempo
+        self.time, self.voltage = merge_repeated_times(scope.time, voltage)
 
         # ==============================================================
         # Configuración persistente del usuario
@@ -807,7 +810,8 @@ class FFTWindow:
         for i, ch in enumerate(self.scope.channels):
             if ch["name"] == name:
                 self.source_idx = i
-                self.voltage = ch["voltage"]
+                _, self.voltage = merge_repeated_times(self.scope.time,
+                                                       ch["voltage"])
                 break
         # Canal distinto → acumuladores ya no son válidos
         self._reset_trace_buffers(silent=True)

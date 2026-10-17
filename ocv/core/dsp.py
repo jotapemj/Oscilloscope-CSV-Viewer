@@ -3,6 +3,31 @@ import numpy as np
 
 
 # -----------------------------
+# Peak detect: instantes repetidos
+# -----------------------------
+def repeated_time_index(t):
+    """Si `t` repite instantes (export peak detect: pares mín/máx con el
+    mismo tiempo), devuelve (t_unicos, inverse) con t == t_unicos[inverse].
+    None si `t` es estrictamente creciente (caso normal, sin coste)."""
+    t = np.asarray(t, dtype=float)
+    if len(t) < 2 or np.all(np.diff(t) > 0):
+        return None
+    return np.unique(t, return_inverse=True)
+
+
+def merge_repeated_times(t, v):
+    """Un valor por instante (media de las muestras que lo comparten).
+    Para lo que necesita dt > 0: FFT, derivada. Devuelve t y v tal cual
+    si no hay repetidos."""
+    idx = repeated_time_index(t)
+    if idx is None:
+        return t, v
+    tu, inv = idx
+    v = np.asarray(v, dtype=float)
+    return tu, np.bincount(inv, weights=v) / np.bincount(inv)
+
+
+# -----------------------------
 # Decimation min/max para render
 # -----------------------------
 # Umbral: si hay más de POINTS_PER_PIXEL * ancho_pixeles puntos visibles,

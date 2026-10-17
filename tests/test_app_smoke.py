@@ -248,6 +248,40 @@ class AppSmoke(unittest.TestCase):
         self.app.update_plot()
         self.pump()
 
+    def test_fft_peak_detect(self):
+        """Bug #22: CSV peak detect (cada instante dos veces) → la FFT usa
+        el fs real, no el doble (antes dt = media de diffs con ceros)."""
+        app = self.app
+        fs = 1e6
+        t = np.repeat(np.arange(4000) / fs, 2)
+        v = np.sin(2 * np.pi * 10e3 * t) + np.tile([-0.05, 0.05], 4000)
+        app._load_channels(t, [v], ["PK"])
+        self.pump()
+        before = set(self.root.winfo_children())
+        try:
+            app.open_fft_window()
+            self.pump()
+            self.assertAlmostEqual(app._fft_instance.fs / fs, 1.0, places=6)
+        finally:
+            for w in self.new_toplevels(before):
+                w.destroy()
+            self.open_via_menu(self.csv)
+            self.assertTrue(wait_until(self.root,
+                                       lambda: len(app.channels) == 2))
+            app.auto_fit()
+            self.pump()
+
+    def test_phosphor_peak_detect(self):
+        """Bug #22: en peak detect los segmentos con dt = 0 no se comen
+        el percentil: el resto conserva la graduación de intensidad."""
+        t = np.repeat(np.arange(2000) / 1e6, 2)
+        y = np.sin(2 * np.pi * 2e3 * t) + np.tile([-0.02, 0.02], 2000)
+        _, rgba = self.app._compute_phosphor_rgba(t, y, "#ffff00", 1.0, 1.0)
+        alpha = rgba[:, 3][np.diff(t) > 0]
+        self.assertTrue(np.all(np.isfinite(rgba[:, 3])))
+        self.assertLess(alpha.min(), 0.6, "sin graduación")
+        self.assertGreater(alpha.max(), 0.9)
+
     def test_secondary_windows(self):
         """FFT, Eye y Decoder se abren y se cierran."""
         for opener, attr in (("open_fft_window", "_fft_instance"),

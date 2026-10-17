@@ -33,6 +33,24 @@ class Decimate(unittest.TestCase):
         self.assertEqual(dt[-1], t[-1])
 
 
+class MergeRepeatedTimes(unittest.TestCase):
+    """Bug #22: peak detect → un valor (media) por instante."""
+
+    def test_pairs_averaged(self):
+        t = np.repeat(np.arange(5) * 1e-6, 2)
+        v = np.tile([1.0, 3.0], 5)
+        tu, vu = dsp.merge_repeated_times(t, v)
+        np.testing.assert_allclose(tu, np.arange(5) * 1e-6)
+        np.testing.assert_allclose(vu, 2.0)
+
+    def test_strict_unchanged(self):
+        t = np.arange(10.0)
+        v = np.sin(t)
+        tu, vu = dsp.merge_repeated_times(t, v)
+        self.assertIs(tu, t)
+        self.assertIs(vu, v)
+
+
 class Window(unittest.TestCase):
 
     def test_coherent_gain(self):
