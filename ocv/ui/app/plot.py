@@ -1076,13 +1076,25 @@ class PlotMixin:
         if not (y_min <= y_gnd <= y_max):
             return
 
+        # Canales con el 0 V a la misma altura: apilar la etiqueta debajo
+        # de las ya dibujadas en vez de taparlas. Alto de etiqueta ~15 px
+        # pasado a unidades de datos.
+        try:
+            label_h = v_range * 15.0 / max(self.ax.bbox.height, 1.0)
+        except Exception:
+            label_h = v_range * 0.04
+        y_text = y_gnd
+        taken = [a.xyann[1] for a in self._gnd_marker_artists]
+        while any(abs(y_text - y) < label_h * 0.95 for y in taken):
+            y_text -= label_h
+
         # Etiqueta con el nombre del canal a la izquierda.
         # Usa un bbox semitransparente del color de fondo del grid para que
         # NUNCA se superponga con los ticks del eje Y.
         ann = self.ax.annotate(
             f"▶ {ch['name']}",
             xy=(0, y_gnd),
-            xytext=(-t_range * 0.09, y_gnd),
+            xytext=(-t_range * 0.09, y_text),
             ha="right",
             va="center",
             color=self._ch_color(ch, text=True),

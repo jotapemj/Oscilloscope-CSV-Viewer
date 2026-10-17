@@ -498,6 +498,27 @@ class AppSmoke(unittest.TestCase):
             self.root.geometry(geom)
             self.pump()
 
+    def test_gnd_labels_do_not_overlap(self):
+        """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
+        de GND se apilan en vez de taparse ('▶ \\▶ M1')."""
+        app = self.app
+        a, b = app.channels[0], app.channels[1]
+        saved = (b["v_offset"], b["v_div"])
+        try:
+            b["v_offset"], b["v_div"] = a["v_offset"], a["v_div"]
+            app.update_plot()
+            self.pump()
+            app.canvas.draw()
+            r = app.canvas.get_renderer()
+            boxes = [ann.get_window_extent(r) for ann in app._gnd_marker_artists]
+            self.assertEqual(len(boxes), 2)
+            self.assertFalse(boxes[0].overlaps(boxes[1]),
+                             f"{boxes[0]} / {boxes[1]}")
+        finally:
+            b["v_offset"], b["v_div"] = saved
+            app.update_plot()
+            self.pump()
+
     def test_about_version(self):
         """Bug #24: About mostraba 'Version 1.24' fijo a mano."""
         import ocv
