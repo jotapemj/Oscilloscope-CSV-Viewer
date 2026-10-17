@@ -448,13 +448,16 @@ class MeasurementsMixin:
                 text=f"Added {selected_name.get()} on {src_name}  ({len(self.active_measurements)}/{self.MAX_MEASUREMENTS})",
                 fg=theme.COLOR_ACCENT)
 
-        add_btn = ttk.Button(source_row, text="Add", command=on_add,
-                             style="Accent.TButton")
-        add_btn.pack(side=tk.RIGHT, padx=(4, 4))
-
+        # side=RIGHT: el primero empaquetado queda más a la derecha.
+        # Close antes → orden visual "Add | Close" (principal primero,
+        # como el resto de diálogos)
         close_btn = ttk.Button(source_row, text="Close",
                                command=win.destroy)
         close_btn.pack(side=tk.RIGHT, padx=(4, 4))
+
+        add_btn = ttk.Button(source_row, text="Add", command=on_add,
+                             style="Accent.TButton")
+        add_btn.pack(side=tk.RIGHT, padx=(4, 4))
 
         msg_lbl = tk.Label(source_row, text="",
                            bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,

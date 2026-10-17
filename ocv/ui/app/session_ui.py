@@ -215,18 +215,20 @@ class SessionMixin:
             except Exception:
                 pass
 
-        save_btn = ttk.Button(btns, text="Save",
-                              style="Accent.TButton",
-                              command=lambda: pick("save"))
-        save_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        # Orden Windows: Save | Don't save | Cancel. Con side=RIGHT el
+        # primero empaquetado queda más a la derecha → Cancel primero.
+        cancel_btn = ttk.Button(btns, text="Cancel",
+                                command=lambda: pick("cancel"))
+        cancel_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
         discard_btn = ttk.Button(btns, text="Don't save",
                                  command=lambda: pick("discard"))
         discard_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
-        cancel_btn = ttk.Button(btns, text="Cancel",
-                                command=lambda: pick("cancel"))
-        cancel_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        save_btn = ttk.Button(btns, text="Save",
+                              style="Accent.TButton",
+                              command=lambda: pick("save"))
+        save_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
         # Atajos: Enter = Save (acción primaria), Escape = Cancel.
         win.bind("<Return>",  lambda _e: pick("save"))

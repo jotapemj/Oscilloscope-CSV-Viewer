@@ -540,6 +540,41 @@ class AppSmoke(unittest.TestCase):
         cb.invoke()
         self.assertEqual(app.channels[0]["visible"].get(), vis)
 
+    def buttons_x(self, top, texts):
+        """Posición x en pantalla de los ttk.Button de `top` por texto."""
+        from tkinter import ttk
+        out, stack = {}, [top]
+        while stack:
+            w = stack.pop()
+            stack.extend(w.winfo_children())
+            if isinstance(w, ttk.Button) and str(w.cget("text")) in texts:
+                out[str(w.cget("text"))] = w.winfo_rootx()
+        return [out.get(t) for t in texts]
+
+    def test_primary_button_first(self):
+        """UI #6: acción principal a la izquierda, como el resto de
+        diálogos (Create | Cancel). Medidas y guardar-sesión iban al revés."""
+        app = self.app
+        before = set(self.root.winfo_children())
+        app.open_meas_window()
+        self.pump()
+        top = self.new_toplevels(before)[0]
+        try:
+            add, close = self.buttons_x(top, ["Add", "Close"])
+            self.assertLess(add, close)
+        finally:
+            top.destroy()
+        before = set(self.root.winfo_children())
+        app._ask_save_changes_dialog("closing")   # wait_window simulado
+        self.modals.clear()
+        top = self.new_toplevels(before)[0]
+        try:
+            self.pump()
+            xs = self.buttons_x(top, ["Save", "Don't save", "Cancel"])
+            self.assertEqual(xs, sorted(xs))
+        finally:
+            top.destroy()
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""
