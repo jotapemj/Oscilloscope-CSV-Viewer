@@ -471,6 +471,19 @@ class AppSmoke(unittest.TestCase):
             self.root.geometry(geom)
             self.pump()
 
+    def test_about_version(self):
+        """Bug #24: About mostraba 'Version 1.24' fijo a mano."""
+        import ocv
+        before = set(self.root.winfo_children())
+        self.app._open_about_window()
+        self.pump()
+        try:
+            lab = self.find_label(f"Version {ocv.__version__}")
+            self.assertIsNotNone(lab)
+        finally:
+            for w in self.new_toplevels(before):
+                w.destroy()
+
     def test_export_annotations_on_screen_scale(self):
         """Bug #15: anotaciones exportadas en y_screen, no en voltios
         reales; una fuera de rango no estira la imagen."""

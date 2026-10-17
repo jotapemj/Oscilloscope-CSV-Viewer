@@ -3,6 +3,7 @@ import tkinter as tk
 
 from tkinter import ttk
 
+from ocv import __version__
 from ocv.core.config import save_user_config
 from ocv.resources import _resource_path
 from ocv.ui import theme
@@ -26,7 +27,7 @@ class DialogsMixin:
 
         # === EDITA AQUÍ los textos del Acerca de... ===
         APP_NAME      = "Oscilloscope CSV Viewer"
-        APP_VERSION   = "1.24"
+        APP_VERSION   = __version__   # única fuente: ocv/__init__.py
         APP_AUTHOR    = "Jotapeveloper"
         APP_DESCRIPTION = (
             "Offline visualizer for oscilloscope CSV captures. "
