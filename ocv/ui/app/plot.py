@@ -34,6 +34,10 @@ class PlotMixin:
     # -----------------------------
     def build_plot(self, frame):
         self.fig, self.ax = plt.subplots(figsize=(9, 5))
+        # Márgenes propios: los de matplotlib dejaban ~12 % vacío arriba y
+        # 10 % a la derecha. Izquierda y abajo se mantienen: ahí van las
+        # etiquetas GND de canal, los ticks y el recuadro de cursores.
+        self.fig.subplots_adjust(left=0.125, right=0.975, top=0.97, bottom=0.10)
 
         # time_div_label se crea dinámicamente en configure_grid()
         # para que pueda usar coordenadas de datos (1 división de ancho).

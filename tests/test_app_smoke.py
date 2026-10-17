@@ -609,6 +609,27 @@ class AppSmoke(unittest.TestCase):
             app._apply_theme_immediate("Dark", sync_plot=True)
             self.pump()
 
+    def test_plot_uses_available_space(self):
+        """UI #9: el plot ocupa el alto/ancho disponibles (antes márgenes
+        por defecto de matplotlib: ~12 % vacío arriba y 10 % a la
+        derecha) y las etiquetas no se salen de la figura."""
+        app = self.app
+        app.update_plot()
+        self.pump()
+        app.canvas.draw()
+        pos = app.ax.get_position()
+        self.assertGreaterEqual(pos.y1, 0.95)
+        self.assertGreaterEqual(pos.x1, 0.96)
+        r = app.canvas.get_renderer()
+        fig_box = app.fig.bbox
+        for art in (app.ax.get_xticklabels() + app.ax.get_yticklabels()
+                    + app._gnd_marker_artists):
+            if art.get_visible() and art.get_text():
+                bb = art.get_window_extent(r)
+                with self.subTest(text=art.get_text()):
+                    self.assertGreaterEqual(bb.x0, fig_box.x0 - 1)
+                    self.assertGreaterEqual(bb.y0, fig_box.y0 - 1)
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""
