@@ -551,18 +551,20 @@ class PanelsMixin:
             swatch.pack(side=tk.LEFT, padx=(2, 4))
 
             # Checkbox visible/oculto
-            cb = tk.Checkbutton(
+            # ttk como el resto de casillas de la app (antes tk.Checkbutton:
+            # otro dibujo de casilla). Un estilo por color/peso de canal;
+            # hereda indicador y fondo de TCheckbutton.
+            bold = i == self.active_channel_idx
+            ch_style = f"Ch{name_fg[1:]}{'B' if bold else ''}.TCheckbutton"
+            ttk.Style(self.root).configure(
+                ch_style, foreground=name_fg,
+                font=("Segoe UI", 10, "bold" if bold else "normal"))
+            ttk.Style(self.root).map(ch_style, foreground=[("active", name_fg)])
+            cb = ttk.Checkbutton(
                 row,
                 text=ch["name"],
                 variable=ch["visible"],
-                bg=theme.COLOR_BG,
-                fg=name_fg,
-                activebackground=theme.COLOR_BG,
-                activeforeground=name_fg,
-                selectcolor=theme.COLOR_BG_ALT,
-                font=("Segoe UI", 10, "bold" if i == self.active_channel_idx else "normal"),
-                bd=0, highlightthickness=0,
-                anchor="w",
+                style=ch_style,
             )
             cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
 

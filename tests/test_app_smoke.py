@@ -365,17 +365,27 @@ class AppSmoke(unittest.TestCase):
             self.pump()
 
     def low_contrast_texts(self, min_ratio=4.5):
-        """Textos tk (Label/Button) con fg/bg por debajo de min_ratio."""
+        """Textos tk (Label/Button) y ttk (casillas, radios, etiquetas)
+        con fg/bg por debajo de min_ratio."""
+        from tkinter import ttk
+        st = ttk.Style(self.root)
         bad, stack = [], [self.root]
         while stack:
             w = stack.pop()
             stack.extend(w.winfo_children())
             if getattr(w, "_theme_protected", False):
                 continue
-            if w.winfo_class() not in ("Label", "Button", "Checkbutton"):
-                continue
+            cls = w.winfo_class()
             try:
-                text, fg, bg = w.cget("text"), w.cget("fg"), w.cget("bg")
+                if cls in ("Label", "Button", "Checkbutton"):
+                    text, fg, bg = w.cget("text"), w.cget("fg"), w.cget("bg")
+                elif cls in ("TCheckbutton", "TRadiobutton", "TLabel"):
+                    style = str(w.cget("style")) or cls
+                    text = w.cget("text")
+                    fg = str(st.lookup(style, "foreground"))
+                    bg = str(st.lookup(style, "background"))
+                else:
+                    continue
             except tk.TclError:
                 continue
             # "■" = muestra de color del canal, no texto
@@ -513,6 +523,22 @@ class AppSmoke(unittest.TestCase):
         finally:
             self.root.geometry(geom)
             self.pump()
+
+    def test_channel_checkboxes_are_ttk(self):
+        """UI #5: casillas de canal con el mismo dibujo que el resto (ttk)
+        y su color de canal; clic simple sigue alternando visible."""
+        from tkinter import ttk
+        app = self.app
+        app._rebuild_channels_panel()
+        self.pump()
+        name = app.channels[0]["name"]
+        cb = self.find_widget(ttk.Checkbutton, name)
+        self.assertIsNotNone(cb, "casilla de canal no es ttk")
+        vis = app.channels[0]["visible"].get()
+        cb.invoke()
+        self.assertNotEqual(app.channels[0]["visible"].get(), vis)
+        cb.invoke()
+        self.assertEqual(app.channels[0]["visible"].get(), vis)
 
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
