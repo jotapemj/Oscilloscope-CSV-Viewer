@@ -630,6 +630,30 @@ class AppSmoke(unittest.TestCase):
                     self.assertGreaterEqual(bb.x0, fig_box.x0 - 1)
                     self.assertGreaterEqual(bb.y0, fig_box.y0 - 1)
 
+    def test_trigger_count_label_states(self):
+        """UI #10: trigger desactivado = gris 'Trigger off', no rojo de
+        error. Activado sin eventos sí va en rojo."""
+        app = self.app
+        cfg = app.trigger_config
+        saved = dict(cfg)
+        app.open_trigger_window()
+        self.pump()
+        try:
+            lbl = app._trigger_window._count_label
+            cfg["enabled"] = False
+            app._refresh_trigger()
+            self.assertEqual(lbl.cget("text"), "Trigger off")
+            self.assertEqual(lbl.cget("fg"), theme.COLOR_TEXT_DIM)
+            cfg.update(enabled=True, type="Edge", source=0, level=1e6)
+            app._refresh_trigger()
+            self.assertEqual(lbl.cget("fg"), theme.COLOR_DANGER)
+        finally:
+            cfg.clear()
+            cfg.update(saved)
+            app._refresh_trigger()
+            app._trigger_window.destroy()
+            app._trigger_window = None
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""

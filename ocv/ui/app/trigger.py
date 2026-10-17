@@ -106,7 +106,10 @@ class TriggerMixin:
         try:
             lbl = self._trigger_window._count_label
             n = len(self.trigger_events)
-            if n == 0:
+            if not self.trigger_config["enabled"]:
+                # Desactivado no es un error: gris, no rojo
+                lbl.config(text="Trigger off", fg=theme.COLOR_TEXT_DIM)
+            elif n == 0:
                 lbl.config(text="0 trigger events found", fg=theme.COLOR_DANGER)
             else:
                 idx_str = (f"{self.trigger_current_idx + 1}/{n}"
