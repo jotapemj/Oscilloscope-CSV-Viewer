@@ -148,6 +148,10 @@ class DialogsMixin:
         # Botones-swatch para cada tema. Visualmente preview del color de fondo
         # con el texto del tema en su color de texto.
         theme_buttons = {}
+        def tile_text(name):
+            # El borde acento del tema activo apenas se distingue: marca ✓
+            return f"✓ {name}" if name == theme.CURRENT_THEME_NAME else name
+
         def make_theme_btn(parent, name):
             t = THEMES[name]
             # highlightthickness FIJO para todos los estados.
@@ -156,7 +160,7 @@ class DialogsMixin:
             # cambiar tema. Mantenemos un borde constante y solo variamos su
             # color (ACCENT cuando activo, BORDER cuando inactivo).
             b = tk.Button(
-                parent, text=name,
+                parent, text=tile_text(name),
                 bg=t["BG_ALT"], fg=t["TEXT"],
                 activebackground=t["BG_HOVER"],
                 activeforeground=t["TEXT"],
@@ -185,6 +189,7 @@ class DialogsMixin:
                 t = THEMES[n]
                 is_active = (n == theme.CURRENT_THEME_NAME)
                 btn.config(
+                    text=tile_text(n),
                     highlightbackground=t["ACCENT"] if is_active else t["BORDER"],
                 )
 
@@ -258,8 +263,7 @@ class DialogsMixin:
 
         rb_abs = ttk.Radiobutton(
             time_axis_frame,
-            text="Absolute — show real times from the CSV (e.g. pre-trigger "
-                 "appears as negative)",
+            text="Absolute — real CSV times (pre-trigger is negative)",
             variable=ta_radio_var, value="absolute",
             command=_apply_time_axis_choice,
         )
@@ -377,7 +381,14 @@ class DialogsMixin:
         # v1.29: registrar callback para que _apply_theme_immediate refresque
         # los swatches cuando el fade de tema termine. Sin esto, los swatches
         # quedaban con el color residual del tema previo.
-        self._appearance_swatch_refresh = refresh_swatches
+        def _refresh_after_theme():
+            refresh_swatches()
+            # ✓ del tema activo: con fade el tema cambia al final
+            try:
+                refresh_theme_buttons()
+            except tk.TclError:
+                pass
+        self._appearance_swatch_refresh = _refresh_after_theme
         def _on_close_appearance():
             self._appearance_swatch_refresh = None
             win.destroy()

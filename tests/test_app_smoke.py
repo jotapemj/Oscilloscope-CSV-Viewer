@@ -575,6 +575,40 @@ class AppSmoke(unittest.TestCase):
         finally:
             top.destroy()
 
+    def test_settings_layout(self):
+        """UI #7: en Settings ninguna opción se corta y el tema activo se
+        marca con '✓' en su botón."""
+        from tkinter import ttk
+        app = self.app
+        before = set(self.root.winfo_children())
+        app._open_grid_view_window()
+        self.pump()
+        top = self.new_toplevels(before)[0]
+        try:
+            stack = [top]
+            while stack:
+                w = stack.pop()
+                stack.extend(w.winfo_children())
+                if isinstance(w, ttk.Radiobutton):
+                    with self.subTest(text=str(w.cget("text"))[:20]):
+                        self.assertLessEqual(
+                            w.winfo_rootx() + w.winfo_reqwidth(),
+                            top.winfo_rootx() + top.winfo_width())
+            tile = self.find_widget(tk.Button, "✓ Dark")
+            self.assertIsNotNone(tile, "tema activo sin marcar")
+            self.assertIsNone(self.find_widget(tk.Button, "✓ Light"))
+            # Cambio con fundido (asíncrono): la marca sigue al tema
+            app.apply_theme_runtime("Light", sync_plot=True, fade=True)
+            self.assertTrue(wait_until(
+                self.root, lambda: self.find_widget(tk.Button, "✓ Light")
+                is not None, timeout=5))
+            self.assertIsNone(self.find_widget(tk.Button, "✓ Dark"))
+        finally:
+            top.destroy()
+            app._appearance_swatch_refresh = None
+            app._apply_theme_immediate("Dark", sync_plot=True)
+            self.pump()
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""
