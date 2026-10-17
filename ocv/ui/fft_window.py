@@ -551,7 +551,7 @@ class FFTWindow:
 
         self.thd_label = tk.Label(
             row4, text="",
-            fg="#ffcc00", bg=theme.COLOR_BG,
+            fg=theme.COLOR_ACCENT, bg=theme.COLOR_BG,   # amarillo fijo no se leía en Light
             font=("Consolas", 10, "bold")
         )
         self.thd_label.pack(side=tk.RIGHT, padx=10)

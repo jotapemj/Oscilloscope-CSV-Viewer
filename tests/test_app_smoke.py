@@ -392,6 +392,8 @@ class AppSmoke(unittest.TestCase):
         app = self.app
         before = set(self.root.winfo_children())
         app._open_grid_view_window()
+        app.open_eye_window()          # UI #3: métricas en amarillo fijo
+        app.open_fft_window()
         self.pump()
         try:
             names = list(theme.THEMES)
