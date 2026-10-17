@@ -628,6 +628,10 @@ class PanelsMixin:
             cb.bind("<Button-1>", single_cb)                        # clic simple: toggle (con delay)
             cb.bind("<Double-Button-1>", double_cb)                 # doble clic: renombrar
             swatch.bind("<Button-1>", make_color_picker(i))         # clic izq swatch: color
+            Tooltip(swatch, "Click to change the channel color")
+            Tooltip(cb, "Click: show / hide\n"
+                        "Double-click: rename\n"
+                        "Right-click: make active channel")
 
             # Orden visual deseado (izq → der): [unit] [⟲] [✕]
             # Con side=RIGHT, el PRIMER pack queda a la derecha.
@@ -654,6 +658,7 @@ class PanelsMixin:
             del_btn.bind("<Button-1>", lambda e, f=make_deleter(i): f())
             del_btn.bind("<Enter>", lambda e, w=del_btn: w.config(fg=theme.COLOR_DANGER))
             del_btn.bind("<Leave>", lambda e, w=del_btn: w.config(fg=theme.COLOR_TEXT_DIM))
+            Tooltip(del_btn, "Delete channel")
 
             # Botón ⟲ GND: alinea el 0V del canal a la división vertical más cercana
             def make_gnd_snap(idx):
@@ -670,6 +675,7 @@ class PanelsMixin:
             gnd_btn.bind("<Button-1>", lambda e, f=make_gnd_snap(i): f())
             gnd_btn.bind("<Enter>", lambda e, w=gnd_btn: w.config(fg=theme.COLOR_ACCENT))
             gnd_btn.bind("<Leave>", lambda e, w=gnd_btn: w.config(fg=theme.COLOR_TEXT_DIM))
+            Tooltip(gnd_btn, "Snap the channel 0 V to the nearest grid division")
 
             # Botón-casilla de unidad (v1.29): muestra la unidad del canal.
             # Clic → abre picker grid 5x5 para seleccionar otra.
@@ -698,17 +704,6 @@ class PanelsMixin:
                     highlightbackground=theme.COLOR_BORDER, fg=theme.COLOR_TEXT),
             )
             Tooltip(unit_btn, "Channel unit — click to change")
-
-        # Leyenda minimalista — wrap para no forzar el ancho de la sidebar
-        # cuando hay muchos canales o la sidebar es estrecha.
-        tk.Label(
-            self.channels_frame,
-            text=("swatch = color · dbl-click = rename · "
-                  "box = unit · ⟲ = snap · ✕ = delete"),
-            fg=theme.COLOR_TEXT_DIM, bg=theme.COLOR_BG,
-            font=("Segoe UI", 7, "italic"),
-            wraplength=240, justify="left",
-        ).pack(anchor="w", padx=4, pady=(4, 0))
 
     def _open_rename_dialog(self, ch_idx):
         """Ventana modal de tamaño fijo para renombrar un canal.
