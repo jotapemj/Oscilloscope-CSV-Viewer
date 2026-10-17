@@ -700,6 +700,36 @@ class AppSmoke(unittest.TestCase):
             wait_until(self.root, lambda: False, timeout=0.3)
         return ask_keep
 
+    def test_dirty_clears_when_reverted(self):
+        """Mejora 2: volver al estado guardado quita el asterisco; un
+        cambio real lo mantiene. Un CSV nuevo (Untitled) sigue dirty."""
+        app = self.app
+        path = os.path.join(self.tmp.name, "dirty.ocv")
+        self.assertTrue(app._write_session_to(path))
+        self.assertFalse(app.session_dirty)
+        vd = app.v_div.get()
+        values = [v for v in (0.1, 0.2, 0.5, 1.0, 2.0) if abs(v - vd) > 1e-12]
+        app.v_div.set(values[0])
+        self.assertTrue(app.session_dirty)
+        app.v_div.set(vd)                      # vuelta al valor guardado
+        self.assertTrue(wait_until(self.root, lambda: not app.session_dirty,
+                                   timeout=2))
+        self.assertFalse(self.root.title().startswith("*"))
+        app.v_div.set(values[1])               # cambio real: sigue dirty
+        wait_until(self.root, lambda: False, timeout=0.5)
+        self.assertTrue(app.session_dirty)
+        app.v_div.set(vd)
+        wait_until(self.root, lambda: not app.session_dirty, timeout=2)
+        # CSV nuevo: Untitled dirty, sin estado limpio al que volver
+        self.open_via_menu(self.csv)
+        self.assertTrue(wait_until(self.root,
+                                   lambda: len(app.channels) == 2))
+        wait_until(self.root, lambda: False, timeout=0.5)
+        self.assertTrue(app.session_dirty)
+        self.assertIsNone(app.session_path)
+        app.auto_fit()
+        self.pump()
+
     def test_session_roundtrip(self):
         """Guardar .ocv y recargar restaura canales, MATH, trigger,
         cursores, anotaciones y medidas; título sin asterisco."""

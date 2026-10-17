@@ -89,6 +89,9 @@ class OscilloscopeApp(
         self.session_path = None
         self.session_dirty = False
         self._suppress_dirty = False
+        # Firma del último estado guardado/cargado (None = no hay)
+        self._clean_signature = None
+        self._dirty_check_job = None
 
         # -----------------------------
         # Multi-canal

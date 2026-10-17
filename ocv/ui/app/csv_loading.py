@@ -316,6 +316,9 @@ class CsvLoadingMixin:
             # sea consciente de que cerrarla pierde la configuración aun
             # sin haberla tocado más.
             self.session_dirty = True
+            # Sin estado limpio al que volver (el del .ocv anterior ya no
+            # aplica a este CSV)
+            self._clean_signature = None
             self._update_title()
             self.root.after(50, lambda: self._hide_loading_overlay(overlay))
         self.root.after(50, do_load)

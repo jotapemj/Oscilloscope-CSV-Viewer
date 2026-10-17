@@ -73,18 +73,66 @@ class SessionMixin:
         """
         if self._suppress_dirty:
             return
+        # Comprobar (con debounce) si el cambio devuelve al estado limpio
+        self._schedule_dirty_check()
         if self.session_dirty:
             return
         self.session_dirty = True
         self._update_title()
 
     def _clear_dirty(self):
-        """Quita el flag dirty y refresca el título."""
+        """Quita el flag dirty, refresca el título y guarda la firma del
+        estado limpio (save/load) para detectar vueltas a él."""
+        self._clean_signature = self._session_signature()
         if self.session_dirty:
             self.session_dirty = False
             self._update_title()
         else:
             # aún así puede haber cambiado el nombre (Save As)
+            self._update_title()
+
+    def _session_signature(self):
+        """Huella del estado guardable (sin el CSV embebido). Floats a 9
+        cifras: volver al valor por pasos no da el mismo bit a bit."""
+        import json
+
+        def norm(x):
+            if isinstance(x, float):
+                return float(f"{x:.9g}")
+            if isinstance(x, dict):
+                return {str(k): norm(v) for k, v in x.items()}
+            if isinstance(x, (list, tuple)):
+                return [norm(v) for v in x]
+            return x
+        try:
+            return json.dumps(norm(self._session_state_dict()),
+                              sort_keys=True, default=str)
+        except Exception:
+            return None
+
+    def _schedule_dirty_check(self):
+        # Debounce: sliders y arrastres llaman a _mark_dirty en cada tick
+        job = getattr(self, "_dirty_check_job", None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        try:
+            self._dirty_check_job = self.root.after(200, self._check_dirty_reverted)
+        except Exception:
+            self._dirty_check_job = None
+
+    def _check_dirty_reverted(self):
+        """Si el estado vuelve a ser el del último save/load, quita el
+        asterisco. Un CSV nuevo (Untitled) no tiene estado limpio: sigue
+        dirty."""
+        self._dirty_check_job = None
+        clean = getattr(self, "_clean_signature", None)
+        if not self.session_dirty or clean is None:
+            return
+        if self._session_signature() == clean:
+            self.session_dirty = False
             self._update_title()
 
     def _prompt_save_if_dirty(self, context="closing"):
@@ -374,6 +422,35 @@ class SessionMixin:
 
     def _build_session_dict(self):
         """Serializa el estado relevante a un dict JSON-compatible."""
+        payload = self._session_state_dict()
+        payload["csv_content"] = self._session_csv_content()
+        return payload
+
+    def _session_csv_content(self):
+        """CSV a embeber: el fichero original o, si la sesión vino de un
+        .ocv, el contenido cacheado."""
+        # Leer el CSV original como texto para embeberlo. Si no se puede
+        # (CSV borrado entre carga y save), guardamos cadena vacía y al
+        # cargar la sesión se notificará el error.
+        csv_content = ""
+        if self.current_filepath:
+            try:
+                with open(self.current_filepath, "r",
+                          encoding="utf-8", errors="replace") as _f:
+                    csv_content = _f.read()
+            except Exception:
+                csv_content = ""
+        # Fallback: si la sesión actual vino de un .ocv (current_filepath
+        # quedó en None tras borrar el temp), usar el cache embebido.
+        # Sin esto, re-guardar una sesión recién cargada producía un .ocv
+        # con csv_content="" y al re-abrir saltaba el error de "no
+        # embedded CSV data".
+        if not csv_content and self._embedded_csv_content:
+            csv_content = self._embedded_csv_content
+        return csv_content
+
+    def _session_state_dict(self):
+        """Estado de la sesión sin el CSV embebido (barato: sin disco)."""
         # Canales: separamos "reales" de MATH. Para reales guardamos solo
         # metadatos (los voltajes vienen del CSV al recargar). Para MATH
         # guardamos la expresión, que se re-evalúa contra los canales nuevos.
@@ -396,30 +473,10 @@ class SessionMixin:
         # Annotations: stroke listas de (t, v); text tiene pos + content
         annotations_out = serialize_annotations(self.annotations)
 
-        # Leer el CSV original como texto para embeberlo. Si no se puede
-        # (CSV borrado entre carga y save), guardamos cadena vacía y al
-        # cargar la sesión se notificará el error.
-        csv_content = ""
-        if self.current_filepath:
-            try:
-                with open(self.current_filepath, "r",
-                          encoding="utf-8", errors="replace") as _f:
-                    csv_content = _f.read()
-            except Exception:
-                csv_content = ""
-        # Fallback: si la sesión actual vino de un .ocv (current_filepath
-        # quedó en None tras borrar el temp), usar el cache embebido.
-        # Sin esto, re-guardar una sesión recién cargada producía un .ocv
-        # con csv_content="" y al re-abrir saltaba el error de "no
-        # embedded CSV data".
-        if not csv_content and self._embedded_csv_content:
-            csv_content = self._embedded_csv_content
-
         return {
             "version":       self.SESSION_VERSION,
             "app":           "OscilloscopeCSVViewer",
             "csv_name":      self.current_filename,
-            "csv_content":   csv_content,
             "active_idx":    self.active_channel_idx,
             "render_mode":   self.render_mode.get(),
             "t_div":         float(self.t_div.get()),
