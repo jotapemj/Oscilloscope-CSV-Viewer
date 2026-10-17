@@ -554,11 +554,15 @@ class PanelsMixin:
         for i, ch in enumerate(self.channels):
             row = tk.Frame(self.channels_frame, bg=theme.COLOR_BG)
             row.pack(fill=tk.X, pady=1)
+            # Color legible sobre el panel (Light oscurece el amarillo)
+            name_fg = theme.readable_on(ch["color"], theme.COLOR_BG)
 
             # Rectángulo de color (pequeño cuadrado)
             swatch = tk.Label(
                 row, text="■",
-                fg=ch["color"], bg=theme.COLOR_BG,
+                fg=theme.readable_on(ch["color"], theme.COLOR_BG,
+                                     theme.GRAPHIC_MIN),
+                bg=theme.COLOR_BG,
                 font=("Segoe UI", 12, "bold")
             )
             swatch.pack(side=tk.LEFT, padx=(2, 4))
@@ -569,9 +573,9 @@ class PanelsMixin:
                 text=ch["name"],
                 variable=ch["visible"],
                 bg=theme.COLOR_BG,
-                fg=ch["color"],
+                fg=name_fg,
                 activebackground=theme.COLOR_BG,
-                activeforeground=ch["color"],
+                activeforeground=name_fg,
                 selectcolor=theme.COLOR_BG_ALT,
                 font=("Segoe UI", 10, "bold" if i == self.active_channel_idx else "normal"),
                 bd=0, highlightthickness=0,

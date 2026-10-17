@@ -49,9 +49,29 @@ class Contrast(unittest.TestCase):
                     ("PLOT_TEXT", "PLOT_BG"),
                     ("PLOT_TEXT", "PLOT_TIME_LBL_BG")], MIN_TEXT)
 
+    def test_channel_colors_readable(self):
+        """UI #1: readable_on adapta cada color de canal a cada fondo
+        (amarillo sobre Light era ~1.1:1). Si ya se lee, no lo toca."""
+        for name, t in theme.THEMES.items():
+            for bg_key in ("BG", "BG_ALT", "PLOT_BG"):
+                bg = t[bg_key]
+                for c in theme.CHANNEL_COLORS:
+                    for minimum in (MIN_TEXT, MIN_UI):
+                        with self.subTest(theme=name, bg=bg_key, c=c,
+                                          minimum=minimum):
+                            out = theme.readable_on(c, bg, minimum)
+                            self.assertGreaterEqual(contrast(out, bg),
+                                                    minimum)
+                            if contrast(c, bg) >= minimum:
+                                self.assertEqual(out, c)
+
     def test_accent_headers(self):
         """Cabeceras en color ACCENT sobre BG."""
         self.check([("ACCENT", "BG")], MIN_TEXT)
+
+    def test_danger_text(self):
+        """Texto rojo (Clear, avisos) sobre BG y BG_ALT."""
+        self.check([("DANGER", "BG"), ("DANGER", "BG_ALT")], MIN_TEXT)
 
     def test_text_on_accent_states(self):
         """Texto calculado sobre acento en reposo, hover y pulsado."""

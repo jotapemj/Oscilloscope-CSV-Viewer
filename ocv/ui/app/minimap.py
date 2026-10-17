@@ -65,7 +65,8 @@ class MinimapMixin:
             if v_hi == v_lo:
                 v_hi = v_lo + 1.0
             is_active = (i == self.active_channel_idx)
-            color = ch["color"] if is_active else "#666666"
+            color = (theme.readable_on(ch["color"], c.cget("bg"), theme.GRAPHIC_MIN)
+                     if is_active else "#666666")
             width = 1.6 if is_active else 1.0
             # Cada canal se normaliza a [0..1] y ocupa toda la altura
             pts = []

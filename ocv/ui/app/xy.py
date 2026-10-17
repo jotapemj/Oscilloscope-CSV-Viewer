@@ -56,18 +56,24 @@ class XYMixin:
             self.canvas.draw()
             return
 
+        # Colores de canal legibles sobre el fondo del plot (Light)
+        bg = self.grid_theme.get("bg", theme.COLOR_BG)
+        y_line = theme.readable_on(ch_y["color"], bg, theme.GRAPHIC_MIN)
+        x_text = theme.readable_on(ch_x["color"], bg)
+        y_text = theme.readable_on(ch_y["color"], bg)
+
         # Estilo
         style = cfg.get("style", "Line")
         if style == "Dots":
             self.ax.plot(vx, vy, linestyle="none", marker=".",
-                         markersize=2, color=ch_y["color"], alpha=0.85)
+                         markersize=2, color=y_line, alpha=0.85)
         elif style == "Line + Dots":
             self.ax.plot(vx, vy, linestyle="-", marker=".",
                          linewidth=1.0, markersize=3,
-                         color=ch_y["color"], alpha=0.9)
+                         color=y_line, alpha=0.9)
         else:
             self.ax.plot(vx, vy, linestyle="-",
-                         linewidth=1.0, color=ch_y["color"])
+                         linewidth=1.0, color=y_line)
 
         # Encuadre tight con pequeño margen
         def _tight(arr):
@@ -89,9 +95,9 @@ class XYMixin:
                      linewidth=0.6, alpha=0.6)
 
         # Labels con color del canal y unidad
-        self.ax.set_xlabel(f"{ch_x['name']} (V)", color=ch_x["color"],
+        self.ax.set_xlabel(f"{ch_x['name']} (V)", color=x_text,
                            fontsize=10, fontweight="bold")
-        self.ax.set_ylabel(f"{ch_y['name']} (V)", color=ch_y["color"],
+        self.ax.set_ylabel(f"{ch_y['name']} (V)", color=y_text,
                            fontsize=10, fontweight="bold")
 
         # Spines y ticks

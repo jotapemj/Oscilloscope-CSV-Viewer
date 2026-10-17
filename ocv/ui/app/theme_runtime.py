@@ -256,6 +256,14 @@ class ThemeRuntimeMixin:
         except Exception:
             pass
 
+        # Panel de canales: los colores de canal se ajustan al fondo del
+        # tema (readable_on) y el remapeo genérico no los conoce
+        try:
+            self._rebuild_channels_panel()
+            self._rebuild_measurements_panel()
+        except Exception:
+            pass
+
         # Toggle Detail/Fast: sus colores dependen del modo, el remapeo
         # genérico no los conoce (activebackground quedaba del tema viejo)
         try:

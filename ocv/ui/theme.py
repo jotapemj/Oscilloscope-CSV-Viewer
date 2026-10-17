@@ -72,7 +72,7 @@ THEMES = {
         "TEXT_DIM":   "#7fa9d4",
         "ACCENT":     "#ffb84d",   # ámbar para contraste con azul
         "ACCENT_2":   "#cc8a2e",
-        "DANGER":     "#ff5e5e",
+        "DANGER":     "#ff7070",   # ≥4.5:1 también sobre BG_ALT
         "PLOT_BG":          "#0a2240",
         "PLOT_GRID":        "#2d5a8c",
         "PLOT_TEXT":        "#d4e8ff",
@@ -217,6 +217,33 @@ def text_on(bg):
     """Negro o blanco, el que más contraste dé sobre `bg`."""
     black, white = contrast_ratio("#000000", bg), contrast_ratio("#ffffff", bg)
     return "#000000" if black >= white else "#ffffff"
+
+
+# Mínimos WCAG: texto normal y elementos gráficos (trazas, iconos)
+TEXT_MIN = 4.5
+GRAPHIC_MIN = 3.0
+
+_NAMED = {"black": "#000000", "white": "#ffffff"}
+
+
+def readable_on(color, bg, min_ratio=TEXT_MIN):
+    """Color de canal ajustado para leerse sobre `bg`: si no llega a
+    min_ratio, lo mezcla hacia negro o blanco (el que dé más contraste)
+    lo justo. Solo para mostrar; el color guardado del canal no cambia.
+    Ej.: amarillo #ffeb3b sobre Light → mostaza oscuro."""
+    color = _NAMED.get(color, color)
+    bg = _NAMED.get(bg, bg)
+    if not (isinstance(color, str) and color.startswith("#")
+            and isinstance(bg, str) and bg.startswith("#")):
+        return color
+    if contrast_ratio(color, bg) >= min_ratio:
+        return color
+    target = text_on(bg)
+    for k in range(1, 41):
+        c = lerp_color(color, target, k / 40)
+        if contrast_ratio(c, bg) >= min_ratio:
+            return c
+    return target
 
 
 def _derive_roles(t):

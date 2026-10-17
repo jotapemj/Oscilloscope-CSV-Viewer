@@ -187,7 +187,7 @@ class ExportMixin:
             y_unit = sel.get("unit", DEFAULT_UNIT)
             ax.set_yticklabels(
                 [format_si(v, y_unit, sig_figs=3) for v in yreal],
-                fontsize=8, color=sel["color"]
+                fontsize=8, color=theme.readable_on(sel["color"], "#ffffff")
             )
         else:
             ax.set_yticklabels([""] * len(yticks))
@@ -210,7 +210,8 @@ class ExportMixin:
             y_plot = divs * v_div_active
             is_active = (i == self.active_channel_idx)
             ax.plot(self.time[mask] - t_start, y_plot,
-                    color=ch["color"],
+                    color=theme.readable_on(ch["color"], "#ffffff",
+                                            theme.GRAPHIC_MIN),
                     linewidth=1.2 if is_active else 1.0)
             legend_lines.append(
                 f"{ch['name']}: {format_si(ch['v_div'], ch.get('unit', DEFAULT_UNIT))}/div"
@@ -224,7 +225,7 @@ class ExportMixin:
                     xy=(0, y_gnd),
                     xytext=(-t_range * 0.015, y_gnd),
                     ha="right", va="center",
-                    color=ch["color"],
+                    color=theme.readable_on(ch["color"], "#ffffff"),
                     fontsize=9,
                     fontweight="bold" if is_active else "normal",
                     annotation_clip=False,

@@ -259,7 +259,7 @@ class PlotMixin:
             return 0.0 if abs(y) < noise_thr else y
         if self.channels:
             active = self.channels[self.active_channel_idx]
-            y_tick_color = active["color"]
+            y_tick_color = self._ch_color(active, text=True)
             # Convertir cada posición de pantalla a valor físico del canal activo:
             #   screen = (v_real - offset) / v_div_ch * v_div_active
             #   v_real = screen * v_div_ch / v_div_active + offset
@@ -405,6 +405,15 @@ class PlotMixin:
     # conserva picos (no promedia), así que los flancos siguen viéndose
     # pese al cap.
     _PHOSPHOR_MAX_SEGMENTS = 1500
+
+    def _ch_color(self, ch, text=False, bg=None):
+        """Color de un canal tal como se pinta: ajustado para leerse sobre
+        el fondo del plot (o `bg`). En Light el amarillo de CH1 pasa a
+        mostaza; en temas oscuros no cambia. El color guardado no se toca."""
+        if bg is None:
+            bg = self.grid_theme.get("bg", theme.COLOR_BG)
+        return theme.readable_on(
+            ch["color"], bg, theme.TEXT_MIN if text else theme.GRAPHIC_MIN)
 
     def _compute_phosphor_rgba(self, t, y, base_color, base_alpha, intensity):
         """Devuelve (segments, rgba) para construir/refrescar un
@@ -655,7 +664,7 @@ class PlotMixin:
                     tp, yp = minmax_decimate(tp, yp, cap // 2)
                 segs, rgba = self._compute_phosphor_rgba(
                     tp, yp,
-                    base_color=ch["color"],
+                    base_color=self._ch_color(ch),
                     base_alpha=base_alpha,
                     intensity=intensity,
                 )
@@ -697,7 +706,7 @@ class PlotMixin:
                 for y in yreal
             ])
             for lbl in self.ax.get_yticklabels():
-                lbl.set_color(active["color"])
+                lbl.set_color(self._ch_color(active, text=True))
 
         # Xticklabels: aunque las POSICIONES de los xticks no cambian
         # (el plot tiene xlim fijo [0, t_range]), las ETIQUETAS sí: cada
@@ -885,7 +894,7 @@ class PlotMixin:
                     tp, yp = minmax_decimate(tp, yp, cap // 2)
                 line = self._build_phosphor_collection(
                     tp, yp,
-                    base_color=ch["color"],
+                    base_color=self._ch_color(ch),
                     base_alpha=base_alpha,
                     linewidth=base_lw,
                     intensity=float(self.phosphor_intensity.get()),
@@ -895,7 +904,7 @@ class PlotMixin:
                 (line,) = self.ax.plot(
                     t_plot - t_start,
                     y_plot,
-                    color=ch["color"],
+                    color=self._ch_color(ch),
                     linewidth=base_lw,
                     alpha=base_alpha,
                 )
@@ -1008,7 +1017,7 @@ class PlotMixin:
             marker_line = self.ax.plot(
                 x_screen, y_screen,
                 marker="x",
-                color=ch["color"],
+                color=self._ch_color(ch),
                 markersize=10,
                 markeredgewidth=1.4,
             )
@@ -1076,7 +1085,7 @@ class PlotMixin:
             xytext=(-t_range * 0.09, y_gnd),
             ha="right",
             va="center",
-            color=ch["color"],
+            color=self._ch_color(ch, text=True),
             fontsize=9,
             fontweight="bold" if is_active else "normal",
             annotation_clip=False,

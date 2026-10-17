@@ -4,6 +4,7 @@ import numpy as np
 import tkinter as tk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.colors import to_hex
 from tkinter import ttk
 
 from ocv.core.si_format import DEFAULT_UNIT, format_si, parse_si
@@ -713,7 +714,9 @@ class EyeDiagramWindow:
             # Color del canal
             ch_color = "cyan"
             if 0 <= self.source_idx < len(self.scope.channels):
-                ch_color = self.scope.channels[self.source_idx]["color"]
+                ch_color = theme.readable_on(
+                    self.scope.channels[self.source_idx]["color"],
+                    to_hex(ax.get_facecolor()), theme.GRAPHIC_MIN)
             alpha = max(0.03, min(0.25, 8.0 / n_slices))
             lc = LineCollection(segs, colors=ch_color, linewidths=0.7,
                                 alpha=alpha)

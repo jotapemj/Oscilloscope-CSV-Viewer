@@ -4,6 +4,7 @@ import numpy as np
 import tkinter as tk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.colors import to_hex
 from tkinter import ttk
 
 from ocv.core.config import load_user_config, save_user_config
@@ -1227,7 +1228,9 @@ class FFTWindow:
         # Color del canal seleccionado
         trace_color = "cyan"
         if 0 <= self.source_idx < len(self.scope.channels):
-            trace_color = self.scope.channels[self.source_idx]["color"]
+            trace_color = theme.readable_on(
+                self.scope.channels[self.source_idx]["color"],
+                to_hex(self.ax.get_facecolor()), theme.GRAPHIC_MIN)
         self.ax.plot(self.freq, y, color=trace_color, linewidth=0.9)
 
         # En Average / Max-hold / Min-hold también superponemos el Live

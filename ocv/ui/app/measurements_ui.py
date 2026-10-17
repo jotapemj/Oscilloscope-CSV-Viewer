@@ -82,7 +82,7 @@ class MeasurementsMixin:
 
         tk.Label(
             top_line, text=result["channel_name"],
-            bg=theme.COLOR_BG, fg=result["color"],
+            bg=theme.COLOR_BG, fg=theme.readable_on(result["color"], theme.COLOR_BG),
             font=("Segoe UI", 8, "bold")
         ).pack(side=tk.LEFT)
         tk.Label(

@@ -230,6 +230,7 @@ class MathChannelsMixin:
         for idx, (tag, name, color) in enumerate(chan_btns):
             r, c = divmod(idx, CHANS_PER_ROW)
             # Etiqueta con flecha para evitar confusión con el operador '·' (multiplicación)
+            color = theme.readable_on(color, theme.COLOR_BG_ALT)
             b = tk.Button(
                 ch_grid, text=f"{tag}  →  {name}",
                 bg=theme.COLOR_BG_ALT, fg=color,

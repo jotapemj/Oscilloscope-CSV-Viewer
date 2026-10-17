@@ -372,7 +372,7 @@ class AppSmoke(unittest.TestCase):
             stack.extend(w.winfo_children())
             if getattr(w, "_theme_protected", False):
                 continue
-            if w.winfo_class() not in ("Label", "Button"):
+            if w.winfo_class() not in ("Label", "Button", "Checkbutton"):
                 continue
             try:
                 text, fg, bg = w.cget("text"), w.cget("fg"), w.cget("bg")
@@ -407,6 +407,31 @@ class AppSmoke(unittest.TestCase):
             for w in self.new_toplevels(before):
                 w.destroy()
             app._appearance_swatch_refresh = None
+            app._apply_theme_immediate("Dark", sync_plot=True)
+            self.pump()
+
+    def test_channel_colors_readable(self):
+        """UI #1: en Light los colores de canal se oscurecen al mostrarlos
+        (ticks Y del canal activo, nombres del panel); el color guardado
+        no cambia."""
+        app = self.app
+        stored = [c["color"] for c in app.channels]
+        try:
+            for name in theme.THEMES:
+                app._apply_theme_immediate(name, sync_plot=True)
+                app.update_plot()
+                self.pump()
+                bg = app.grid_theme["bg"]
+                with self.subTest(theme=name):
+                    for lbl in app.ax.get_yticklabels():
+                        if lbl.get_text():
+                            from matplotlib.colors import to_hex
+                            self.assertGreaterEqual(theme.contrast_ratio(
+                                to_hex(lbl.get_color()),
+                                theme._NAMED.get(bg, bg)), 4.5)
+                    self.assertEqual(self.low_contrast_texts(), [])
+            self.assertEqual([c["color"] for c in app.channels], stored)
+        finally:
             app._apply_theme_immediate("Dark", sync_plot=True)
             self.pump()
 
