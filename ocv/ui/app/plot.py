@@ -929,6 +929,12 @@ class PlotMixin:
         # artist NO se creaba (_cursor_v_lines[k] quedaba en None) y el
         # fast path lo ignoraba para siempre — bug que solo se "arreglaba"
         # forzando otro full redraw (cambiando modo de cursor, p.ej.).
+        # Color de cursores: texto del plot del tema, legible (3:1) sobre su
+        # fondo. Antes "white" fijo → invisibles en Light.
+        bg = self.grid_theme.get("bg", theme.COLOR_BG)
+        cursor_color = theme.readable_on(
+            self.grid_theme.get("text_color", theme.COLOR_TEXT), bg,
+            theme.GRAPHIC_MIN)
         if self._cursors_vertical_active():
             for k, x in enumerate(self.cursor_x):
                 # Posición efectiva: si está fuera de rango, lo creamos en
@@ -936,7 +942,7 @@ class PlotMixin:
                 in_range = (t_start <= x <= t_end)
                 x_pos = (x - t_start) if in_range else 0.0
                 line = self.ax.axvline(
-                    x_pos, color="white",
+                    x_pos, color=cursor_color,
                     linestyle=(0, (5, 5)), linewidth=1.2
                 )
                 line.set_visible(in_range)
@@ -948,7 +954,7 @@ class PlotMixin:
         if self._cursors_horizontal_active():
             for k, y in enumerate(self.cursor_y):
                 line = self.ax.axhline(
-                    y, color="white",
+                    y, color=cursor_color,
                     linestyle=(0, (5, 5)), linewidth=1.2
                 )
                 self._cursor_h_lines[k] = line

@@ -654,6 +654,36 @@ class AppSmoke(unittest.TestCase):
             app._trigger_window.destroy()
             app._trigger_window = None
 
+    def test_cursor_lines_visible(self):
+        """Bug #26: líneas de cursor en blanco fijo → invisibles en Light.
+        Deben llegar a 3:1 contra el fondo del plot en todos los temas."""
+        from matplotlib.colors import to_hex
+        app = self.app
+        mode, en = app.cursor_mode.get(), app.cursors_enabled.get()
+        try:
+            app.cursors_enabled.set(True)
+            app.cursor_mode.set("Horizontal + Vertical")
+            app.on_cursors_toggle()
+            for name in theme.THEMES:
+                app._apply_theme_immediate(name, sync_plot=True)
+                app.update_plot()
+                self.pump()
+                bg = app.grid_theme["bg"]
+                lines = [l for l in app._cursor_v_lines + app._cursor_h_lines
+                         if l is not None]
+                self.assertTrue(lines)
+                for l in lines:
+                    with self.subTest(theme=name):
+                        self.assertGreaterEqual(theme.contrast_ratio(
+                            to_hex(l.get_color()), theme._NAMED.get(bg, bg)),
+                            3.0)
+        finally:
+            app._apply_theme_immediate("Dark", sync_plot=True)
+            app.cursor_mode.set(mode)
+            app.cursors_enabled.set(en)
+            app.on_cursors_toggle()
+            self.pump()
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""
