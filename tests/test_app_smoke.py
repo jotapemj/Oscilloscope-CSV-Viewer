@@ -438,37 +438,53 @@ class AppSmoke(unittest.TestCase):
             self.pump()
 
     def test_render_toggle_contrast(self):
-        """Bug #21: toggle Fast legible en reposo, hover y tras cambiar
-        de tema (antes el hover genérico ponía fondo oscuro con texto
-        negro, y quedaba así al salir)."""
+        """Bug #21 / UI #4: toggle Detail/Fast legible en reposo, hover y
+        pulsado en todos los temas; ahora es un ttk.Button con estilo."""
+        from tkinter import ttk
         app = self.app
         b = app._render_mode_btn
+        st = ttk.Style(self.root)
         mode = app.render_mode.get()
-
-        def cr(bg_opt, fg_opt):
-            return theme.contrast_ratio(b.cget(bg_opt), b.cget(fg_opt))
         try:
             for name in theme.THEMES:
                 app._apply_theme_immediate(name, sync_plot=False)
                 for m in ("Fast", "Detail"):
                     app.render_mode.set(m)
                     app._update_render_mode_btn_visual()
-                    with self.subTest(theme=name, mode=m):
-                        b.event_generate("<Enter>")
-                        self.pump()
-                        self.assertGreaterEqual(cr("bg", "fg"), 4.5, "hover")
-                        self.assertGreaterEqual(
-                            cr("activebackground", "activeforeground"), 4.5,
-                            "active")
-                        b.event_generate("<Leave>")
-                        self.pump()
-                        self.assertGreaterEqual(cr("bg", "fg"), 4.5, "leave")
-                        if m == "Fast":
-                            self.assertEqual(b.cget("bg"), theme.COLOR_ACCENT)
+                    style = str(b.cget("style"))
+                    for state in ([], ["active"], ["pressed", "active"]):
+                        with self.subTest(theme=name, mode=m, state=state):
+                            bg = st.lookup(style, "background", state)
+                            fg = st.lookup(style, "foreground", state)
+                            self.assertGreaterEqual(
+                                theme.contrast_ratio(fg, bg), 4.5,
+                                f"{style} {fg} on {bg}")
+                    if m == "Fast":
+                        self.assertEqual(st.lookup(style, "background"),
+                                         theme.COLOR_ACCENT)
         finally:
             app._apply_theme_immediate("Dark", sync_plot=True)
             app.render_mode.set(mode)
             app._update_render_mode_btn_visual()
+
+    def test_tool_buttons_look_like_buttons(self):
+        """UI #4: botones TOOLS como ttk 'Tool.TButton' con borde visible
+        (>= 3:1 contra la barra) en todos los temas."""
+        from tkinter import ttk
+        app = self.app
+        fft = self.find_widget(ttk.Button, "FFT")
+        self.assertIsNotNone(fft)
+        self.assertEqual(str(fft.cget("style")), "Tool.TButton")
+        st = ttk.Style(self.root)
+        try:
+            for name in theme.THEMES:
+                app._apply_theme_immediate(name, sync_plot=False)
+                with self.subTest(theme=name):
+                    border = st.lookup("Tool.TButton", "bordercolor")
+                    self.assertGreaterEqual(
+                        theme.contrast_ratio(border, theme.COLOR_BG_ALT), 3.0)
+        finally:
+            app._apply_theme_immediate("Dark", sync_plot=True)
 
     def find_widget(self, cls, text):
         stack = [self.root]
@@ -1110,8 +1126,8 @@ class AppSmoke(unittest.TestCase):
         app._toggle_render_mode()
         self.assertNotEqual(app.render_mode.get(), mode)
         if app.render_mode.get() == "Fast":
-            self.assertEqual(app._render_mode_btn.cget("fg"),
-                             theme.COLOR_TEXT_ON_ACCENT)
+            self.assertEqual(str(app._render_mode_btn.cget("style")),
+                             "ToolOn.TButton")
         app._toggle_render_mode()
         self.assertEqual(app.render_mode.get(), mode)
 

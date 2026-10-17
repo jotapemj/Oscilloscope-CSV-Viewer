@@ -136,6 +136,7 @@ def _refresh_color_globals(theme_name):
     g["COLOR_TEXT_ON_ACCENT"]       = t["TEXT_ON_ACCENT"]
     g["COLOR_TEXT_ON_ACCENT_HOVER"] = t["TEXT_ON_ACCENT_HOVER"]
     g["COLOR_TEXT_ON_ACCENT_2"]     = t["TEXT_ON_ACCENT_2"]
+    g["COLOR_CONTROL_BORDER"]       = t["CONTROL_BORDER"]
     g["CURRENT_THEME_NAME"] = theme_name
 
 
@@ -253,6 +254,13 @@ def _derive_roles(t):
     t["TEXT_ON_ACCENT"] = text_on(t["ACCENT"])
     t["TEXT_ON_ACCENT_HOVER"] = text_on(t["ACCENT_HOVER"])
     t["TEXT_ON_ACCENT_2"] = text_on(t["ACCENT_2"])
+    # Borde de controles en la barra superior: 3:1 contra BG_ALT para que
+    # un botón se vea como botón (BORDER solo llega a ~1.4:1)
+    t["CONTROL_BORDER"] = readable_on(t["BORDER"], t["BG_ALT"], GRAPHIC_MIN)
+    # Texto acento legible sobre los fondos de un botón de herramienta
+    t["ACCENT_ON_ALT"] = readable_on(t["ACCENT"], t["BG_ALT"])
+    t["ACCENT_ON_HOVER"] = readable_on(t["ACCENT"], t["BG_HOVER"])
+    t["ACCENT_ON_ACTIVE"] = readable_on(t["ACCENT"], t["BG_ACTIVE"])
 
 
 for _t in THEMES.values():
@@ -262,6 +270,7 @@ COLOR_ACCENT_HOVER         = THEMES["Dark"]["ACCENT_HOVER"]
 COLOR_TEXT_ON_ACCENT       = THEMES["Dark"]["TEXT_ON_ACCENT"]
 COLOR_TEXT_ON_ACCENT_HOVER = THEMES["Dark"]["TEXT_ON_ACCENT_HOVER"]
 COLOR_TEXT_ON_ACCENT_2     = THEMES["Dark"]["TEXT_ON_ACCENT_2"]
+COLOR_CONTROL_BORDER       = THEMES["Dark"]["CONTROL_BORDER"]
 
 
 # =============================
@@ -362,6 +371,43 @@ def apply_theme(root, name="Dark"):
         background=[("pressed", COLOR_ACCENT_2), ("active", COLOR_ACCENT_HOVER)],
         foreground=[("pressed", COLOR_TEXT_ON_ACCENT_2),
                     ("active", COLOR_TEXT_ON_ACCENT_HOVER)],
+    )
+
+    # --- Botones de herramienta (barra superior) ---
+    # Tool: normal. ToolAccent: texto acento (toggle en Detail).
+    # ToolOn: relleno acento (toggle en Fast). Borde CONTROL_BORDER (3:1)
+    # para que se lean como botones; hover/pulsado los gestiona ttk.
+    tool_common = dict(
+        lightcolor=COLOR_BG_ALT, darkcolor=COLOR_BG_ALT,
+        focuscolor=COLOR_BG_ALT, padding=(6, 3), relief="solid",  # flat: clam no pinta el borde
+        borderwidth=1, font=("Segoe UI", 9, "bold"),
+    )
+    t = THEMES[name]
+    for sname, fg, fg_hover, fg_active in (
+            ("Tool.TButton", COLOR_TEXT, COLOR_TEXT, COLOR_TEXT),
+            ("ToolAccent.TButton", t["ACCENT_ON_ALT"], t["ACCENT_ON_HOVER"],
+             t["ACCENT_ON_ACTIVE"])):
+        style.configure(sname, background=COLOR_BG_ALT, foreground=fg,
+                        bordercolor=t["CONTROL_BORDER"], **tool_common)
+        style.map(
+            sname,
+            background=[("pressed", COLOR_BG_ACTIVE), ("active", COLOR_BG_HOVER)],
+            foreground=[("pressed", fg_active), ("active", fg_hover)],
+            bordercolor=[("pressed", COLOR_ACCENT), ("active", COLOR_ACCENT)],
+            lightcolor=[("pressed", COLOR_BG_ACTIVE), ("active", COLOR_BG_HOVER)],
+            darkcolor=[("pressed", COLOR_BG_ACTIVE), ("active", COLOR_BG_HOVER)],
+        )
+    style.configure("ToolOn.TButton", background=COLOR_ACCENT,
+                    foreground=COLOR_TEXT_ON_ACCENT, bordercolor=COLOR_ACCENT,
+                    **dict(tool_common, lightcolor=COLOR_ACCENT,
+                           darkcolor=COLOR_ACCENT, focuscolor=COLOR_ACCENT))
+    style.map(
+        "ToolOn.TButton",
+        background=[("pressed", COLOR_ACCENT_2), ("active", COLOR_ACCENT_HOVER)],
+        foreground=[("pressed", COLOR_TEXT_ON_ACCENT_2),
+                    ("active", COLOR_TEXT_ON_ACCENT_HOVER)],
+        lightcolor=[("pressed", COLOR_ACCENT_2), ("active", COLOR_ACCENT_HOVER)],
+        darkcolor=[("pressed", COLOR_ACCENT_2), ("active", COLOR_ACCENT_HOVER)],
     )
 
     # --- Checkbutton ---

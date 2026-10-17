@@ -15,23 +15,12 @@ class PanelsMixin:
     # -----------------------------
     def build_topbar(self, bar):
         """Barra horizontal superior: TOOLS (izq) | CURSORS (centro) | ☀ (der)."""
-        # --- Helper local para crear botones con hover ---
-        def mkbtn(parent, text, command, width=8, fg=None):
-            b = tk.Button(
-                parent, text=text,
-                bg=theme.COLOR_BG_ALT, fg=fg or theme.COLOR_TEXT,
-                activebackground=theme.COLOR_BG_HOVER,
-                activeforeground=theme.COLOR_TEXT,
-                bd=1, relief="flat",
-                font=("Segoe UI", 9, "bold"),
-                padx=8, pady=4,
-                width=width,
-                highlightbackground=theme.COLOR_BORDER,
-                highlightthickness=1,
-                command=command,
-            )
-            self._add_hover_shadow(b)
-            return b
+        # --- Botón de herramienta: ttk con estilo Tool.TButton (borde
+        # visible y hover/pulsado del tema; el borde de tk.Button no se
+        # dibuja en Windows y parecían texto) ---
+        def mkbtn(parent, text, command, width=8):
+            return ttk.Button(parent, text=text, command=command,
+                              width=width, style="Tool.TButton")
 
         # ---- TOOLS (grupo izquierdo) ----
         tools_frame = tk.Frame(bar, bg=theme.COLOR_BG_ALT)
@@ -67,23 +56,11 @@ class PanelsMixin:
 
         # --- Toggle Detail / Fast ---
         # Se "pinta" diferente según modo para dar feedback visual sin abrir ventana.
-        self._render_mode_btn = tk.Button(
-            tools_frame,
-            text="Detail",
-            bg=theme.COLOR_BG_ALT, fg=theme.COLOR_ACCENT,
-            activebackground=theme.COLOR_BG_HOVER,
-            activeforeground=theme.COLOR_ACCENT,
-            bd=1, relief="flat",
-            font=("Segoe UI", 9, "bold"),
-            padx=10, pady=4, width=7,
-            highlightbackground=theme.COLOR_ACCENT,
-            highlightthickness=1,
+        self._render_mode_btn = ttk.Button(
+            tools_frame, text="Detail", width=7,
+            style="ToolAccent.TButton",
             command=self._toggle_render_mode,
         )
-        self._render_mode_btn.bind(
-            "<Enter>", lambda e: self._update_render_mode_btn_visual(hover=True))
-        self._render_mode_btn.bind(
-            "<Leave>", lambda e: self._update_render_mode_btn_visual())
         self._render_mode_btn.pack(side=tk.LEFT, padx=(8, 2))
         self._update_render_mode_btn_visual()
         Tooltip(self._render_mode_btn,
@@ -170,7 +147,7 @@ class PanelsMixin:
         # ventana de Settings (tema, grid colors, phosphor, commands legend).
         gear_btn = tk.Frame(
             bar, bg=theme.COLOR_BG_ALT,
-            highlightbackground=theme.COLOR_BORDER,
+            highlightbackground=theme.COLOR_CONTROL_BORDER,
             highlightthickness=1,
             cursor="hand2",
         )
@@ -249,10 +226,16 @@ class PanelsMixin:
                     return
                 cur_bg = theme.COLOR_BG_ALT
                 gear_btn.config(bg=cur_bg,
-                                highlightbackground=theme.COLOR_BORDER)
+                                highlightbackground=theme.COLOR_CONTROL_BORDER)
                 gear_canvas.config(bg=cur_bg)
                 gear_label.config(bg=cur_bg, fg=theme.COLOR_TEXT)
                 draw_gear(theme.COLOR_ACCENT)
+                # About comparte rol de borde (CONTROL_BORDER no lo
+                # resuelve bien el remapeo genérico: mismo hex que BORDER
+                # en High Contrast)
+                about_btn.config(bg=cur_bg,
+                                 highlightbackground=theme.COLOR_CONTROL_BORDER)
+                about_label.config(bg=cur_bg, fg=theme.COLOR_TEXT)
             except Exception:
                 pass
         self._gear_redraw = _gear_redraw_for_theme
@@ -264,7 +247,7 @@ class PanelsMixin:
             gear_label.config(bg=theme.COLOR_BG_HOVER)
             draw_gear(theme.COLOR_ACCENT)
         def on_leave(_e=None):
-            gear_btn.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
+            gear_btn.config(highlightbackground=theme.COLOR_CONTROL_BORDER, bg=theme.COLOR_BG_ALT)
             gear_canvas.config(bg=theme.COLOR_BG_ALT)
             gear_label.config(bg=theme.COLOR_BG_ALT)
             draw_gear(theme.COLOR_ACCENT)
@@ -287,7 +270,7 @@ class PanelsMixin:
         # izquierda. Visualmente: [...cursors...]  [About]  [⚙ Settings]
         about_btn = tk.Frame(
             bar, bg=theme.COLOR_BG_ALT,
-            highlightbackground=theme.COLOR_BORDER,
+            highlightbackground=theme.COLOR_CONTROL_BORDER,
             highlightthickness=1,
             cursor="hand2",
         )
@@ -304,7 +287,7 @@ class PanelsMixin:
             about_btn.config(highlightbackground=theme.COLOR_ACCENT, bg=theme.COLOR_BG_HOVER)
             about_label.config(bg=theme.COLOR_BG_HOVER)
         def about_leave(_e=None):
-            about_btn.config(highlightbackground=theme.COLOR_BORDER, bg=theme.COLOR_BG_ALT)
+            about_btn.config(highlightbackground=theme.COLOR_CONTROL_BORDER, bg=theme.COLOR_BG_ALT)
             about_label.config(bg=theme.COLOR_BG_ALT)
         def about_click(_e=None):
             self._open_about_window()
@@ -1043,38 +1026,14 @@ class PanelsMixin:
         # Redibujar con el modo nuevo
         self.update_plot()
 
-    def _update_render_mode_btn_visual(self, hover=False):
-        """Refresca el look del boton segun el modo actual y el tema.
-        Detail -> borde acento, texto acento.
-        Fast   -> fondo acento, texto legible sobre acento (activo).
-        hover: lo llaman <Enter>/<Leave>; no usa el hover genérico porque
-        ese pone fondo oscuro sin tocar el texto (negro sobre oscuro)."""
+    def _update_render_mode_btn_visual(self):
+        """Refresca el toggle según el modo: Detail = texto acento
+        (ToolAccent), Fast = relleno acento (ToolOn). Colores, hover y
+        pulsado salen del estilo ttk, así que siguen al tema solos."""
         if not hasattr(self, "_render_mode_btn") or self._render_mode_btn is None:
             return
-
-        def readable(fg, bg):
-            # fg preferido si se lee; si no, texto del tema o blanco/negro
-            for c in (fg, theme.COLOR_TEXT):
-                if theme.contrast_ratio(c, bg) >= 4.5:
-                    return c
-            return theme.text_on(bg)
-
         if self.render_mode.get() == "Fast":
-            bg = theme.COLOR_ACCENT_HOVER if hover else theme.COLOR_ACCENT
-            self._render_mode_btn.config(
-                text="Fast",
-                bg=bg, fg=theme.text_on(bg),
-                activebackground=theme.COLOR_ACCENT_2,
-                activeforeground=theme.COLOR_TEXT_ON_ACCENT_2,
-                highlightbackground=theme.COLOR_ACCENT,
-            )
+            self._render_mode_btn.config(text="Fast", style="ToolOn.TButton")
         else:
-            bg = theme.COLOR_BG_HOVER if hover else theme.COLOR_BG_ALT
-            self._render_mode_btn.config(
-                text="Detail",
-                bg=bg, fg=readable(theme.COLOR_ACCENT, bg),
-                activebackground=theme.COLOR_BG_ACTIVE,
-                activeforeground=readable(theme.COLOR_ACCENT,
-                                          theme.COLOR_BG_ACTIVE),
-                highlightbackground=theme.COLOR_ACCENT,
-            )
+            self._render_mode_btn.config(text="Detail",
+                                         style="ToolAccent.TButton")
