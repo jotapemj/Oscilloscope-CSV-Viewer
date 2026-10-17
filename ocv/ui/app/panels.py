@@ -24,7 +24,7 @@ class PanelsMixin:
                 activeforeground=theme.COLOR_TEXT,
                 bd=1, relief="flat",
                 font=("Segoe UI", 9, "bold"),
-                padx=10, pady=4,
+                padx=8, pady=4,
                 width=width,
                 highlightbackground=theme.COLOR_BORDER,
                 highlightthickness=1,
@@ -93,15 +93,6 @@ class PanelsMixin:
                     "Render mode: FAST — min/max decimation per pixel (best fluidity)\n"
                     "Switch to Detail for fine zoom inspection"
                 ))
-
-        # --- Botón Session con menú desplegable Save/Load ---
-        session_btn = mkbtn(tools_frame, "Session",
-                            self._open_session_menu, width=8)
-        session_btn.pack(side=tk.LEFT, padx=(8, 2))
-        self._session_btn = session_btn
-        Tooltip(session_btn,
-                "Save or load full session (channels, settings, annotations, ...)\n"
-                "Ctrl+S to save, Ctrl+O to load")
 
         # Separador vertical
         tk.Frame(bar, bg=theme.COLOR_BORDER, width=1
@@ -334,6 +325,16 @@ class PanelsMixin:
         Tooltip(open_btn,
                 "Load a CSV file exported from an oscilloscope\n"
                 "Tek, Keysight, R&S, Rigol, Siglent, Hantek, LeCroy, PicoScope, OWON supported")
+
+        # Session junto a Open CSV: todo lo que abre/guarda ficheros en un
+        # sitio (antes en la barra superior, que no cabía a 1500 px)
+        session_btn = ttk.Button(frame, text="Session  ▾",
+                                 command=self._open_session_menu)
+        session_btn.pack(fill=tk.X, pady=(0, 4))
+        self._session_btn = session_btn
+        Tooltip(session_btn,
+                "Save or load full session (channels, settings, annotations, ...)\n"
+                "Ctrl+S to save, Ctrl+O to load")
 
         auto_fit_btn = ttk.Button(frame, text="Auto fit", command=self.auto_fit)
         auto_fit_btn.pack(fill=tk.X, pady=(0, 10))

@@ -443,6 +443,34 @@ class AppSmoke(unittest.TestCase):
             app.render_mode.set(mode)
             app._update_render_mode_btn_visual()
 
+    def find_widget(self, cls, text):
+        stack = [self.root]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, cls) and str(w.cget("text")) == text:
+                return w
+            stack.extend(w.winfo_children())
+        return None
+
+    def test_session_next_to_open_csv(self):
+        """Mejora 3: Session en el panel de Open CSV; a 1500 px la barra
+        superior cabe entera (antes se cortaba 'Show on all channels')."""
+        from tkinter import ttk
+        app = self.app
+        open_btn = self.find_widget(ttk.Button, "📂  Open CSV")
+        self.assertIs(app._session_btn.master, open_btn.master)
+        geom = self.root.geometry()
+        try:
+            self.root.geometry("1500x900")
+            wait_until(self.root, lambda: self.root.winfo_width() == 1500,
+                       timeout=2)
+            self.pump()
+            chk = self.find_widget(ttk.Checkbutton, "Show on all channels")
+            self.assertGreaterEqual(chk.winfo_width(), chk.winfo_reqwidth())
+        finally:
+            self.root.geometry(geom)
+            self.pump()
+
     def test_export_annotations_on_screen_scale(self):
         """Bug #15: anotaciones exportadas en y_screen, no en voltios
         reales; una fuera de rango no estira la imagen."""
