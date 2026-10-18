@@ -548,10 +548,25 @@ class OscilloscopeApp(
         self.build_plot(plot)
         self._build_measurements_panel()
 
+        # Ancho mínimo = barra superior entera (si no, Tk recorta grupos).
+        # Tope: escritorio virtual, por si el monitor es más estrecho.
+        self.root.update_idletasks()
+        self.root.minsize(min(self._topbar_needed_width(),
+                              self.root.winfo_vrootwidth()), 1)
 
-        
+
  
     
+    def _topbar_needed_width(self):
+        """Ancho que pide la barra superior. Tiene pack_propagate(False),
+        así que su reqwidth no vale: suma de hijos + padx."""
+        total = 0
+        for w in self.topbar.pack_slaves():
+            padx = w.pack_info().get("padx", 0)
+            pads = padx if isinstance(padx, (tuple, list)) else (padx, padx)
+            total += w.winfo_reqwidth() + sum(int(p) for p in pads)
+        return total
+
     def open_fft_window(self):
         # Singleton: si ya hay una ventana FFT abierta, traerla al frente
         # en lugar de abrir otra. Mismo patrón que open_xy_window.

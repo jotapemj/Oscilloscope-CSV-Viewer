@@ -364,6 +364,23 @@ class AppSmoke(unittest.TestCase):
             self.root.geometry(geom)
             self.pump()
 
+    def test_topbar_min_width(self):
+        """Bug #29: ventana estrecha recortaba la barra superior. El ancho
+        mínimo de la ventana deja ver la barra entera."""
+        bar = self.app.topbar
+        geom = self.root.geometry()
+        try:
+            self.root.geometry("400x700")
+            self.pump()
+            self.root.update()
+            for w in bar.winfo_children():
+                with self.subTest(widget=str(w)):
+                    self.assertGreaterEqual(w.winfo_width(),
+                                            w.winfo_reqwidth())
+        finally:
+            self.root.geometry(geom)
+            self.pump()
+
     def low_contrast_texts(self, min_ratio=4.5):
         """Textos tk (Label/Button) y ttk (casillas, radios, etiquetas)
         con fg/bg por debajo de min_ratio."""
