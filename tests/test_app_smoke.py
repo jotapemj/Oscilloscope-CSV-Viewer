@@ -714,6 +714,27 @@ class AppSmoke(unittest.TestCase):
             app._refresh_trigger()
             self.pump()
 
+    def test_export_gnd_labels_do_not_overlap(self):
+        """Bug #28: en la imagen exportada, canales con el mismo 0 V
+        tapaban sus etiquetas de GND (en pantalla ya se apilaban)."""
+        app = self.app
+        a, b = app.channels[0], app.channels[1]
+        saved = (b["v_offset"], b["v_div"])
+        try:
+            b["v_offset"], b["v_div"] = a["v_offset"], a["v_div"]
+            fig = app._build_export_figure(False, False, include_annot=False)
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            cv = FigureCanvasAgg(fig)
+            cv.draw()
+            r = cv.get_renderer()
+            boxes = [t.get_window_extent(r) for t in fig.axes[0].texts
+                     if t.get_text().startswith("▶")]
+            self.assertEqual(len(boxes), 2)
+            self.assertFalse(boxes[0].overlaps(boxes[1]),
+                             f"{boxes[0]} / {boxes[1]}")
+        finally:
+            b["v_offset"], b["v_div"] = saved
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""

@@ -201,6 +201,10 @@ class ExportMixin:
         order.append(self.active_channel_idx)
         t_range = window
         v_range_half = v_range / 2
+        # Alto de etiqueta GND (9 pt + interlineado) en unidades de datos.
+        # Proporción fija: no depende del dpi de guardado.
+        label_h = v_range * (9 * 1.4 * fig.dpi / 72) / max(ax.bbox.height, 1.0)
+        taken = []
         for i in order:
             ch = self.channels[i]
             if not ch["visible"].get():
@@ -220,10 +224,15 @@ class ExportMixin:
             # Flechita indicando 0V del canal, a la izquierda del eje
             y_gnd = (-ch["v_offset"] / ch["v_div"]) * v_div_active
             if -v_range_half <= y_gnd <= v_range_half:
+                # Mismo 0 V que otro canal: apilar debajo, como en pantalla
+                y_text = y_gnd
+                while any(abs(y_text - y) < label_h * 0.95 for y in taken):
+                    y_text -= label_h
+                taken.append(y_text)
                 ax.annotate(
                     f"▶ {ch['name']}",
                     xy=(0, y_gnd),
-                    xytext=(-t_range * 0.015, y_gnd),
+                    xytext=(-t_range * 0.015, y_text),
                     ha="right", va="center",
                     color=theme.readable_on(ch["color"], "#ffffff"),
                     fontsize=9,
