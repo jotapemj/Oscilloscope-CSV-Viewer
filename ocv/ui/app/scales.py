@@ -205,10 +205,15 @@ class ScalesMixin:
         """Usa el valor exacto t_total/H_DIVS para que la traza ocupe TODO
         el ancho del grid. Este valor no suele ser canónico; el spinbox lo
         acepta igualmente, y al pulsar una flecha se salta al canónico
-        vecino."""
+        vecino. Si el exacto cae a <0.1 % de un canónico (captura de
+        N·dt, no N-1), usa el canónico: '1 ms' y no '1.00001 ms'. Como
+        mucho queda fuera el 0.1 % final (~1 px)."""
         if self.t_total <= 0:
             return
         exact = self.t_total / H_DIVS
+        canon = min(TIME_DIV_VALUES, key=lambda v: abs(v - exact))
+        if abs(canon - exact) < canon * 1e-3:
+            exact = canon
         self.t_div.set(exact)
         self.t_offset.set(0.0)
         try:

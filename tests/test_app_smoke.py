@@ -919,6 +919,28 @@ class AppSmoke(unittest.TestCase):
         app.update_plot()
         self.pump()
 
+    def test_auto_time_div_snaps_to_canonical(self):
+        """Auto-fit con captura de 12.0001 ms mostraba '1.00001 ms'. Si el
+        exacto está a <0.1 % de un valor canónico, usa el canónico."""
+        app = self.app
+        saved = (app.t_total, app.t_div.get(), app.t_offset.get())
+        try:
+            app.t_total = 1e-3 * H_DIVS * (1 + 5e-6)
+            app.auto_time_div()
+            self.assertEqual(app.t_div.get(), 1e-3)
+            self.assertEqual(app.t_div_display.get(), "1 ms")
+            app.t_total = 1e-3 * H_DIVS * (1 - 5e-4)
+            app.auto_time_div()
+            self.assertEqual(app.t_div.get(), 1e-3)
+            app.t_total = 1.3e-3 * H_DIVS          # lejos: exacto
+            app.auto_time_div()
+            self.assertAlmostEqual(app.t_div.get(), 1.3e-3)
+        finally:
+            app.t_total = saved[0]
+            app.t_div.set(saved[1])
+            app.t_offset.set(saved[2])
+            app._sync_scale_displays()
+
     def test_minimap(self):
         """Clic fuera del rectángulo salta; arrastre mueve; rueda hace zoom."""
         app = self.app
