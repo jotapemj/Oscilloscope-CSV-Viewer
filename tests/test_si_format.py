@@ -37,6 +37,16 @@ class FormatSI(unittest.TestCase):
         self.assertEqual(f(999999.9, "Hz", sig_figs=3), "1 MHz")
         self.assertEqual(f(999.4e-6, "s", sig_figs=3), "999 µs")
 
+    def test_tick_relative_to_step(self):
+        """Bug #31: tick a 26 ns del cero con 1 ms/div salía '26.1 ns'.
+        La precisión del tick va con el paso de la grilla."""
+        f = si.format_tick
+        self.assertEqual(f(26.1e-9, 1e-3, "s"), "0 s")
+        self.assertEqual(f(-1.99997e-3, 1e-3, "s"), "-2 ms")
+        self.assertEqual(f(1.00003e-3, 1e-3, "s"), "1 ms")
+        self.assertEqual(f(2.5e-6, 1e-6, "s"), "2.5 µs")
+        self.assertEqual(f(26.1e-9, 10e-9, "s"), "26.1 ns")
+
     def test_zero_noise(self):
         """|x| < 1e-15 se muestra como 0."""
         self.assertEqual(si.format_si(1e-16, "V"), "0 V")

@@ -74,6 +74,15 @@ def format_si(value, unit, sig_figs=6):
     return f"{fmt.format(value)} {unit}"
 
 
+def format_tick(value, step, unit, sig_figs=3):
+    """Etiqueta de tick: redondea a step/1000 antes de formatear. Así la
+    precisión va con la grilla y un resto de 26 ns con 1 ms/div es '0 s'."""
+    q = step * 1e-3
+    if q > 0:
+        value = round(value / q) * q
+    return format_si(value, unit, sig_figs=sig_figs)
+
+
 # Prefijos SI para parsear strings. IMPORTANTE: case sensitive.
 #   - m = mili (1e-3), M = mega (1e6)
 #   - u (ASCII) y µ = micro (1e-6)

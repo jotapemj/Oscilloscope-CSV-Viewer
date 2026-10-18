@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from ocv.core.scope import H_DIVS, V_DIVS
-from ocv.core.si_format import DEFAULT_UNIT, format_si
+from ocv.core.si_format import DEFAULT_UNIT, format_si, format_tick
 from ocv.ui import theme
 
 
@@ -174,7 +174,7 @@ class ExportMixin:
         # Etiquetas de tiempo REAL: posición del tick (x) + offset del
         # viewport (t_start) + origen del CSV (time_origin).
         t_o = self._t_display_origin()
-        ax.set_xticklabels([format_si(t_start + x + t_o, "s", sig_figs=3)
+        ax.set_xticklabels([format_tick(t_start + x + t_o, t_div, "s")
                             for x in xticks],
                            fontsize=8, color="black", rotation=0)
 

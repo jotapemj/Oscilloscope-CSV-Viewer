@@ -7,7 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from ocv.core.dsp import minmax_decimate, repeated_time_index
 from ocv.core.scope import H_DIVS, V_DIVS
-from ocv.core.si_format import DEFAULT_UNIT, format_si
+from ocv.core.si_format import DEFAULT_UNIT, format_si, format_tick
 from ocv.ui import theme
 
 
@@ -230,7 +230,7 @@ class PlotMixin:
         t_off = self.t_offset.get()
         t_o = self._t_display_origin()
         self.ax.set_xticklabels(
-            [format_si(t_off + x + t_o, "s", sig_figs=3) for x in xticks])
+            [format_tick(t_off + x + t_o, self.t_div.get(), "s") for x in xticks])
 
 
 
@@ -720,7 +720,7 @@ class PlotMixin:
             xticks_arr = self.ax.get_xticks()
             t_o = self._t_display_origin()
             self.ax.set_xticklabels(
-                [format_si(t_start + x + t_o, "s", sig_figs=3)
+                [format_tick(t_start + x + t_o, self.t_div.get(), "s")
                  for x in xticks_arr])
         except Exception:
             pass
