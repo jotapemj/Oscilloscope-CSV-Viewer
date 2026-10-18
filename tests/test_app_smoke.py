@@ -684,6 +684,36 @@ class AppSmoke(unittest.TestCase):
             app.on_cursors_toggle()
             self.pump()
 
+    def test_trigger_markers_visible(self):
+        """Bug #27: marcadores de trigger #ffeb3b fijo → amarillo sobre
+        blanco en Light. Deben llegar a 3:1 contra el fondo del plot."""
+        from matplotlib.colors import to_hex
+        app = self.app
+        cfg = app.trigger_config
+        saved = dict(cfg)
+        try:
+            cfg.update(enabled=True, source=1, type="Edge", slope="Rising",
+                       level=1.65, show_markers=True)
+            app.auto_fit()
+            for name in theme.THEMES:
+                app._apply_theme_immediate(name, sync_plot=True)
+                app._refresh_trigger()
+                app.update_plot()
+                self.pump()
+                bg = app.grid_theme["bg"]
+                self.assertTrue(app._trigger_marker_artists)
+                for a in app._trigger_marker_artists:
+                    with self.subTest(theme=name, artist=type(a).__name__):
+                        self.assertGreaterEqual(theme.contrast_ratio(
+                            to_hex(a.get_color()), theme._NAMED.get(bg, bg)),
+                            3.0)
+        finally:
+            app._apply_theme_immediate("Dark", sync_plot=True)
+            cfg.clear()
+            cfg.update(saved)
+            app._refresh_trigger()
+            self.pump()
+
     def test_gnd_labels_do_not_overlap(self):
         """UI #2: dos canales con el 0 V a la misma altura: sus etiquetas
         de GND se apilan en vez de taparse ('▶ \\▶ M1')."""

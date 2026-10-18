@@ -158,6 +158,10 @@ class TriggerMixin:
         v_range = self.v_div.get() * V_DIVS
 
         cur = self.trigger_current_idx
+        # Amarillo legible sobre el fondo del plot (mostaza en Light)
+        color = theme.readable_on(
+            "#ffeb3b", self.grid_theme.get("bg", theme.COLOR_BG),
+            theme.GRAPHIC_MIN)
         for i, ev in enumerate(self.trigger_events):
             t_ev = ev["t_trigger"]
             # Filtrar: ignorar los que queden fuera de la ventana visible
@@ -168,7 +172,6 @@ class TriggerMixin:
                 continue
 
             is_current = (i == cur)
-            color = "#ffeb3b"
             lw = 1.8 if is_current else 1.0
             alpha = 1.0 if is_current else 0.7
 
