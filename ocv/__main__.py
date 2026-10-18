@@ -1,5 +1,8 @@
 """Application entry point: python main.py or python -m ocv."""
+import os
+import sys
 import tkinter as tk
+import traceback
 
 from ocv.core.config import check_config_writable, config_dir, load_user_config
 from ocv.resources import _resource_path
@@ -116,7 +119,39 @@ def main():
         root.after(300, _warn_readonly)
 
     root.protocol("WM_DELETE_WINDOW", app.on_close)
+    smoke = _install_smoke_mode(root, app)
     root.mainloop()
+    if smoke is not None:
+        sys.exit(0 if smoke["ok"] else 1)
+
+
+def _install_smoke_mode(root, app):
+    """Prueba del .exe empaquetado (build.py --smoke, CI). Con
+    OCV_SMOKE_EXIT=<ms> carga OCV_SMOKE_CSV (si hay), cierra a los <ms> y
+    sale con código 1 si hubo excepción en un callback Tk o el CSV no
+    cargó. Sin la variable no hace nada."""
+    ms = os.environ.get("OCV_SMOKE_EXIT")
+    if not ms:
+        return None
+    state = {"ok": True}
+
+    def _on_error(exc, val, tb):
+        traceback.print_exception(exc, val, tb)
+        state["ok"] = False
+    root.report_callback_exception = _on_error
+
+    csv = os.environ.get("OCV_SMOKE_CSV")
+    if csv:
+        root.after(100, lambda: app._load_csv_from_path(csv))
+
+    def _finish():
+        if csv and not app.channels:
+            print("smoke: CSV not loaded")
+            state["ok"] = False
+        app.session_dirty = False   # sin diálogo "¿guardar?" (modal)
+        app.on_close()
+    root.after(int(ms), _finish)
+    return state
 
 
 if __name__ == "__main__":

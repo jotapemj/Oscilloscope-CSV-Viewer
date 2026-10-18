@@ -7,5 +7,4 @@ pandas>=2.3,<3.0
 numpy>=2.2,<3.0
 matplotlib>=3.10,<4.0
 
-# Build-only (no necesario en runtime). Descomenta para generar el .exe:
-# pyinstaller>=6.0
+# Build del .exe: requirements-dev.txt
