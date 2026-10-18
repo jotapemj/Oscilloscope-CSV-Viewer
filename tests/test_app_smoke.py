@@ -1119,6 +1119,25 @@ class AppSmoke(unittest.TestCase):
         app._show_toast("hello", duration_ms=50)
         wait_until(self.root, lambda: False, timeout=0.5)
 
+    def test_meas_panel_auto_hide(self):
+        """Panel de medidas oculto sin medidas; aparece con la primera y
+        se oculta al quitar la última."""
+        app = self.app
+        panel = app.meas_panel
+        app.active_measurements.clear()
+        app.update_plot()
+        self.pump()
+        self.assertEqual(panel.winfo_manager(), "")
+        app.active_measurements.append(
+            {"channel_idx": 0, "name": "Peak-Peak", "channel_idx2": None})
+        app.update_plot()
+        self.pump()
+        self.assertEqual(panel.winfo_manager(), "pack")
+        self.assertTrue(panel.winfo_ismapped())
+        app._remove_measurement(0)
+        self.pump()
+        self.assertEqual(panel.winfo_manager(), "")
+
     def test_measurements_and_cursors(self):
         """Medidas reales vía la app y lectura de cursores."""
         app = self.app

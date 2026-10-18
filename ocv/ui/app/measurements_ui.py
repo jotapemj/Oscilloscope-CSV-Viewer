@@ -46,16 +46,15 @@ class MeasurementsMixin:
         for w in self.meas_rows_frame.winfo_children():
             w.destroy()
 
+        # Panel visible solo con alguna medida: más sitio para el plot
+        shown = bool(self.meas_panel.winfo_manager())
         if not self.active_measurements:
-            # Placeholder
-            tk.Label(
-                self.meas_rows_frame,
-                text="No measurements\nadded",
-                bg=theme.COLOR_BG, fg=theme.COLOR_TEXT_DIM,
-                font=("Segoe UI", 9, "italic"),
-                justify="center"
-            ).pack(expand=True, pady=20)
+            if shown:
+                self.meas_panel.pack_forget()
             return
+        if not shown:
+            self.meas_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4),
+                                 pady=4, before=self._plot_area)
 
         results = self.compute_measurements()
         # Dibujar una fila por resultado

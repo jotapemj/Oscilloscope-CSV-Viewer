@@ -510,14 +510,15 @@ class OscilloscopeApp(
         sidebar = tk.Frame(main, bg=theme.COLOR_BG, padx=5)
         sidebar.pack(side=tk.LEFT, fill=tk.Y)
 
-        # Panel derecho: columna de medidas activas
+        # Panel derecho: columna de medidas activas. Solo visible con
+        # alguna medida (lo empaqueta/oculta _rebuild_measurements_panel)
         self.meas_panel = tk.Frame(main, bg=theme.COLOR_BG, width=220)
-        self.meas_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
         self.meas_panel.pack_propagate(False)
 
         # Zona central: minimap arriba + plot debajo
         plot_area = tk.Frame(main, bg=theme.COLOR_BG)
         plot_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._plot_area = plot_area
 
         self.minimap_canvas = tk.Canvas(
             plot_area, bg=theme.COLOR_BG_ALT, height=40,
