@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Oscilloscope CSV Viewer logo" width="128">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.png">
+    <img src="docs/banner-light.png" alt="Oscilloscope CSV Viewer" width="480">
+  </picture>
 </p>
 
 # Oscilloscope CSV Viewer
