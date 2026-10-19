@@ -1,24 +1,33 @@
 # Builds the Windows executable and attaches the zip to the release.
 # Runs when a release is published (MAJOR/MINOR only; PATCH versions are
-# tags without a release, so they are not built). Manual runs build and
-# keep the zip as a workflow artifact.
+# tags without a release, so they are not built). A manual run keeps the
+# zip as a workflow artifact, or attaches it to an existing release when
+# `release_tag` is given (its version must match __version__).
 name: Release build
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release to attach the zip to (e.g. v2.0.0); empty = artifact only"
+        required: false
+        default: ""
 
 permissions:
   contents: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
 
 jobs:
   windows-exe:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
           cache: pip
@@ -28,14 +37,21 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Check tag matches __version__
-        if: github.event_name == 'release'
+        if: env.TAG != ''
         shell: bash
         run: |
           v=$(python -c "import ocv; print(ocv.__version__)")
-          if [ "v$v" != "${{ github.event.release.tag_name }}" ]; then
-            echo "Tag ${{ github.event.release.tag_name }} != __version__ $v"
+          if [ "v$v" != "$TAG" ]; then
+            echo "Tag $TAG != __version__ $v"
             exit 1
           fi
+
+      # Runner screen is 1024x768; the layout tests need the real width
+      # (if it fails, those tests skip with the reason)
+      - name: Set screen resolution
+        continue-on-error: true
+        shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
 
       - name: Tests
         run: python tests/run.py
@@ -44,15 +60,15 @@ jobs:
         run: python build.py --smoke
 
       - name: Attach zip to release
-        if: github.event_name == 'release'
+        if: env.TAG != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.zip
+        run: gh release upload "$TAG" dist/*.zip --clobber
 
       - name: Keep zip as artifact
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        if: env.TAG == ''
+        uses: actions/upload-artifact@v5
         with:
           name: windows-exe
           path: dist/*.zip
