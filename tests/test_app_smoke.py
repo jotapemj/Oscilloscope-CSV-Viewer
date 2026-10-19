@@ -368,6 +368,7 @@ class AppSmoke(unittest.TestCase):
         """Bug #29: ventana estrecha recortaba la barra superior. El ancho
         mínimo de la ventana deja ver la barra entera."""
         bar = self.app.topbar
+        self.require_screen_width(self.app._topbar_needed_width())
         geom = self.root.geometry()
         try:
             self.root.geometry("400x700")
@@ -522,10 +523,18 @@ class AppSmoke(unittest.TestCase):
             stack.extend(w.winfo_children())
         return None
 
+    def require_screen_width(self, width):
+        """Tests de layout que necesitan una pantalla de al menos `width`
+        px (Windows limita la ventana al escritorio)."""
+        have = self.root.winfo_vrootwidth()
+        if have < width:
+            self.skipTest(f"needs a screen >= {width} px wide, have {have}")
+
     def test_session_next_to_open_csv(self):
         """Mejora 3: Session en el panel de Open CSV; a 1500 px la barra
         superior cabe entera (antes se cortaba 'Show on all channels')."""
         from tkinter import ttk
+        self.require_screen_width(1500)
         app = self.app
         open_btn = self.find_widget(ttk.Button, "📂  Open CSV")
         self.assertIs(app._session_btn.master, open_btn.master)
@@ -1389,8 +1398,8 @@ class AppSmoke(unittest.TestCase):
         entry = self.find(dlg, ("TEntry",))
         entry.delete(0, "end")
         entry.insert(0, "VIN")
-        entry.event_generate("<Return>")
-        self.pump()
+        # Con foco: sin él Tk descarta la tecla (runner de CI sin foco)
+        self.key("<Return>", widget=entry)
         self.assertEqual(app.channels[0]["name"], "VIN")
         app.channels[0]["name"] = old
         app._rebuild_channels_panel()
