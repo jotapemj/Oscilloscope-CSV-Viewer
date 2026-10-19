@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Oscilloscope CSV Viewer logo" width="128">
+</p>
+
 # Oscilloscope CSV Viewer
 
 Desktop application that brings the oscilloscope workflow to CSV
