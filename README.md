@@ -5,6 +5,24 @@ captures exported by real instruments. It does not talk to hardware:
 it works offline on the files the oscilloscope already saved, for lab
 analysis, test documentation and protocol debugging.
 
+![Main view: switching node, inductor current, output ripple and UART telemetry of a buck converter, with cursors and measurements](docs/screenshots/main.png)
+
+## Why this exists
+
+Oscilloscopes export captures as CSV, but reviewing them later usually
+means the vendor's software, a licence, or a spreadsheet that knows
+nothing about V/div, triggers or protocols. This application reads
+those files and offers the controls of a bench oscilloscope.
+
+- **Offline.** No account, no cloud service, no telemetry. Captures
+  never leave the computer.
+- **Portable.** No installer. Extract the zip and run it; delete the
+  folder to remove it. Preferences live next to the executable.
+- **Few dependencies.** Python's standard library plus numpy, pandas
+  and matplotlib. Clipboard export uses the Windows API directly; the
+  protocol decoders are implemented from scratch.
+- **Vendor-neutral.** One tool for captures from different brands.
+
 ## Features
 
 - **CSV import** with automatic detection of the time column,
@@ -35,6 +53,22 @@ analysis, test documentation and protocol debugging.
 - **Export** of the plot as an image, or copy to the clipboard
   (Windows).
 - **Four themes**: Dark, Light, Blueprint and High Contrast.
+
+## Screenshots
+
+UART decoding, with the frames overlaid under the traces:
+
+![UART frames decoded and overlaid on the plot](docs/screenshots/decoder_overlay.png)
+
+FFT of the switching node with harmonic markers and THD:
+
+![FFT window in dBV with the first seven harmonics marked](docs/screenshots/fft.png)
+
+Light theme:
+
+![Main view in the Light theme](docs/screenshots/light.png)
+
+All screenshots use synthetic signals.
 
 ## Installation
 
