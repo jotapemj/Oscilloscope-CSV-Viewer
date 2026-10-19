@@ -16,7 +16,7 @@ and the project uses [Semantic Versioning](https://semver.org/) from
 
 ---
 
-## [2.0.0] — Modular package, tests and release builds
+## [2.0.0] — 2026-10-19 — Modular package, tests and release builds
 
 The 1.30 single-file script (~16 000 lines) is split into the `ocv`
 package. Behaviour is kept; the bugs found while moving the code are
